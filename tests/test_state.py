@@ -21,10 +21,33 @@ async def test_try_reserve_request_enforces_rpm_atomically(tmp_path):
     assert [first.reason, second.reason].count("rpm_limit") == 1
 
 
+async def test_try_reserve_request_is_atomic_across_state_managers(tmp_path):
+    database_path = str(tmp_path / "state.sqlite3")
+    quotas = [
+        ProviderQuota("groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=1)
+    ]
+    state_a = StateManager(database_path, quotas)
+    state_b = StateManager(database_path, quotas)
+    await state_a.initialize()
+    await state_b.initialize()
+
+    first, second = await asyncio.gather(
+        state_a.try_reserve_request("groq"),
+        state_b.try_reserve_request("groq"),
+    )
+
+    assert [first.available, second.available].count(True) == 1
+    assert [first.reason, second.reason].count("rpm_limit") == 1
+
+
 async def test_token_limit_allows_exact_boundary(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("cerebras", tokens_per_day=10, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "cerebras", tokens_per_day=10, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -36,7 +59,11 @@ async def test_token_limit_allows_exact_boundary(tmp_path):
 async def test_success_headers_can_set_cooldown(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("cerebras", tokens_per_day=10, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "cerebras", tokens_per_day=10, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -60,7 +87,11 @@ async def test_token_limit_rejects_over_boundary(tmp_path):
     """Requesting more tokens than the daily limit should be rejected."""
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=100, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=100, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -92,7 +123,11 @@ async def test_mark_exhausted_sets_cooldown(tmp_path):
     """mark_exhausted should put the provider in cooldown."""
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -109,7 +144,11 @@ async def test_mark_exhausted_respects_retry_after_header(tmp_path):
     """mark_exhausted should use the Retry-After header value if present."""
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -125,7 +164,11 @@ async def test_record_success_accumulates_tokens(tmp_path):
     """Successful responses should accumulate token usage."""
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=1000, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=1000, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -140,7 +183,11 @@ async def test_record_success_with_none_usage(tmp_path):
     """record_success should handle None usage gracefully."""
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -155,11 +202,16 @@ async def test_get_state_raises_for_unknown_provider(tmp_path):
     """Querying an unknown provider should raise KeyError."""
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("known", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "known", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
     import pytest
+
     with pytest.raises(KeyError, match="Unknown provider"):
         await state.get_state("nonexistent")
 
@@ -168,7 +220,11 @@ async def test_no_quota_limits_always_available(tmp_path):
     """A provider with no limits at all should always be available."""
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("unlimited", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "unlimited", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -182,7 +238,11 @@ async def test_remaining_requests_zero_sets_cooldown(tmp_path):
     """When x-ratelimit-remaining-requests is 0, provider should enter cooldown."""
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -204,7 +264,11 @@ async def test_remaining_requests_zero_sets_cooldown(tmp_path):
 async def test_route_not_found_marks_potentially_outdated_after_threshold(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -221,7 +285,11 @@ async def test_route_not_found_marks_potentially_outdated_after_threshold(tmp_pa
 async def test_route_rate_limit_probe_is_staggered(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     now = 1_000
     state._now = lambda: now
@@ -258,7 +326,11 @@ async def test_route_rate_limit_probe_is_staggered(tmp_path):
 async def test_route_timeout_marks_too_slow_after_threshold(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     now = 2_000
     state._now = lambda: now
@@ -277,7 +349,11 @@ async def test_route_timeout_marks_too_slow_after_threshold(tmp_path):
 async def test_clear_route_health_resets_limited_route(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
     await state.mark_route_not_found("route-a", "test", "missing/model", status_code=404)

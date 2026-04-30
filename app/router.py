@@ -15,7 +15,7 @@ from app.state import StateManager
 class NoProviderAvailable(RuntimeError):
     """Raised when the waterfall router exhausts all enabled routes without a successful response."""
 
-    def __init__(self, attempts: list["ProviderAttempt"]) -> None:
+    def __init__(self, attempts: list[ProviderAttempt]) -> None:
         super().__init__("No configured provider is currently available")
         self.attempts = attempts
 
@@ -23,6 +23,7 @@ class NoProviderAvailable(RuntimeError):
 @dataclass(frozen=True)
 class ProviderAttempt:
     """Diagnostic record for a single provider attempt during waterfall routing."""
+
     provider_name: str
     status: str
     reason: str | None = None
@@ -34,6 +35,7 @@ class ProviderAttempt:
 @dataclass(frozen=True)
 class RouteResult:
     """Successful routing outcome containing the response body and full attempt history."""
+
     body: dict[str, Any]
     provider_name: str
     route_id: str
@@ -52,7 +54,7 @@ class RouteEvent:
     reason: str | None = None
     status_code: int | None = None
     attempts: list[ProviderAttempt] | None = None
-    response: "ProviderResponse" | None = None
+    response: ProviderResponse | None = None
 
 
 class WaterfallRouter:

@@ -10,12 +10,9 @@ def looks_like_missing_model(exc: ProviderError) -> bool:
     if exc.status_code not in {400, 422} or not exc.body:
         return False
     body = exc.body.lower()
-    return (
-        "model" in body
-        and (
-            "not found" in body
-            or "does not exist" in body
-            or "not exist" in body
-            or "unknown model" in body
-        )
+    return "model" in body and (
+        "not found" in body
+        or "does not exist" in body
+        or "not exist" in body
+        or "unknown model" in body
     )

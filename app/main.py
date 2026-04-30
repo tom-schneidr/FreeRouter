@@ -10,9 +10,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from app.chat_page import CHAT_HTML
-from app.endpoint_diagnosis import BackgroundEndpointDiagnosis, EndpointDiagnosisService, EndpointSupervisor
+from app.endpoint_diagnosis import (
+    BackgroundEndpointDiagnosis,
+    EndpointDiagnosisService,
+    EndpointSupervisor,
+)
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS, ProviderError, build_provider_adapters
+from app.request_limiter import GatewayRequestLimiter
 from app.router import (
     NoProviderAvailable,
     WaterfallRouter,
@@ -25,7 +30,11 @@ from app.stream_route import stream_route_chat
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    state = StateManager(settings.database_path, PROVIDER_QUOTAS)
+    state = StateManager(
+        settings.database_path,
+        PROVIDER_QUOTAS,
+        busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+    )
     await state.initialize()
     model_catalog = ModelCatalog(settings.model_catalog_path)
     model_catalog.initialize()
@@ -33,6 +42,10 @@ async def lifespan(app: FastAPI):
 
     app.state.gateway_state = state
     app.state.model_catalog = model_catalog
+    app.state.request_limiter = GatewayRequestLimiter(
+        settings.max_concurrent_requests,
+        settings.request_queue_timeout_seconds,
+    )
     app.state.waterfall_router = WaterfallRouter(
         providers,
         model_catalog,
@@ -58,6 +71,7 @@ async def lifespan(app: FastAPI):
             app.state.endpoint_diagnosis,
             interval_seconds=settings.auto_endpoint_diagnosis_interval_seconds,
             startup_delay_seconds=settings.auto_endpoint_diagnosis_startup_delay_seconds,
+            apply_safe_suggestions=settings.auto_endpoint_maintenance_enabled,
         )
         app.state.background_endpoint_diagnosis = background
         background.start()
@@ -256,16 +270,25 @@ async def reset_gateway_model_health(route_id: str, request: Request) -> dict[st
     route = next((route for route in catalog.all_routes() if route.route_id == route_id), None)
     if route is None:
         raise HTTPException(status_code=404, detail=f"Unknown route_id: {route_id}")
-    route_state = await state.clear_route_health(route.route_id, route.provider_name, route.model_id)
+    route_state = await state.clear_route_health(
+        route.route_id, route.provider_name, route.model_id
+    )
     return {"data": {**asdict(route), "health": asdict(route_state)}}
 
 
 @app.get("/v1/gateway/endpoint-diagnosis")
 async def endpoint_diagnosis_status(request: Request) -> dict[str, Any]:
     service: EndpointDiagnosisService = request.app.state.endpoint_diagnosis
+    background: BackgroundEndpointDiagnosis | None = request.app.state.background_endpoint_diagnosis
     report = service.last_report
     return {
         "enabled": get_settings().auto_endpoint_diagnosis_enabled,
+        "auto_maintenance_enabled": bool(background and background.apply_safe_suggestions),
+        "last_auto_applied": (
+            [asdict(suggestion) for suggestion in background.last_auto_applied]
+            if background is not None
+            else []
+        ),
         "last_report": asdict(report) if report is not None else None,
     }
 
@@ -282,13 +305,17 @@ async def apply_endpoint_diagnosis(request: Request) -> dict[str, Any]:
     service: EndpointDiagnosisService = request.app.state.endpoint_diagnosis
     payload = await request.json()
     suggestion_ids = payload.get("suggestion_ids") if isinstance(payload, dict) else None
-    if not isinstance(suggestion_ids, list) or not all(isinstance(item, str) for item in suggestion_ids):
+    if not isinstance(suggestion_ids, list) or not all(
+        isinstance(item, str) for item in suggestion_ids
+    ):
         raise HTTPException(status_code=400, detail="Expected { suggestion_ids: [string, ...] }")
     applied = await service.apply_suggestions(suggestion_ids)
     return {"data": [asdict(suggestion) for suggestion in applied]}
 
 
-async def _catalog_payload_with_health(catalog: ModelCatalog, state: StateManager) -> dict[str, Any]:
+async def _catalog_payload_with_health(
+    catalog: ModelCatalog, state: StateManager
+) -> dict[str, Any]:
     payload = catalog.to_payload()
     for route_payload in payload["data"]:
         route_state = await state.get_route_state(
@@ -571,7 +598,9 @@ async def provider_status(request: Request) -> dict[str, Any]:
         for route in all_routes:
             if route.provider_name != provider.name:
                 continue
-            route_state = await state.get_route_state(route.route_id, route.provider_name, route.model_id)
+            route_state = await state.get_route_state(
+                route.route_id, route.provider_name, route.model_id
+            )
             route_payload = asdict(route)
             route_payload["health"] = asdict(route_state)
             route_payload["usage"] = route_usage[route.route_id]
@@ -599,6 +628,20 @@ async def provider_status(request: Request) -> dict[str, Any]:
 async def chat_completions(request: Request) -> JSONResponse:
     payload: dict[str, Any] = await request.json()
     router: WaterfallRouter = request.app.state.waterfall_router
+    limiter: GatewayRequestLimiter = request.app.state.request_limiter
+
+    if not await limiter.acquire():
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "message": "Gateway is busy; retry shortly",
+                    "type": "gateway_overloaded",
+                    "code": "request_queue_timeout",
+                }
+            },
+            headers={"Retry-After": "1"},
+        )
 
     try:
         result = await router.route_chat_completion(payload)
@@ -628,6 +671,8 @@ async def chat_completions(request: Request) -> JSONResponse:
                 }
             },
         )
+    finally:
+        limiter.release()
 
     return JSONResponse(
         content=result.body,
@@ -641,11 +686,32 @@ async def chat_completions(request: Request) -> JSONResponse:
 
 
 @app.post("/v1/chat/completions/stream-route")
-async def chat_completions_stream_route(request: Request) -> StreamingResponse:
+async def chat_completions_stream_route(request: Request) -> Response:
     payload: dict[str, Any] = await request.json()
     router: WaterfallRouter = request.app.state.waterfall_router
+    limiter: GatewayRequestLimiter = request.app.state.request_limiter
+    if not await limiter.acquire():
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "message": "Gateway is busy; retry shortly",
+                    "type": "gateway_overloaded",
+                    "code": "request_queue_timeout",
+                }
+            },
+            headers={"Retry-After": "1"},
+        )
+
+    async def limited_stream():
+        try:
+            async for chunk in stream_route_chat(payload, router):
+                yield chunk
+        finally:
+            limiter.release()
+
     return StreamingResponse(
-        stream_route_chat(payload, router),
+        limited_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -882,7 +948,7 @@ MODEL_CATALOG_HTML = """
           </div>
         </details>
         <button id="save">Save Ranking</button>
-        <button id="autoRank" class="secondary" type="button" title="Reorder text-only routes by automatic quality score. Non-text routes are removed; disabled routes stay disabled.">Auto-rank</button>
+        <button id="autoRank" class="secondary" type="button" title="Reorder text-capable routes by automatic quality score. Routes that cannot handle a normal text exchange are removed; disabled routes stay disabled.">Auto-rank</button>
         <button id="reload" class="secondary">Reload</button>
         <button id="updates" class="secondary" type="button">Updates <span id="updateCount" class="update-count"></span></button>
         <button id="reset" class="secondary" style="margin-left: auto; color: var(--red); border-color: rgba(239, 68, 68, 0.3);">Reset to Defaults</button>
@@ -1139,7 +1205,7 @@ MODEL_CATALOG_HTML = """
         const removed = before.filter((route) => !afterIds.has(route.route_id)).length;
         const moved = after.filter((route) => beforeById.has(route.route_id) && beforeById.get(route.route_id).rank !== route.rank).length;
         const disabled = after.filter((route) => !route.enabled).length;
-        return `Auto-ranked ${after.length} text-only route${after.length === 1 ? '' : 's'}: ${moved} moved, ${removed} non-text/specialized removed, ${disabled} disabled kept disabled.`;
+        return `Auto-ranked ${after.length} text-capable route${after.length === 1 ? '' : 's'}: ${moved} moved, ${removed} non-text/specialized removed, ${disabled} disabled kept disabled.`;
       }
 
       async function save() {
@@ -1295,7 +1361,7 @@ MODEL_CATALOG_HTML = """
       $('save').addEventListener('click', save);
       $('autoRank').addEventListener('click', async () => {
         const before = routes.map((route) => ({ ...route }));
-        $('status').textContent = 'Auto-ranking text-only routes by quality score; disabled routes will stay disabled...';
+        $('status').textContent = 'Auto-ranking text-capable routes by quality score; disabled routes will stay disabled...';
         $('autoRank').disabled = true;
         const response = await fetch('/v1/gateway/models/auto-rank', { method: 'POST' });
         const payload = await response.json();

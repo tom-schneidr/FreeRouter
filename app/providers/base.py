@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 import httpx
 
 
 class ProviderError(Exception):
     """Base exception for provider-level errors, carrying HTTP status and response body."""
+
     def __init__(
         self,
         message: str,
@@ -29,6 +31,7 @@ class ProviderRateLimited(ProviderError):
 @dataclass(frozen=True)
 class ProviderResponse:
     """Normalized successful response from a provider."""
+
     provider_name: str
     status_code: int
     headers: Mapping[str, str]
@@ -38,6 +41,7 @@ class ProviderResponse:
 @dataclass(frozen=True)
 class ProviderAdapter:
     """Configuration and HTTP logic for a single upstream provider endpoint."""
+
     name: str
     api_key: str | None
     base_url: str

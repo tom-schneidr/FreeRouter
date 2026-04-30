@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
 
 from app.endpoint_diagnosis import (
-    EndpointSupervisor,
+    BackgroundEndpointDiagnosis,
+    DiagnosisReport,
     EndpointDiagnosisService,
+    EndpointSuggestion,
+    EndpointSupervisor,
     SupervisorVerdict,
 )
 from app.model_catalog import ModelCatalog, route_id_for
@@ -108,10 +112,53 @@ class FakeSupervisor:
             SupervisorVerdict(False, "low", "No official free-tier evidence."),
         )
 
+
+class FakeBackgroundService:
+    def __init__(self) -> None:
+        self.applied: list[str] = []
+        self.applied_event = asyncio.Event()
+
+    async def run_once(self) -> DiagnosisReport:
+        return DiagnosisReport(
+            checked_at=1,
+            providers=[],
+            suggestions=[
+                EndpointSuggestion(
+                    suggestion_id="remove:dead",
+                    action="remove_route",
+                    provider_name="p",
+                    model_id="dead",
+                    route_id="dead",
+                    title="Remove dead",
+                    details="Dead route",
+                ),
+                EndpointSuggestion(
+                    suggestion_id="add:new",
+                    action="add_route",
+                    provider_name="p",
+                    model_id="new",
+                    route_id="new",
+                    title="Add new",
+                    details="New route",
+                    route={},
+                ),
+            ],
+        )
+
+    async def apply_suggestions(self, suggestion_ids: list[str]) -> list[EndpointSuggestion]:
+        self.applied.extend(suggestion_ids)
+        self.applied_event.set()
+        return []
+
+
 async def test_endpoint_diagnosis_suggests_openrouter_free_routes_and_stale_routes(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("openrouter", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "openrouter", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -175,10 +222,30 @@ async def test_endpoint_diagnosis_suggests_openrouter_free_routes_and_stale_rout
     assert stale_state.status == "active"
 
 
+async def test_background_diagnosis_auto_applies_only_safe_suggestions():
+    service = FakeBackgroundService()
+    background = BackgroundEndpointDiagnosis(
+        service,
+        interval_seconds=60,
+        startup_delay_seconds=0,
+        apply_safe_suggestions=True,
+    )
+
+    background.start()
+    await asyncio.wait_for(service.applied_event.wait(), timeout=1)
+    await background.stop()
+
+    assert service.applied == ["remove:dead"]
+
+
 async def test_endpoint_diagnosis_uses_supervisor_for_missing_pricing_discovery(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -232,7 +299,11 @@ async def test_endpoint_diagnosis_uses_supervisor_for_missing_pricing_discovery(
 async def test_endpoint_diagnosis_caches_supervisor_verdicts_between_runs(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -278,7 +349,11 @@ async def test_endpoint_diagnosis_caches_supervisor_verdicts_between_runs(tmp_pa
 async def test_local_endpoint_supervisor_uses_enabled_free_catalog_route(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -330,7 +405,11 @@ async def test_local_endpoint_supervisor_uses_enabled_free_catalog_route(tmp_pat
 async def test_endpoint_diagnosis_does_not_mark_openrouter_router_route_stale(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("openrouter", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "openrouter", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -356,10 +435,16 @@ async def test_endpoint_diagnosis_does_not_mark_openrouter_router_route_stale(tm
     assert report.suggestions == []
 
 
-async def test_endpoint_diagnosis_does_not_mark_gemini_models_stale_when_catalog_omits_them(tmp_path):
+async def test_endpoint_diagnosis_does_not_mark_gemini_models_stale_when_catalog_omits_them(
+    tmp_path,
+):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("gemini", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "gemini", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -402,7 +487,11 @@ async def test_endpoint_diagnosis_does_not_mark_gemini_models_stale_when_catalog
 async def test_endpoint_diagnosis_marks_other_provider_stale_only_after_missing_probe(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -428,10 +517,16 @@ async def test_endpoint_diagnosis_marks_other_provider_stale_only_after_missing_
     assert [suggestion.action for suggestion in report.suggestions] == ["remove_route"]
 
 
-async def test_endpoint_diagnosis_does_not_mark_other_provider_stale_when_probe_is_rate_limited(tmp_path):
+async def test_endpoint_diagnosis_does_not_mark_other_provider_stale_when_probe_is_rate_limited(
+    tmp_path,
+):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -460,7 +555,11 @@ async def test_endpoint_diagnosis_does_not_mark_other_provider_stale_when_probe_
 async def test_endpoint_diagnosis_matches_provider_prefixed_model_ids(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("gemini", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "gemini", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -489,7 +588,11 @@ async def test_endpoint_diagnosis_matches_provider_prefixed_model_ids(tmp_path):
 async def test_endpoint_diagnosis_applies_selected_suggestions_only(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("openrouter", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "openrouter", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -542,7 +645,11 @@ async def test_endpoint_diagnosis_applies_selected_suggestions_only(tmp_path):
 async def test_endpoint_diagnosis_applies_remove_route_suggestion(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -563,7 +670,9 @@ async def test_endpoint_diagnosis_applies_remove_route_suggestion(tmp_path):
     service = EndpointDiagnosisService([provider], catalog, state, request_timeout_seconds=5)
     report = await service.run_once()
 
-    remove_id = next(item.suggestion_id for item in report.suggestions if item.action == "remove_route")
+    remove_id = next(
+        item.suggestion_id for item in report.suggestions if item.action == "remove_route"
+    )
     applied = await service.apply_suggestions([remove_id])
 
     assert [item.suggestion_id for item in applied] == [remove_id]
@@ -575,7 +684,11 @@ async def test_endpoint_diagnosis_applies_remove_route_suggestion(tmp_path):
 async def test_approved_added_routes_are_promoted_to_reset_defaults(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        [ProviderQuota("openrouter", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        [
+            ProviderQuota(
+                "openrouter", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
 
@@ -602,4 +715,7 @@ async def test_approved_added_routes_are_promoted_to_reset_defaults(tmp_path):
     await service.apply_suggestions([add_id])
     reset_routes = catalog.reset_to_defaults()
 
-    assert any(route.route_id == route_id_for("openrouter", "unit-test/new-llama-chat:free") for route in reset_routes)
+    assert any(
+        route.route_id == route_id_for("openrouter", "unit-test/new-llama-chat:free")
+        for route in reset_routes
+    )

@@ -56,8 +56,12 @@ async def _state(tmp_path) -> StateManager:
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
         [
-            ProviderQuota("primary", tokens_per_day=None, requests_per_day=None, requests_per_minute=30),
-            ProviderQuota("fallback", tokens_per_day=None, requests_per_day=None, requests_per_minute=30),
+            ProviderQuota(
+                "primary", tokens_per_day=None, requests_per_day=None, requests_per_minute=30
+            ),
+            ProviderQuota(
+                "fallback", tokens_per_day=None, requests_per_day=None, requests_per_minute=30
+            ),
         ],
     )
     await state.initialize()
@@ -166,12 +170,11 @@ async def test_sse_route_uses_canonical_router_event_sequence(tmp_path):
     routed_core = [
         _event_shape(event)
         for event in route_events
-        if event.event_type in {"route_trying", "route_failed", "route_flagged", "route_skipped", "route_selected"}
+        if event.event_type
+        in {"route_trying", "route_failed", "route_flagged", "route_skipped", "route_selected"}
     ]
     sse_core = [
-        _sse_shape(event)
-        for event in sse_events
-        if str(event.get("type", "")).startswith("route_")
+        _sse_shape(event) for event in sse_events if str(event.get("type", "")).startswith("route_")
     ]
 
     assert sse_core == routed_core

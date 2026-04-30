@@ -110,7 +110,10 @@ def test_openrouter_catalog_payload_allows_multimodal_text_models():
                 {
                     "id": "mistralai/pixtral-12b:free",
                     "name": "Mistral: Pixtral 12B",
-                    "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                    },
                     "pricing": {"prompt": "0", "completion": "0"},
                 },
                 {
@@ -140,7 +143,10 @@ def test_catalog_payload_allows_multimodal_text_exchange_models():
                 {
                     "id": "vision-chat:free",
                     "name": "Vision Chat",
-                    "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                    },
                     "pricing": {"prompt": "0", "completion": "0"},
                 },
                 {

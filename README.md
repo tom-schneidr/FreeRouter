@@ -1,10 +1,32 @@
 # FreeRouter
 
-Local OpenAI-compatible gateway with a state-aware waterfall router for free-tier AI providers.
+FreeRouter is a local AI routing layer that turns a pile of free-tier provider accounts into one
+reliable, low-maintenance API for agent systems, scripts, and apps.
 
-Default model-strength waterfall:
+Instead of manually choosing and reordering dozens of models, FreeRouter keeps a ranked catalog of
+text-capable models, tries the strongest available route first, tracks provider quotas locally, and
+falls back automatically when a route is rate-limited, slow, stale, or unavailable. It is designed to
+sit underneath workloads like multi-agent simulations where many independent agents may ask for AI
+work at the same time.
 
-The router ranks all available free-tier models based on their raw benchmark strength and capabilities (DeepSeek V4 Pro, GPT OSS 120B, Gemini Pro, etc.). It queries the most powerful models first. If the top model is rate-limited or unavailable, it gracefully falls back to the next strongest model in the list. If two providers offer the exact same model, the router prioritizes the provider with the most generous free-tier limits.
+It also exposes an OpenAI-style API surface, so many existing clients can use it by changing only
+their base URL. That compatibility is the adapter layer; the main value is automatic routing,
+fallback, quota awareness, endpoint health, and low-touch maintenance across multiple providers.
+
+## Why Use It?
+
+- **One local AI gateway:** Point your projects at FreeRouter instead of wiring each provider into
+  every app.
+- **Automatic model ordering:** Routes are ranked by model capability and provider usefulness rather
+  than by discovery order.
+- **Graceful fallback:** If a provider is out of quota, too slow, missing a model, or temporarily
+  unhealthy, the request rolls to the next best route.
+- **Burst-friendly for agent workloads:** A local request limiter and SQLite-backed quota reservation
+  help absorb sudden bursts from cron jobs or many collaborating agents.
+- **Set-and-forget maintenance:** Background diagnosis can remove confirmed dead routes and clear
+  recovered health flags while leaving newly found models disabled until you accept them.
+- **Transparent control:** The Models and Status pages show ranking, route health, usage, and
+  pending endpoint updates.
 
 ## File Structure
 
@@ -29,6 +51,7 @@ The router ranks all available free-tier models based on their raw benchmark str
 ├── .env.example                # API key template
 ├── run.bat                     # Execution-policy-safe Windows launcher
 ├── run.ps1                     # PowerShell bootstrap-and-run script
+├── run.sh                      # Linux/macOS bootstrap-and-run script
 └── pyproject.toml              # Python dependencies
 ```
 
@@ -36,6 +59,12 @@ The router ranks all available free-tier models based on their raw benchmark str
 
 ```powershell
 .\run.bat
+```
+
+Linux/macOS:
+
+```bash
+bash ./run.sh
 ```
 
 The launcher creates `.venv` if needed, installs dependencies, creates `.env` from `.env.example`
@@ -52,6 +81,13 @@ Useful options:
 .\run.bat -Port 8080
 .\run.bat -NoReload
 .\run.bat -RuntimeOnly
+```
+
+```bash
+bash ./run.sh --install-only
+bash ./run.sh --port 8080
+bash ./run.sh --no-reload
+bash ./run.sh --runtime-only
 ```
 
 By default `run.ps1` installs the project with dev extras (`.[dev]`) so `pytest` and `ruff`
@@ -87,19 +123,29 @@ The launcher keeps `.env` in sync with new config keys but does not overwrite ex
 ## Automatic Endpoint Diagnosis
 
 FreeRouter can check provider model availability in the background. When enabled, it calls each
-configured provider's OpenAI-compatible `/models` endpoint and creates reviewable suggestions for
-confirmed dead-route removals, recovered routes, and newly discovered models. The gateway does
-not apply those changes automatically; open the Models page and use the Updates popup to choose what
-to accept.
+configured provider's OpenAI-compatible `/models` endpoint and creates suggestions for confirmed
+dead-route removals, recovered routes, and newly discovered models. With automatic maintenance
+enabled, safe cleanup is applied in the background: confirmed dead routes are removed and recovered
+route health flags are cleared. New route additions remain reviewable suggestions and are disabled
+by default until you accept and enable them.
 
 Configure the cadence in `.env`:
 
 ```text
 AUTO_ENDPOINT_DIAGNOSIS_ENABLED=true
+AUTO_ENDPOINT_MAINTENANCE_ENABLED=true
 AUTO_ENDPOINT_DIAGNOSIS_INTERVAL_SECONDS=21600
 AUTO_ENDPOINT_DIAGNOSIS_STARTUP_DELAY_SECONDS=10
 ENDPOINT_DIAGNOSIS_SUPERVISOR_ENABLED=false
 ENDPOINT_DIAGNOSIS_SUPERVISOR_MODEL=
+```
+
+For bursty local agent workloads, tune:
+
+```text
+MAX_CONCURRENT_REQUESTS=20
+REQUEST_QUEUE_TIMEOUT_SECONDS=30
+SQLITE_BUSY_TIMEOUT_MS=5000
 ```
 
 When `ENDPOINT_DIAGNOSIS_SUPERVISOR_ENABLED=true`, missing provider pricing data can be checked by
@@ -119,16 +165,25 @@ POST /v1/gateway/endpoint-diagnosis/apply
 ## Endpoints
 
 ```text
+GET  /
+GET  /chat
 GET  /health
 GET  /models
+GET  /status
 GET  /v1/models
 GET  /v1/gateway/models
 PUT  /v1/gateway/models
+POST /v1/gateway/models/reset
+POST /v1/gateway/models/auto-rank
+POST /v1/gateway/models/{route_id}/disable
+POST /v1/gateway/models/{route_id}/enable
+POST /v1/gateway/models/{route_id}/health/reset
 GET  /v1/gateway/endpoint-diagnosis
 POST /v1/gateway/endpoint-diagnosis/refresh
 POST /v1/gateway/endpoint-diagnosis/apply
 GET  /v1/providers/status
 POST /v1/chat/completions
+POST /v1/chat/completions/stream-route
 ```
 
 `/v1/chat/completions` returns the upstream provider JSON unchanged. Gateway diagnostics are

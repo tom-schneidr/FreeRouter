@@ -4,7 +4,6 @@ from app.providers.base import ProviderAdapter
 from app.settings import Settings
 from app.state import ProviderQuota
 
-
 PROVIDER_QUOTAS = [
     ProviderQuota(
         name="cerebras",

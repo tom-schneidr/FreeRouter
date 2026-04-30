@@ -91,7 +91,9 @@ class EndpointSupervisor:
 
         route = self._select_supervisor_route()
         if route is None:
-            return SupervisorVerdict(False, "none", "No enabled free supervisor route is available.")
+            return SupervisorVerdict(
+                False, "none", "No enabled free supervisor route is available."
+            )
 
         provider = self.providers.get(route.provider_name)
         if provider is None or not provider.is_configured:
@@ -99,7 +101,9 @@ class EndpointSupervisor:
 
         availability = await self.state.check_available(provider.name, estimated_tokens=800)
         if not availability.available:
-            return SupervisorVerdict(False, "none", f"Supervisor unavailable: {availability.reason}.")
+            return SupervisorVerdict(
+                False, "none", f"Supervisor unavailable: {availability.reason}."
+            )
 
         prompt = (
             "Determine whether this provider model is currently available as a no-cost/free-tier "
@@ -201,7 +205,9 @@ class EndpointDiagnosisService:
         )
         self._lock = asyncio.Lock()
         self.last_report: DiagnosisReport | None = None
-        self._supervisor_verdict_cache: dict[str, SupervisorVerdict] = self._build_supervisor_cache()
+        self._supervisor_verdict_cache: dict[str, SupervisorVerdict] = (
+            self._build_supervisor_cache()
+        )
 
     def _build_supervisor_cache(self) -> dict[str, SupervisorVerdict]:
         cached: dict[str, SupervisorVerdict] = {}
@@ -255,7 +261,9 @@ class EndpointDiagnosisService:
 
             for suggestion in selected:
                 if suggestion.action == "add_route" and suggestion.route is not None:
-                    added = self.catalog.add_discovered_routes([ModelCatalog._route_from_dict(suggestion.route)])
+                    added = self.catalog.add_discovered_routes(
+                        [ModelCatalog._route_from_dict(suggestion.route)]
+                    )
                     promote_routes_to_default_catalog(added)
                 elif suggestion.action == "remove_route":
                     removed = self.catalog.remove_routes({suggestion.route_id})
@@ -285,7 +293,9 @@ class EndpointDiagnosisService:
         provider: ProviderAdapter,
     ) -> tuple[ProviderDiagnosis, list[EndpointSuggestion]]:
         if not provider.is_configured:
-            return ProviderDiagnosis(provider.name, configured=False, ok=False, error="missing_api_key"), []
+            return ProviderDiagnosis(
+                provider.name, configured=False, ok=False, error="missing_api_key"
+            ), []
 
         availability = await self.state.check_available(provider.name)
         if not availability.available:
@@ -317,7 +327,9 @@ class EndpointDiagnosisService:
                 [],
             )
         except (ProviderError, httpx.RequestError, httpx.TimeoutException) as exc:
-            return ProviderDiagnosis(provider.name, configured=True, ok=False, error=exc.__class__.__name__), []
+            return ProviderDiagnosis(
+                provider.name, configured=True, ok=False, error=exc.__class__.__name__
+            ), []
 
         raw_discovered_ids = _raw_model_ids_from_payload(payload)
         discovered_ids = _model_id_variants_from_ids(raw_discovered_ids)
@@ -346,13 +358,20 @@ class EndpointDiagnosisService:
             suggestions,
         )
 
-    def _new_route_suggestions(self, discovered_routes: list[ModelRoute]) -> list[EndpointSuggestion]:
+    def _new_route_suggestions(
+        self, discovered_routes: list[ModelRoute]
+    ) -> list[EndpointSuggestion]:
         existing_ids = {route.route_id for route in self.catalog.all_routes()}
-        existing_targets = {(route.provider_name, route.model_id) for route in self.catalog.all_routes()}
+        existing_targets = {
+            (route.provider_name, route.model_id) for route in self.catalog.all_routes()
+        }
         suggestions: list[EndpointSuggestion] = []
 
         for route in discovered_routes:
-            if route.route_id in existing_ids or (route.provider_name, route.model_id) in existing_targets:
+            if (
+                route.route_id in existing_ids
+                or (route.provider_name, route.model_id) in existing_targets
+            ):
                 continue
             suggestions.append(
                 EndpointSuggestion(
@@ -456,7 +475,9 @@ class EndpointDiagnosisService:
         for route in self.catalog.all_routes():
             if route.provider_name != provider.name:
                 continue
-            presence_ids = _presence_ids_for_route(provider.name, route, discovered_ids, routeable_ids)
+            presence_ids = _presence_ids_for_route(
+                provider.name, route, discovered_ids, routeable_ids
+            )
             route_state = await self.state.get_route_state(
                 route.route_id,
                 route.provider_name,
@@ -549,10 +570,13 @@ class BackgroundEndpointDiagnosis:
         *,
         interval_seconds: int,
         startup_delay_seconds: int,
+        apply_safe_suggestions: bool = True,
     ) -> None:
         self.service = service
         self.interval_seconds = max(60, interval_seconds)
         self.startup_delay_seconds = max(0, startup_delay_seconds)
+        self.apply_safe_suggestions = apply_safe_suggestions
+        self.last_auto_applied: list[EndpointSuggestion] = []
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -572,7 +596,15 @@ class BackgroundEndpointDiagnosis:
         await asyncio.sleep(self.startup_delay_seconds)
         while True:
             try:
-                await self.service.run_once()
+                report = await self.service.run_once()
+                if self.apply_safe_suggestions:
+                    safe_ids = [
+                        suggestion.suggestion_id
+                        for suggestion in report.suggestions
+                        if suggestion.action in {"remove_route", "clear_stale"}
+                    ]
+                    if safe_ids:
+                        self.last_auto_applied = await self.service.apply_suggestions(safe_ids)
             except Exception:
                 # The request path must never depend on background refresh health.
                 pass

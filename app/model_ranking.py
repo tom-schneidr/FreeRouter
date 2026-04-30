@@ -67,11 +67,11 @@ _AA_INTELLIGENCE_INDEX_SCORES = {
 }
 
 _PROVIDER_SCORES = {
-    "gemini": 100,      # Dynamic but highly generous token limits
-    "groq": 90,         # 30 RPM, 14.4K RPD
-    "cerebras": 80,     # 30 RPM, 1M TPD
-    "nvidia": 70,       # Generous but undocumented limits
-    "openrouter": 60,   # Aggressive free tier rate limits
+    "gemini": 100,  # Dynamic but highly generous token limits
+    "groq": 90,  # 30 RPM, 14.4K RPD
+    "cerebras": 80,  # 30 RPM, 1M TPD
+    "nvidia": 70,  # Generous but undocumented limits
+    "openrouter": 60,  # Aggressive free tier rate limits
 }
 
 
@@ -79,11 +79,19 @@ def compute_rank_score(route: ModelRoute) -> int:
     """Capability score guided by the Artificial Analysis Intelligence Index."""
     text = (route.display_name + " " + route.model_id + " " + " ".join(route.tags)).lower()
 
-    if "safety" in text or "guard" in text or "pii" in text or "translate" in text or "paligemma" in text:
+    if (
+        "safety" in text
+        or "guard" in text
+        or "pii" in text
+        or "translate" in text
+        or "paligemma" in text
+    ):
         return -500000
 
     score = 0
-    for key, val in sorted(_AA_INTELLIGENCE_INDEX_SCORES.items(), key=lambda item: len(item[0]), reverse=True):
+    for key, val in sorted(
+        _AA_INTELLIGENCE_INDEX_SCORES.items(), key=lambda item: len(item[0]), reverse=True
+    ):
         if key in text:
             score = val * _AA_INTELLIGENCE_INDEX_SCALE
             break
@@ -149,4 +157,3 @@ def rank_sort_key(route: ModelRoute) -> tuple[int, int, str, str]:
         route.provider_name,
         route.model_id,
     )
-

@@ -18,7 +18,11 @@ class UnifiedAIClient:
 
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.state = StateManager(self.settings.database_path, PROVIDER_QUOTAS)
+        self.state = StateManager(
+            self.settings.database_path,
+            PROVIDER_QUOTAS,
+            busy_timeout_ms=self.settings.sqlite_busy_timeout_ms,
+        )
         self.model_catalog = ModelCatalog(self.settings.model_catalog_path)
         self.router: WaterfallRouter | None = None
 

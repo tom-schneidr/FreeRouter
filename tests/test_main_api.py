@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.request_limiter import GatewayRequestLimiter
 from app.settings import get_settings
 
 
@@ -79,3 +82,25 @@ def test_auto_rank_endpoint_returns_catalog_payload(tmp_path, monkeypatch):
     assert payload["object"] == "list"
     assert payload["data"]
     assert "rank_score" in payload["data"][0]
+
+
+async def test_request_limiter_times_out_when_full():
+    limiter = GatewayRequestLimiter(max_concurrent_requests=1, queue_timeout_seconds=0.01)
+    assert await limiter.acquire() is True
+
+    second = await limiter.acquire()
+
+    limiter.release()
+    assert second is False
+
+
+async def test_request_limiter_allows_waiting_request_after_release():
+    limiter = GatewayRequestLimiter(max_concurrent_requests=1, queue_timeout_seconds=1)
+    assert await limiter.acquire() is True
+
+    waiter = asyncio.create_task(limiter.acquire())
+    await asyncio.sleep(0)
+    limiter.release()
+
+    assert await waiter is True
+    limiter.release()

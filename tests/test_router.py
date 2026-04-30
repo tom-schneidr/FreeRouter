@@ -57,8 +57,12 @@ def _payload() -> dict[str, Any]:
 
 async def _state(tmp_path, providers=None) -> StateManager:
     providers = providers or [
-        ProviderQuota("primary", tokens_per_day=None, requests_per_day=None, requests_per_minute=30),
-        ProviderQuota("fallback", tokens_per_day=None, requests_per_day=None, requests_per_minute=30),
+        ProviderQuota(
+            "primary", tokens_per_day=None, requests_per_day=None, requests_per_minute=30
+        ),
+        ProviderQuota(
+            "fallback", tokens_per_day=None, requests_per_day=None, requests_per_minute=30
+        ),
     ]
     state = StateManager(str(tmp_path / "state.sqlite3"), providers)
     await state.initialize()
@@ -106,7 +110,9 @@ async def test_router_skips_local_cooldown_and_preserves_provider_body(tmp_path)
         "usage": {"total_tokens": 3},
     }
     fallback = FakeProvider("fallback", response=fallback_body)
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     result = await router.route_chat_completion(_payload())
 
@@ -129,7 +135,9 @@ async def test_router_falls_back_on_429_and_marks_cooldown(tmp_path):
         ),
     )
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     result = await router.route_chat_completion(_payload())
     primary_state = await state.get_state("primary")
@@ -145,7 +153,9 @@ async def test_router_marks_repeated_404_as_potentially_outdated(tmp_path):
     state = await _state(tmp_path)
     primary = FakeProvider("primary", error=ProviderError("not found", status_code=404))
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     await router.route_chat_completion(_payload())
     await router.route_chat_completion(_payload())
@@ -162,7 +172,9 @@ async def test_router_marks_repeated_timeouts_as_too_slow(tmp_path):
     state = await _state(tmp_path)
     primary = FakeProvider("primary", error=httpx.ReadTimeout("timed out"))
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     await router.route_chat_completion(_payload())
     await router.route_chat_completion(_payload())
@@ -186,7 +198,9 @@ async def test_router_raises_no_provider_when_all_exhausted(tmp_path):
 
     primary = FakeProvider("primary")
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     with pytest.raises(NoProviderAvailable) as exc_info:
         await router.route_chat_completion(_payload())
@@ -203,7 +217,9 @@ async def test_router_skips_unconfigured_provider(tmp_path):
     state = await _state(tmp_path)
     primary = FakeProvider("primary", configured=False)
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     result = await router.route_chat_completion(_payload())
 
@@ -268,7 +284,9 @@ async def test_router_falls_back_on_timeout(tmp_path):
     state = await _state(tmp_path)
     primary = FakeProvider("primary", error=httpx.ReadTimeout("timed out"))
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     result = await router.route_chat_completion(_payload())
 
@@ -288,7 +306,9 @@ async def test_router_falls_back_on_5xx(tmp_path):
         error=ProviderError("server error", status_code=500),
     )
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     result = await router.route_chat_completion(_payload())
 
@@ -308,7 +328,9 @@ async def test_router_falls_back_on_auth_error(tmp_path):
         error=ProviderError("unauthorized", status_code=401),
     )
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     result = await router.route_chat_completion(_payload())
 
@@ -327,7 +349,9 @@ async def test_router_raises_non_recoverable_error(tmp_path):
         error=ProviderError("bad request", status_code=400),
     )
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     with pytest.raises(ProviderError):
         await router.route_chat_completion(_payload())
@@ -344,7 +368,9 @@ async def test_router_falls_back_on_connection_error(tmp_path):
         error=httpx.ConnectError("connection refused"),
     )
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     result = await router.route_chat_completion(_payload())
 
@@ -375,9 +401,7 @@ async def test_router_rejects_missing_content(tmp_path):
     )
 
     with pytest.raises(ValueError, match="content"):
-        await router.route_chat_completion(
-            {"model": "auto", "messages": [{"role": "user"}]}
-        )
+        await router.route_chat_completion({"model": "auto", "messages": [{"role": "user"}]})
 
 
 async def test_router_rejects_missing_role(tmp_path):
@@ -388,9 +412,7 @@ async def test_router_rejects_missing_role(tmp_path):
     )
 
     with pytest.raises(ValueError, match="role"):
-        await router.route_chat_completion(
-            {"model": "auto", "messages": [{"content": "hi"}]}
-        )
+        await router.route_chat_completion({"model": "auto", "messages": [{"content": "hi"}]})
 
 
 # ── New coverage: streaming rejection ────────────────────────────────────────
@@ -421,7 +443,9 @@ async def test_router_event_stream_classifies_missing_model_bodies(tmp_path):
         ),
     )
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     events = [event async for event in router.iter_route_events(_payload())]
 

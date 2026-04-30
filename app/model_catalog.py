@@ -8,7 +8,6 @@ from typing import Any
 
 from app.model_ranking import compute_rank_score, rank_sort_key
 
-
 CANONICAL_MODEL_TAGS = {
     "text",
     "reasoning",
@@ -131,7 +130,10 @@ def promote_routes_to_default_catalog(routes: list[ModelRoute]) -> list[ModelRou
     for route in routes:
         if not is_text_chat_route(route):
             continue
-        if route.route_id in existing_ids or (route.provider_name, route.model_id) in existing_targets:
+        if (
+            route.route_id in existing_ids
+            or (route.provider_name, route.model_id) in existing_targets
+        ):
             continue
         default_route = ModelRoute(
             route_id=route.route_id,
@@ -170,7 +172,9 @@ def remove_routes_from_default_catalog(route_ids: set[str]) -> list[ModelRoute]:
     if not removed:
         return []
 
-    DEFAULT_MODEL_ROUTES[:] = [route for route in DEFAULT_MODEL_ROUTES if route.route_id not in route_ids]
+    DEFAULT_MODEL_ROUTES[:] = [
+        route for route in DEFAULT_MODEL_ROUTES if route.route_id not in route_ids
+    ]
     _assign_default_ranks()
     return removed
 
@@ -206,8 +210,8 @@ def is_text_chat_route(route: ModelRoute) -> bool:
 
 
 DEFAULT_MODEL_ROUTES = [
-
-    _route("cerebras",
+    _route(
+        "cerebras",
         "llama3.1-8b",
         "Llama 3.1 8B",
         8192,
@@ -216,7 +220,8 @@ DEFAULT_MODEL_ROUTES = [
         notes="Official Cerebras model. Free tier: 60K TPM, 1M TPD, 30 RPM. Scheduled for deprecation May 27, 2026.",
         source_url="https://inference-docs.cerebras.ai/models/overview",
     ),
-    _route("cerebras",
+    _route(
+        "cerebras",
         "qwen-3-235b-a22b-instruct-2507",
         "Qwen 3 235B Instruct",
         8192,
@@ -226,57 +231,516 @@ DEFAULT_MODEL_ROUTES = [
         notes="Official Cerebras preview model. Free tier: 60K TPM, 1M TPD, 30 RPM. Scheduled for deprecation May 27, 2026.",
         source_url="https://inference-docs.cerebras.ai/models/overview",
     ),
-
-    _route("groq", "openai/gpt-oss-120b", "GPT OSS 120B", 131072, quality="high", speed="very fast", tags=["reasoning"], notes="Free-plan limits listed by Groq: 30 RPM, 1K RPD, 8K TPM, 200K TPD.", source_url="https://console.groq.com/docs/rate-limits"),
-    _route("groq", "openai/gpt-oss-20b", "GPT OSS 20B", 131072, speed="very fast", tags=["reasoning"], notes="Free-plan limits listed by Groq: 30 RPM, 1K RPD, 8K TPM, 200K TPD.", source_url="https://console.groq.com/docs/rate-limits"),
-    _route("groq", "llama-3.3-70b-versatile", "Llama 3.3 70B Versatile", 131072, quality="high", speed="very fast", tags=[], notes="Free-plan limits listed by Groq: 30 RPM, 1K RPD, 12K TPM, 100K TPD.", source_url="https://console.groq.com/docs/rate-limits"),
-    _route("groq", "llama-3.1-8b-instant", "Llama 3.1 8B Instant", 131072, speed="very fast", tags=[], notes="Free-plan limits listed by Groq: 30 RPM, 14.4K RPD, 6K TPM, 500K TPD.", source_url="https://console.groq.com/docs/rate-limits"),
-    _route("groq", "meta-llama/llama-4-scout-17b-16e-instruct", "Llama 4 Scout 17B 16E", 131072, quality="high", speed="very fast", tags=["vision"], notes="Free-plan limits listed by Groq: 30 RPM, 1K RPD, 30K TPM, 500K TPD.", source_url="https://console.groq.com/docs/rate-limits"),
-    _route("groq", "qwen/qwen3-32b", "Qwen3 32B", 131072, quality="high", speed="very fast", tags=["reasoning"], notes="Free-plan limits listed by Groq: 60 RPM, 1K RPD, 6K TPM, 500K TPD.", source_url="https://console.groq.com/docs/rate-limits"),
-    _route("groq", "groq/compound", "Groq Compound", 131072, quality="agentic", speed="fast", tags=["tool-use", "web-search"], notes="Free-plan limits listed by Groq: 30 RPM, 250 RPD, 70K TPM.", source_url="https://console.groq.com/docs/rate-limits"),
-    _route("groq", "groq/compound-mini", "Groq Compound Mini", 131072, quality="agentic", speed="fast", tags=["tool-use", "web-search"], notes="Free-plan limits listed by Groq: 30 RPM, 250 RPD, 70K TPM.", source_url="https://console.groq.com/docs/rate-limits"),
-    _route("gemini", "gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", 2_097_152, quality="very high", speed="medium", tags=["reasoning", "vision", "audio"], notes="Listed in Gemini docs. Free-tier limits are dynamic and must be checked in AI Studio. 2 RPM.", source_url="https://ai.google.dev/gemini-api/docs/models"),
-    _route("gemini", "gemini-3-flash-preview", "Gemini 3 Flash Preview", 1_048_576, quality="high", speed="fast", tags=["vision", "audio"], notes="Frontier-class performance rivaling larger models. Free-tier limits are dynamic. 15 RPM.", source_url="https://ai.google.dev/gemini-api/docs/models"),
-    _route("gemini", "gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash-Lite Preview", 1_048_576, quality="good", speed="very fast", tags=["vision", "audio"], notes="Listed in Gemini docs. Free-tier limits are dynamic and must be checked in AI Studio. 15 RPM.", source_url="https://ai.google.dev/gemini-api/docs/models"),
-    _route("gemini", "gemini-2.5-flash", "Gemini 2.5 Flash", 1_000_000, quality="high", speed="fast", tags=["vision", "audio"], notes="Current stable Flash family model. Free-tier limits are dynamic and per project.", source_url="https://ai.google.dev/gemini-api/docs/models"),
-    _route("gemini", "gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite", 1_000_000, quality="good", speed="very fast", tags=["vision", "audio"], notes="Fastest 2.5 family model. Free-tier limits are dynamic and per project.", source_url="https://ai.google.dev/gemini-api/docs/models"),
-    _route("gemini", "gemini-2.5-pro", "Gemini 2.5 Pro", 1_000_000, quality="very high", speed="medium", tags=["reasoning", "vision", "audio"], notes="Listed in Gemini docs; availability/free limits vary by project and tier.", source_url="https://ai.google.dev/gemini-api/docs/models"),
-    _route("nvidia", "deepseek-ai/deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000, quality="very high", speed="fast", tags=["coding"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. DeepSeek V4 Pro is optimized for coding tasks and 1M-token context.", source_url="https://build.nvidia.com/deepseek-ai/deepseek-v4-pro"),
-    _route("nvidia", "deepseek-ai/deepseek-v4-flash", "DeepSeek V4 Flash", 1_000_000, quality="high", speed="very fast", tags=["coding"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. DeepSeek V4 Flash is a 284B MoE optimized for fast coding and agents.", source_url="https://build.nvidia.com/deepseek-ai/deepseek-v4-flash"),
-
-    _route("nvidia", "minimaxai/minimax-m2.7", "MiniMax M2.7", 128000, quality="high", speed="fast", tags=["coding", "reasoning"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. 230B text-to-text model for coding, reasoning, and office tasks.", source_url="https://build.nvidia.com/minimaxai/minimax-m2.7"),
-
-    _route("nvidia", "deepseek-ai/deepseek-v3.1-terminus", "DeepSeek V3.1 Terminus", 128000, quality="high", speed="fast", tags=["tool-use"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog, but marked with near-term deprecation.", source_url="https://build.nvidia.com/deepseek-ai/deepseek-v3_1-terminus"),
-    _route("nvidia", "stepfun-ai/step-3.5-flash", "Step 3.5 Flash", 128000, quality="high", speed="fast", tags=["reasoning"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/stepfun-ai/step-3.5-flash"),
-    _route("nvidia", "mistralai/devstral-2-123b-instruct-2512", "Devstral 2 123B Instruct", 256000, quality="high", speed="fast", tags=["coding", "reasoning"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/mistralai/devstral-2-123b-instruct-2512"),
-    _route("nvidia", "moonshotai/kimi-k2-thinking", "Kimi K2 Thinking", 256000, quality="high", speed="fast", tags=["reasoning", "tool-use"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/moonshotai/kimi-k2-thinking"),
-    _route("nvidia", "mistralai/mistral-large-3-675b-instruct-2512", "Mistral Large 3 675B Instruct", 256000, quality="very high", speed="fast", tags=["vision"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/mistralai/mistral-large-3-675b-instruct-2512"),
-    _route("nvidia", "moonshotai/kimi-k2-instruct-0905", "Kimi K2 Instruct 0905", 256000, quality="high", speed="fast", tags=["reasoning"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/moonshotai/kimi-k2-instruct-0905"),
-    _route("nvidia", "bytedance/seed-oss-36b-instruct", "Seed OSS 36B Instruct", 128000, quality="good", speed="fast", tags=[], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/bytedance/seed-oss-36b-instruct"),
-    _route("nvidia", "qwen/qwen3-coder-480b-a35b-instruct", "Qwen3 Coder 480B A35B", 256000, quality="high", speed="fast", tags=["coding"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct"),
-    _route("nvidia", "moonshotai/kimi-k2-instruct", "Kimi K2 Instruct", 128000, quality="high", speed="fast", tags=["coding"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/moonshotai/kimi-k2-instruct"),
-    _route("nvidia", "mistralai/magistral-small-2506", "Magistral Small 2506", 128000, quality="good", speed="fast", tags=["reasoning", "coding"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/mistralai/magistral-small-2506"),
-    _route("nvidia", "mistralai/mistral-nemotron", "Mistral Nemotron", 128000, quality="good", speed="fast", tags=["coding", "tool-use"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/mistralai/mistral-nemotron"),
-
-    _route("nvidia", "meta/llama-4-maverick-17b-128e-instruct", "Llama 4 Maverick 17B 128E", 128000, quality="high", speed="fast", tags=["vision"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/meta/llama-4-maverick-17b-128e-instruct"),
-    _route("nvidia", "google/gemma-3n-e4b-it", "Gemma 3n E4B IT", 8192, quality="good", speed="fast", tags=["vision", "audio"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/google/gemma-3n-e4b-it"),
-    _route("nvidia", "google/gemma-3n-e2b-it", "Gemma 3n E2B IT", 8192, quality="good", speed="fast", tags=["vision", "audio"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/google/gemma-3n-e2b-it"),
-    _route("nvidia", "google/gemma-3-27b-it", "Gemma 3 27B IT", 131072, quality="good", speed="fast", tags=["vision"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/google/gemma-3-27b-it"),
-    _route("nvidia", "microsoft/phi-4-multimodal-instruct", "Phi 4 Multimodal Instruct", 128000, quality="good", speed="fast", tags=["vision", "audio"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/microsoft/phi-4-multimodal-instruct"),
-    _route("nvidia", "abacusai/dracarys-llama-3.1-70b-instruct", "Dracarys Llama 3.1 70B Instruct", 128000, quality="good", speed="fast", tags=["coding"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/abacusai/dracarys-llama-3_1-70b-instruct"),
-    _route("nvidia", "nvidia/nemotron-mini-4b-instruct", "Nemotron Mini 4B Instruct", 8192, quality="utility", speed="very fast", tags=["rag", "tool-use"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct"),
-    _route("nvidia", "google/gemma-2-2b-it", "Gemma 2 2B IT", 8192, quality="utility", speed="very fast", tags=[], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/google/gemma-2-2b-it"),
-    _route("nvidia", "upstage/solar-10.7b-instruct", "Solar 10.7B Instruct", 4096, quality="good", speed="fast", tags=[], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Non-commercial use label shown in catalog.", source_url="https://build.nvidia.com/upstage/solar-10_7b-instruct"),
-    _route("nvidia", "google/google-paligemma", "PaliGemma", 8192, quality="vision", speed="fast", tags=["vision"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Vision-specialized route; disabled by default for chat routing.", source_url="https://build.nvidia.com/google/google-paligemma", enabled=False),
-    _route("nvidia", "nvidia/nemotron-3-content-safety", "Nemotron 3 Content Safety", 128000, quality="safety", speed="fast", tags=["safety", "moderation"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Safety classifier; disabled by default for chat routing.", source_url="https://build.nvidia.com/nvidia/nemotron-3-content-safety", enabled=False),
-    _route("nvidia", "nvidia/nemotron-content-safety-reasoning-4b", "Nemotron Content Safety Reasoning 4B", 8192, quality="safety", speed="fast", tags=["safety", "moderation", "reasoning"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Safety model; disabled by default for chat routing.", source_url="https://build.nvidia.com/nvidia/nemotron-content-safety-reasoning-4b", enabled=False),
-    _route("nvidia", "meta/llama-guard-4-12b", "Llama Guard 4 12B", 128000, quality="safety", speed="fast", tags=["safety", "moderation", "vision"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Safety classifier; disabled by default for chat routing.", source_url="https://build.nvidia.com/meta/llama-guard-4-12b", enabled=False),
-    _route("nvidia", "nvidia/llama-3.1-nemotron-safety-guard-8b-v3", "Llama 3.1 Nemotron Safety Guard 8B V3", 8192, quality="safety", speed="fast", tags=["safety", "moderation"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Safety classifier; disabled by default for chat routing.", source_url="https://build.nvidia.com/nvidia/llama-3_1-nemotron-safety-guard-8b-v3", enabled=False),
-    _route("nvidia", "nvidia/riva-translate-4b-instruct-v1_1", "Riva Translate 4B Instruct V1.1", 8192, quality="translation", speed="fast", tags=["translation"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Translation-specific route; disabled by default for chat routing.", source_url="https://build.nvidia.com/nvidia/riva-translate-4b-instruct-v1_1", enabled=False),
-    _route("nvidia", "nvidia/gliner-pii", "GLiNER PII", 8192, quality="utility", speed="fast", tags=["classification", "moderation"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog. PII detector; disabled by default for chat routing.", source_url="https://build.nvidia.com/nvidia/gliner-pii", enabled=False),
-    _route("nvidia", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "Nemotron-3 Nano Omni 30B", 256000, quality="high", speed="fast", tags=["reasoning"], notes="Verified on NVIDIA Build Free Endpoint filtered catalog.", source_url="https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"),
-
-    _route("openrouter", "openrouter/free", "Free Models Router", 200000, speed="variable", tags=[], notes="OpenRouter's free router automatically selects from available zero-cost models.", source_url="https://openrouter.ai/openrouter/free"),
+    _route(
+        "groq",
+        "openai/gpt-oss-120b",
+        "GPT OSS 120B",
+        131072,
+        quality="high",
+        speed="very fast",
+        tags=["reasoning"],
+        notes="Free-plan limits listed by Groq: 30 RPM, 1K RPD, 8K TPM, 200K TPD.",
+        source_url="https://console.groq.com/docs/rate-limits",
+    ),
+    _route(
+        "groq",
+        "openai/gpt-oss-20b",
+        "GPT OSS 20B",
+        131072,
+        speed="very fast",
+        tags=["reasoning"],
+        notes="Free-plan limits listed by Groq: 30 RPM, 1K RPD, 8K TPM, 200K TPD.",
+        source_url="https://console.groq.com/docs/rate-limits",
+    ),
+    _route(
+        "groq",
+        "llama-3.3-70b-versatile",
+        "Llama 3.3 70B Versatile",
+        131072,
+        quality="high",
+        speed="very fast",
+        tags=[],
+        notes="Free-plan limits listed by Groq: 30 RPM, 1K RPD, 12K TPM, 100K TPD.",
+        source_url="https://console.groq.com/docs/rate-limits",
+    ),
+    _route(
+        "groq",
+        "llama-3.1-8b-instant",
+        "Llama 3.1 8B Instant",
+        131072,
+        speed="very fast",
+        tags=[],
+        notes="Free-plan limits listed by Groq: 30 RPM, 14.4K RPD, 6K TPM, 500K TPD.",
+        source_url="https://console.groq.com/docs/rate-limits",
+    ),
+    _route(
+        "groq",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "Llama 4 Scout 17B 16E",
+        131072,
+        quality="high",
+        speed="very fast",
+        tags=["vision"],
+        notes="Free-plan limits listed by Groq: 30 RPM, 1K RPD, 30K TPM, 500K TPD.",
+        source_url="https://console.groq.com/docs/rate-limits",
+    ),
+    _route(
+        "groq",
+        "qwen/qwen3-32b",
+        "Qwen3 32B",
+        131072,
+        quality="high",
+        speed="very fast",
+        tags=["reasoning"],
+        notes="Free-plan limits listed by Groq: 60 RPM, 1K RPD, 6K TPM, 500K TPD.",
+        source_url="https://console.groq.com/docs/rate-limits",
+    ),
+    _route(
+        "groq",
+        "groq/compound",
+        "Groq Compound",
+        131072,
+        quality="agentic",
+        speed="fast",
+        tags=["tool-use", "web-search"],
+        notes="Free-plan limits listed by Groq: 30 RPM, 250 RPD, 70K TPM.",
+        source_url="https://console.groq.com/docs/rate-limits",
+    ),
+    _route(
+        "groq",
+        "groq/compound-mini",
+        "Groq Compound Mini",
+        131072,
+        quality="agentic",
+        speed="fast",
+        tags=["tool-use", "web-search"],
+        notes="Free-plan limits listed by Groq: 30 RPM, 250 RPD, 70K TPM.",
+        source_url="https://console.groq.com/docs/rate-limits",
+    ),
+    _route(
+        "gemini",
+        "gemini-3.1-pro-preview",
+        "Gemini 3.1 Pro Preview",
+        2_097_152,
+        quality="very high",
+        speed="medium",
+        tags=["reasoning", "vision", "audio"],
+        notes="Listed in Gemini docs. Free-tier limits are dynamic and must be checked in AI Studio. 2 RPM.",
+        source_url="https://ai.google.dev/gemini-api/docs/models",
+    ),
+    _route(
+        "gemini",
+        "gemini-3-flash-preview",
+        "Gemini 3 Flash Preview",
+        1_048_576,
+        quality="high",
+        speed="fast",
+        tags=["vision", "audio"],
+        notes="Frontier-class performance rivaling larger models. Free-tier limits are dynamic. 15 RPM.",
+        source_url="https://ai.google.dev/gemini-api/docs/models",
+    ),
+    _route(
+        "gemini",
+        "gemini-3.1-flash-lite-preview",
+        "Gemini 3.1 Flash-Lite Preview",
+        1_048_576,
+        quality="good",
+        speed="very fast",
+        tags=["vision", "audio"],
+        notes="Listed in Gemini docs. Free-tier limits are dynamic and must be checked in AI Studio. 15 RPM.",
+        source_url="https://ai.google.dev/gemini-api/docs/models",
+    ),
+    _route(
+        "gemini",
+        "gemini-2.5-flash",
+        "Gemini 2.5 Flash",
+        1_000_000,
+        quality="high",
+        speed="fast",
+        tags=["vision", "audio"],
+        notes="Current stable Flash family model. Free-tier limits are dynamic and per project.",
+        source_url="https://ai.google.dev/gemini-api/docs/models",
+    ),
+    _route(
+        "gemini",
+        "gemini-2.5-flash-lite",
+        "Gemini 2.5 Flash-Lite",
+        1_000_000,
+        quality="good",
+        speed="very fast",
+        tags=["vision", "audio"],
+        notes="Fastest 2.5 family model. Free-tier limits are dynamic and per project.",
+        source_url="https://ai.google.dev/gemini-api/docs/models",
+    ),
+    _route(
+        "gemini",
+        "gemini-2.5-pro",
+        "Gemini 2.5 Pro",
+        1_000_000,
+        quality="very high",
+        speed="medium",
+        tags=["reasoning", "vision", "audio"],
+        notes="Listed in Gemini docs; availability/free limits vary by project and tier.",
+        source_url="https://ai.google.dev/gemini-api/docs/models",
+    ),
+    _route(
+        "nvidia",
+        "deepseek-ai/deepseek-v4-pro",
+        "DeepSeek V4 Pro",
+        1_000_000,
+        quality="very high",
+        speed="fast",
+        tags=["coding"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. DeepSeek V4 Pro is optimized for coding tasks and 1M-token context.",
+        source_url="https://build.nvidia.com/deepseek-ai/deepseek-v4-pro",
+    ),
+    _route(
+        "nvidia",
+        "deepseek-ai/deepseek-v4-flash",
+        "DeepSeek V4 Flash",
+        1_000_000,
+        quality="high",
+        speed="very fast",
+        tags=["coding"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. DeepSeek V4 Flash is a 284B MoE optimized for fast coding and agents.",
+        source_url="https://build.nvidia.com/deepseek-ai/deepseek-v4-flash",
+    ),
+    _route(
+        "nvidia",
+        "minimaxai/minimax-m2.7",
+        "MiniMax M2.7",
+        128000,
+        quality="high",
+        speed="fast",
+        tags=["coding", "reasoning"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. 230B text-to-text model for coding, reasoning, and office tasks.",
+        source_url="https://build.nvidia.com/minimaxai/minimax-m2.7",
+    ),
+    _route(
+        "nvidia",
+        "deepseek-ai/deepseek-v3.1-terminus",
+        "DeepSeek V3.1 Terminus",
+        128000,
+        quality="high",
+        speed="fast",
+        tags=["tool-use"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog, but marked with near-term deprecation.",
+        source_url="https://build.nvidia.com/deepseek-ai/deepseek-v3_1-terminus",
+    ),
+    _route(
+        "nvidia",
+        "stepfun-ai/step-3.5-flash",
+        "Step 3.5 Flash",
+        128000,
+        quality="high",
+        speed="fast",
+        tags=["reasoning"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/stepfun-ai/step-3.5-flash",
+    ),
+    _route(
+        "nvidia",
+        "mistralai/devstral-2-123b-instruct-2512",
+        "Devstral 2 123B Instruct",
+        256000,
+        quality="high",
+        speed="fast",
+        tags=["coding", "reasoning"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/mistralai/devstral-2-123b-instruct-2512",
+    ),
+    _route(
+        "nvidia",
+        "moonshotai/kimi-k2-thinking",
+        "Kimi K2 Thinking",
+        256000,
+        quality="high",
+        speed="fast",
+        tags=["reasoning", "tool-use"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/moonshotai/kimi-k2-thinking",
+    ),
+    _route(
+        "nvidia",
+        "mistralai/mistral-large-3-675b-instruct-2512",
+        "Mistral Large 3 675B Instruct",
+        256000,
+        quality="very high",
+        speed="fast",
+        tags=["vision"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/mistralai/mistral-large-3-675b-instruct-2512",
+    ),
+    _route(
+        "nvidia",
+        "moonshotai/kimi-k2-instruct-0905",
+        "Kimi K2 Instruct 0905",
+        256000,
+        quality="high",
+        speed="fast",
+        tags=["reasoning"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/moonshotai/kimi-k2-instruct-0905",
+    ),
+    _route(
+        "nvidia",
+        "bytedance/seed-oss-36b-instruct",
+        "Seed OSS 36B Instruct",
+        128000,
+        quality="good",
+        speed="fast",
+        tags=[],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/bytedance/seed-oss-36b-instruct",
+    ),
+    _route(
+        "nvidia",
+        "qwen/qwen3-coder-480b-a35b-instruct",
+        "Qwen3 Coder 480B A35B",
+        256000,
+        quality="high",
+        speed="fast",
+        tags=["coding"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/qwen/qwen3-coder-480b-a35b-instruct",
+    ),
+    _route(
+        "nvidia",
+        "moonshotai/kimi-k2-instruct",
+        "Kimi K2 Instruct",
+        128000,
+        quality="high",
+        speed="fast",
+        tags=["coding"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/moonshotai/kimi-k2-instruct",
+    ),
+    _route(
+        "nvidia",
+        "mistralai/magistral-small-2506",
+        "Magistral Small 2506",
+        128000,
+        quality="good",
+        speed="fast",
+        tags=["reasoning", "coding"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/mistralai/magistral-small-2506",
+    ),
+    _route(
+        "nvidia",
+        "mistralai/mistral-nemotron",
+        "Mistral Nemotron",
+        128000,
+        quality="good",
+        speed="fast",
+        tags=["coding", "tool-use"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/mistralai/mistral-nemotron",
+    ),
+    _route(
+        "nvidia",
+        "meta/llama-4-maverick-17b-128e-instruct",
+        "Llama 4 Maverick 17B 128E",
+        128000,
+        quality="high",
+        speed="fast",
+        tags=["vision"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/meta/llama-4-maverick-17b-128e-instruct",
+    ),
+    _route(
+        "nvidia",
+        "google/gemma-3n-e4b-it",
+        "Gemma 3n E4B IT",
+        8192,
+        quality="good",
+        speed="fast",
+        tags=["vision", "audio"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/google/gemma-3n-e4b-it",
+    ),
+    _route(
+        "nvidia",
+        "google/gemma-3n-e2b-it",
+        "Gemma 3n E2B IT",
+        8192,
+        quality="good",
+        speed="fast",
+        tags=["vision", "audio"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/google/gemma-3n-e2b-it",
+    ),
+    _route(
+        "nvidia",
+        "google/gemma-3-27b-it",
+        "Gemma 3 27B IT",
+        131072,
+        quality="good",
+        speed="fast",
+        tags=["vision"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/google/gemma-3-27b-it",
+    ),
+    _route(
+        "nvidia",
+        "microsoft/phi-4-multimodal-instruct",
+        "Phi 4 Multimodal Instruct",
+        128000,
+        quality="good",
+        speed="fast",
+        tags=["vision", "audio"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/microsoft/phi-4-multimodal-instruct",
+    ),
+    _route(
+        "nvidia",
+        "abacusai/dracarys-llama-3.1-70b-instruct",
+        "Dracarys Llama 3.1 70B Instruct",
+        128000,
+        quality="good",
+        speed="fast",
+        tags=["coding"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/abacusai/dracarys-llama-3_1-70b-instruct",
+    ),
+    _route(
+        "nvidia",
+        "nvidia/nemotron-mini-4b-instruct",
+        "Nemotron Mini 4B Instruct",
+        8192,
+        quality="utility",
+        speed="very fast",
+        tags=["rag", "tool-use"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct",
+    ),
+    _route(
+        "nvidia",
+        "google/gemma-2-2b-it",
+        "Gemma 2 2B IT",
+        8192,
+        quality="utility",
+        speed="very fast",
+        tags=[],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/google/gemma-2-2b-it",
+    ),
+    _route(
+        "nvidia",
+        "upstage/solar-10.7b-instruct",
+        "Solar 10.7B Instruct",
+        4096,
+        quality="good",
+        speed="fast",
+        tags=[],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Non-commercial use label shown in catalog.",
+        source_url="https://build.nvidia.com/upstage/solar-10_7b-instruct",
+    ),
+    _route(
+        "nvidia",
+        "google/google-paligemma",
+        "PaliGemma",
+        8192,
+        quality="vision",
+        speed="fast",
+        tags=["vision"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Vision-specialized route; disabled by default for chat routing.",
+        source_url="https://build.nvidia.com/google/google-paligemma",
+        enabled=False,
+    ),
+    _route(
+        "nvidia",
+        "nvidia/nemotron-3-content-safety",
+        "Nemotron 3 Content Safety",
+        128000,
+        quality="safety",
+        speed="fast",
+        tags=["safety", "moderation"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Safety classifier; disabled by default for chat routing.",
+        source_url="https://build.nvidia.com/nvidia/nemotron-3-content-safety",
+        enabled=False,
+    ),
+    _route(
+        "nvidia",
+        "nvidia/nemotron-content-safety-reasoning-4b",
+        "Nemotron Content Safety Reasoning 4B",
+        8192,
+        quality="safety",
+        speed="fast",
+        tags=["safety", "moderation", "reasoning"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Safety model; disabled by default for chat routing.",
+        source_url="https://build.nvidia.com/nvidia/nemotron-content-safety-reasoning-4b",
+        enabled=False,
+    ),
+    _route(
+        "nvidia",
+        "meta/llama-guard-4-12b",
+        "Llama Guard 4 12B",
+        128000,
+        quality="safety",
+        speed="fast",
+        tags=["safety", "moderation", "vision"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Safety classifier; disabled by default for chat routing.",
+        source_url="https://build.nvidia.com/meta/llama-guard-4-12b",
+        enabled=False,
+    ),
+    _route(
+        "nvidia",
+        "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
+        "Llama 3.1 Nemotron Safety Guard 8B V3",
+        8192,
+        quality="safety",
+        speed="fast",
+        tags=["safety", "moderation"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Safety classifier; disabled by default for chat routing.",
+        source_url="https://build.nvidia.com/nvidia/llama-3_1-nemotron-safety-guard-8b-v3",
+        enabled=False,
+    ),
+    _route(
+        "nvidia",
+        "nvidia/riva-translate-4b-instruct-v1_1",
+        "Riva Translate 4B Instruct V1.1",
+        8192,
+        quality="translation",
+        speed="fast",
+        tags=["translation"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. Translation-specific route; disabled by default for chat routing.",
+        source_url="https://build.nvidia.com/nvidia/riva-translate-4b-instruct-v1_1",
+        enabled=False,
+    ),
+    _route(
+        "nvidia",
+        "nvidia/gliner-pii",
+        "GLiNER PII",
+        8192,
+        quality="utility",
+        speed="fast",
+        tags=["classification", "moderation"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog. PII detector; disabled by default for chat routing.",
+        source_url="https://build.nvidia.com/nvidia/gliner-pii",
+        enabled=False,
+    ),
+    _route(
+        "nvidia",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        "Nemotron-3 Nano Omni 30B",
+        256000,
+        quality="high",
+        speed="fast",
+        tags=["reasoning"],
+        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        source_url="https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    ),
+    _route(
+        "openrouter",
+        "openrouter/free",
+        "Free Models Router",
+        200000,
+        speed="variable",
+        tags=[],
+        notes="OpenRouter's free router automatically selects from available zero-cost models.",
+        source_url="https://openrouter.ai/openrouter/free",
+    ),
 ]
 
 _OPENROUTER_FREE_MODELS = [
@@ -304,7 +768,12 @@ _OPENROUTER_FREE_MODELS = [
     ("openai/gpt-oss-20b:free", "OpenAI: GPT OSS 20B", 131072, "text"),
     ("z-ai/glm-4.5-air:free", "Z.ai: GLM 4.5 Air", 131072, "text"),
     ("qwen/qwen3-coder:free", "Qwen: Qwen3 Coder 480B A35B", 262000, "text"),
-    ("cognitivecomputations/dolphin-mistral-24b-venice-edition:free", "Venice: Uncensored", 32768, "text"),
+    (
+        "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+        "Venice: Uncensored",
+        32768,
+        "text",
+    ),
     ("google/gemma-3n-e2b-it:free", "Google: Gemma 3n 2B", 8192, "text"),
     ("google/gemma-3n-e4b-it:free", "Google: Gemma 3n 4B", 8192, "text"),
     ("google/gemma-3-4b-it:free", "Google: Gemma 3 4B", 32768, "vision"),
@@ -316,7 +785,9 @@ _OPENROUTER_FREE_MODELS = [
 ]
 
 
-def _openrouter_tags(model_id: str, display_name: str, context_window: int, modality: str) -> list[str]:
+def _openrouter_tags(
+    model_id: str, display_name: str, context_window: int, modality: str
+) -> list[str]:
     text = f"{model_id} {display_name}".lower()
     tags: list[str] = []
 
@@ -353,6 +824,7 @@ DEFAULT_MODEL_ROUTES.extend(
 )
 
 DEFAULT_MODEL_ROUTES[:] = [route for route in DEFAULT_MODEL_ROUTES if is_text_chat_route(route)]
+
 
 def _get_model_score(route: ModelRoute) -> int:
     """Backward-compatible wrapper around the extracted ranking module."""
@@ -394,7 +866,9 @@ class ModelCatalog:
         self.save()
 
     def all_routes(self) -> list[ModelRoute]:
-        return sorted(self._routes, key=lambda route: (route.rank, route.provider_name, route.model_id))
+        return sorted(
+            self._routes, key=lambda route: (route.rank, route.provider_name, route.model_id)
+        )
 
     def enabled_routes(self, requested_model: str | None = None) -> list[ModelRoute]:
         routes = [route for route in self.all_routes() if route.enabled]
@@ -411,7 +885,11 @@ class ModelCatalog:
         return routes
 
     def replace_routes(self, raw_routes: list[dict[str, Any]]) -> list[ModelRoute]:
-        routes = [route for route in (self._route_from_dict(raw_route) for raw_route in raw_routes) if is_text_chat_route(route)]
+        routes = [
+            route
+            for route in (self._route_from_dict(raw_route) for raw_route in raw_routes)
+            if is_text_chat_route(route)
+        ]
         seen = set()
         for route in routes:
             if route.route_id in seen:
@@ -460,7 +938,10 @@ class ModelCatalog:
         for route in sorted(routes, key=compute_rank_score, reverse=True):
             if not is_text_chat_route(route):
                 continue
-            if route.route_id in existing_ids or (route.provider_name, route.model_id) in existing_targets:
+            if (
+                route.route_id in existing_ids
+                or (route.provider_name, route.model_id) in existing_targets
+            ):
                 continue
             updated = ModelRoute(
                 route_id=route.route_id,
@@ -509,7 +990,11 @@ class ModelCatalog:
         return self.all_routes()
 
     def auto_rank_routes(self) -> list[ModelRoute]:
-        ranked = sorted((route for route in self._routes if is_text_chat_route(route)), key=rank_sort_key, reverse=True)
+        ranked = sorted(
+            (route for route in self._routes if is_text_chat_route(route)),
+            key=rank_sort_key,
+            reverse=True,
+        )
         rebuilt: list[ModelRoute] = []
         for index, route in enumerate(ranked, start=1):
             score = compute_rank_score(route)
@@ -630,11 +1115,7 @@ class ModelCatalog:
             tags=tags,
             notes=str(raw.get("notes", "")),
             source_url=str(raw.get("source_url", "")),
-            rank_score=(
-                int(raw["rank_score"])
-                if raw.get("rank_score") is not None
-                else None
-            ),
+            rank_score=(int(raw["rank_score"]) if raw.get("rank_score") is not None else None),
             rank_reason=str(raw.get("rank_reason", "")),
             rank_source=str(raw.get("rank_source", "heuristic")),
         )

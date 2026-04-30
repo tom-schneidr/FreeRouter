@@ -3,9 +3,9 @@ from __future__ import annotations
 from app.model_catalog import (
     CANONICAL_MODEL_TAGS,
     DEFAULT_MODEL_ROUTES,
+    NON_TEXT_ROUTE_TAGS,
     ModelCatalog,
     ModelRoute,
-    NON_TEXT_ROUTE_TAGS,
     _get_model_score,
     is_text_chat_route,
 )
@@ -35,7 +35,9 @@ def test_specialized_models_are_excluded_from_defaults():
 def test_no_duplicate_route_ids():
     """Every route_id in the default catalog must be unique."""
     ids = [route.route_id for route in DEFAULT_MODEL_ROUTES]
-    assert len(ids) == len(set(ids)), f"Duplicate route_ids found: {[x for x in ids if ids.count(x) > 1]}"
+    assert len(ids) == len(set(ids)), (
+        f"Duplicate route_ids found: {[x for x in ids if ids.count(x) > 1]}"
+    )
 
 
 def test_default_routes_only_use_canonical_tags():
@@ -119,8 +121,22 @@ def test_catalog_enabled_routes_filters_disabled(tmp_path):
     catalog = ModelCatalog(str(tmp_path / "models.json"))
     catalog.replace_routes(
         [
-            {"route_id": "a", "provider_name": "p", "model_id": "m1", "display_name": "A", "rank": 1, "enabled": True},
-            {"route_id": "b", "provider_name": "p", "model_id": "m2", "display_name": "B", "rank": 2, "enabled": False},
+            {
+                "route_id": "a",
+                "provider_name": "p",
+                "model_id": "m1",
+                "display_name": "A",
+                "rank": 1,
+                "enabled": True,
+            },
+            {
+                "route_id": "b",
+                "provider_name": "p",
+                "model_id": "m2",
+                "display_name": "B",
+                "rank": 2,
+                "enabled": False,
+            },
         ]
     )
     enabled = catalog.enabled_routes()
@@ -133,8 +149,22 @@ def test_catalog_enabled_routes_prioritizes_requested_model(tmp_path):
     catalog = ModelCatalog(str(tmp_path / "models.json"))
     catalog.replace_routes(
         [
-            {"route_id": "a", "provider_name": "p", "model_id": "m1", "display_name": "Model A", "rank": 1, "enabled": True},
-            {"route_id": "b", "provider_name": "p", "model_id": "m2", "display_name": "Model B", "rank": 2, "enabled": True},
+            {
+                "route_id": "a",
+                "provider_name": "p",
+                "model_id": "m1",
+                "display_name": "Model A",
+                "rank": 1,
+                "enabled": True,
+            },
+            {
+                "route_id": "b",
+                "provider_name": "p",
+                "model_id": "m2",
+                "display_name": "Model B",
+                "rank": 2,
+                "enabled": True,
+            },
         ]
     )
     routes = catalog.enabled_routes("b")
@@ -146,11 +176,24 @@ def test_catalog_replace_rejects_duplicates(tmp_path):
     """replace_routes should reject duplicate route_ids."""
     catalog = ModelCatalog(str(tmp_path / "models.json"))
     import pytest
+
     with pytest.raises(ValueError, match="Duplicate"):
         catalog.replace_routes(
             [
-                {"route_id": "dup", "provider_name": "p", "model_id": "m", "display_name": "D", "rank": 1},
-                {"route_id": "dup", "provider_name": "p", "model_id": "m", "display_name": "D", "rank": 2},
+                {
+                    "route_id": "dup",
+                    "provider_name": "p",
+                    "model_id": "m",
+                    "display_name": "D",
+                    "rank": 1,
+                },
+                {
+                    "route_id": "dup",
+                    "provider_name": "p",
+                    "model_id": "m",
+                    "display_name": "D",
+                    "rank": 2,
+                },
             ]
         )
 
@@ -158,8 +201,12 @@ def test_catalog_replace_rejects_duplicates(tmp_path):
 def test_get_model_score_gpt_oss_high():
     """GPT-OSS should score very high (benchmark leader)."""
     route = ModelRoute(
-        route_id="test", provider_name="groq", model_id="openai/gpt-oss-120b",
-        display_name="GPT OSS 120B", rank=1, tags=["reasoning"],
+        route_id="test",
+        provider_name="groq",
+        model_id="openai/gpt-oss-120b",
+        display_name="GPT OSS 120B",
+        rank=1,
+        tags=["reasoning"],
     )
     assert _get_model_score(route) > 90000
 
@@ -167,8 +214,12 @@ def test_get_model_score_gpt_oss_high():
 def test_get_model_score_safety_very_low():
     """Safety models should score far below zero."""
     route = ModelRoute(
-        route_id="test", provider_name="nvidia", model_id="nvidia/safety-guard",
-        display_name="Safety Guard", rank=1, tags=["safety", "moderation"],
+        route_id="test",
+        provider_name="nvidia",
+        model_id="nvidia/safety-guard",
+        display_name="Safety Guard",
+        rank=1,
+        tags=["safety", "moderation"],
     )
     assert _get_model_score(route) < 0
 

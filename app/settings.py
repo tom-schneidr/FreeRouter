@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """Environment-driven gateway configuration loaded from .env and environment variables."""
+
     cerebras_api_key: str | None = None
     groq_api_key: str | None = None
     gemini_api_key: str | None = None
@@ -14,8 +15,12 @@ class Settings(BaseSettings):
     database_path: str = "./data/gateway.sqlite3"
     model_catalog_path: str = "./data/model_catalog.json"
     request_timeout_seconds: float = 90
+    max_concurrent_requests: int = 20
+    request_queue_timeout_seconds: float = 30
+    sqlite_busy_timeout_ms: int = 5000
     gateway_model_name: str = "auto"
     auto_endpoint_diagnosis_enabled: bool = True
+    auto_endpoint_maintenance_enabled: bool = True
     auto_endpoint_diagnosis_interval_seconds: int = 21_600
     auto_endpoint_diagnosis_startup_delay_seconds: int = 10
     endpoint_diagnosis_supervisor_enabled: bool = False

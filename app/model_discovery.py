@@ -102,9 +102,15 @@ def has_structured_zero_price(item: dict[str, Any]) -> bool:
     )
     price_keys = {key for pair in price_pairs for key in pair}
     present_prices = [_float_or_none(pricing.get(key)) for key in price_keys if key in pricing]
-    has_complete_pair = any(input_key in pricing and output_key in pricing for input_key, output_key in price_pairs)
+    has_complete_pair = any(
+        input_key in pricing and output_key in pricing for input_key, output_key in price_pairs
+    )
 
-    if not has_complete_pair or not present_prices or any(price is None for price in present_prices):
+    if (
+        not has_complete_pair
+        or not present_prices
+        or any(price is None for price in present_prices)
+    ):
         return False
     return all(price == 0 for price in present_prices)
 
@@ -144,7 +150,9 @@ def is_chat_model(item: dict[str, Any]) -> bool:
             return False
         modality = str(architecture.get("modality") or "").lower()
         if modality:
-            parts = [part.strip() for part in modality.replace(",", "->").split("->") if part.strip()]
+            parts = [
+                part.strip() for part in modality.replace(",", "->").split("->") if part.strip()
+            ]
             if parts and ("text" not in parts[0] or "text" not in parts[-1]):
                 return False
         if input_modalities and output_modalities:

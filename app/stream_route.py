@@ -9,7 +9,9 @@ from app.providers import ProviderError
 from app.router import NoProviderAvailable, WaterfallRouter
 
 
-async def stream_route_chat(payload: dict[str, Any], router: WaterfallRouter) -> AsyncGenerator[str, None]:
+async def stream_route_chat(
+    payload: dict[str, Any], router: WaterfallRouter
+) -> AsyncGenerator[str, None]:
     """Emit SSE route progress events using canonical waterfall router events."""
 
     def evt(data: dict[str, Any]) -> str:
@@ -76,7 +78,9 @@ async def stream_route_chat(payload: dict[str, Any], router: WaterfallRouter) ->
                 )
                 response = event.response
                 if response is None:
-                    yield evt({"type": "error", "message": "Selected route missing response payload."})
+                    yield evt(
+                        {"type": "error", "message": "Selected route missing response payload."}
+                    )
                     return
 
                 content = ""
@@ -114,4 +118,9 @@ async def stream_route_chat(payload: dict[str, Any], router: WaterfallRouter) ->
     except ProviderError as exc:
         yield evt({"type": "error", "message": str(exc)})
     except NoProviderAvailable:
-        yield evt({"type": "error", "message": "All providers exhausted. No model could serve this request."})
+        yield evt(
+            {
+                "type": "error",
+                "message": "All providers exhausted. No model could serve this request.",
+            }
+        )

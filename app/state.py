@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from time import time
-from typing import Mapping
 
 import aiosqlite
 
@@ -14,6 +14,7 @@ import aiosqlite
 @dataclass(frozen=True)
 class ProviderQuota:
     """Static rate-limit configuration for a single provider."""
+
     name: str
     tokens_per_day: int | None
     requests_per_day: int | None
@@ -23,6 +24,7 @@ class ProviderQuota:
 @dataclass(frozen=True)
 class ProviderState:
     """Snapshot of a provider's current usage counters and cooldown status."""
+
     provider_name: str
     tokens_used_today: int
     requests_today: int
@@ -35,6 +37,7 @@ class ProviderState:
 @dataclass(frozen=True)
 class Availability:
     """Result of a quota availability check."""
+
     available: bool
     reason: str | None = None
     retry_after_seconds: int | None = None
@@ -79,9 +82,16 @@ class StateManager:
     usage payloads then reconcile the local view with the provider's authoritative counters.
     """
 
-    def __init__(self, database_path: str, quotas: list[ProviderQuota]) -> None:
+    def __init__(
+        self,
+        database_path: str,
+        quotas: list[ProviderQuota],
+        *,
+        busy_timeout_ms: int = 5000,
+    ) -> None:
         self.database_path = database_path
         self.quotas = {quota.name: quota for quota in quotas}
+        self.busy_timeout_ms = busy_timeout_ms
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -90,6 +100,7 @@ class StateManager:
             os.makedirs(directory, exist_ok=True)
 
         async with aiosqlite.connect(self.database_path) as db:
+            await self._configure_connection(db)
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS provider_state (
@@ -195,27 +206,36 @@ class StateManager:
         """
         async with self._lock:
             async with aiosqlite.connect(self.database_path) as db:
-                await self._ensure_current_windows_on_connection(db, provider_name)
-                row = await self._fetch_state(db, provider_name)
-                state = self._row_to_state(row)
-                availability = self._availability_for_state(
-                    self.quotas[provider_name],
-                    state,
-                    estimated_tokens,
-                )
-                if not availability.available:
-                    return availability
+                await self._configure_connection(db)
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    await self._ensure_current_windows_on_connection(
+                        db, provider_name, commit=False
+                    )
+                    row = await self._fetch_state(db, provider_name)
+                    state = self._row_to_state(row)
+                    availability = self._availability_for_state(
+                        self.quotas[provider_name],
+                        state,
+                        estimated_tokens,
+                    )
+                    if not availability.available:
+                        await db.rollback()
+                        return availability
 
-                await db.execute(
-                    """
-                    UPDATE provider_state
-                    SET requests_today = requests_today + 1,
-                        requests_this_minute = requests_this_minute + 1
-                    WHERE provider_name = ?
-                    """,
-                    (provider_name,),
-                )
-                await db.commit()
+                    await db.execute(
+                        """
+                        UPDATE provider_state
+                        SET requests_today = requests_today + 1,
+                            requests_this_minute = requests_this_minute + 1
+                        WHERE provider_name = ?
+                        """,
+                        (provider_name,),
+                    )
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    raise
 
         return Availability(available=True)
 
@@ -239,7 +259,9 @@ class StateManager:
         if state.status in {"rate_limited", "too_slow"}:
             retry_after = max(1, max(state.rate_limited_until, state.next_probe_at) - now)
             if not allow_rate_limit_probe or state.next_probe_at > now:
-                reason = "route_rate_limited" if state.status == "rate_limited" else "route_too_slow"
+                reason = (
+                    "route_rate_limited" if state.status == "rate_limited" else "route_too_slow"
+                )
                 return Availability(
                     available=False,
                     reason=reason,
@@ -411,7 +433,9 @@ class StateManager:
                 state = self._row_to_route_state(row)
                 failures = state.consecutive_failures + 1 if state.status == "rate_limited" else 1
                 fallback_cooldown = min(3600, 60 * (2 ** min(failures - 1, 5)))
-                rate_limited_until = self._cooldown_from_headers(headers) or self._now() + fallback_cooldown
+                rate_limited_until = (
+                    self._cooldown_from_headers(headers) or self._now() + fallback_cooldown
+                )
                 next_probe_at = rate_limited_until + self._route_probe_jitter(route_id)
                 await db.execute(
                     """
@@ -459,7 +483,11 @@ class StateManager:
                 await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
                 row = await self._fetch_route_state(db, route_id)
                 state = self._row_to_route_state(row)
-                failures = state.consecutive_failures + 1 if (state.status_reason or "").startswith("model_not_found") else 1
+                failures = (
+                    state.consecutive_failures + 1
+                    if (state.status_reason or "").startswith("model_not_found")
+                    else 1
+                )
                 status = "potentially_outdated" if failures >= threshold else "active"
                 await db.execute(
                     """
@@ -505,7 +533,11 @@ class StateManager:
                 await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
                 row = await self._fetch_route_state(db, route_id)
                 state = self._row_to_route_state(row)
-                failures = state.consecutive_failures + 1 if state.status_reason == "request_timeout" else 1
+                failures = (
+                    state.consecutive_failures + 1
+                    if state.status_reason == "request_timeout"
+                    else 1
+                )
                 status = "too_slow" if failures >= threshold else "active"
                 cooldown_seconds = min(3600, 120 * (2 ** max(0, failures - threshold)))
                 next_probe_at = self._now() + cooldown_seconds + self._route_probe_jitter(route_id)
@@ -574,8 +606,6 @@ class StateManager:
             )
 
         return Availability(available=True)
-
-
 
     async def record_success(
         self,
@@ -683,6 +713,8 @@ class StateManager:
         self,
         db: aiosqlite.Connection,
         provider_name: str,
+        *,
+        commit: bool = True,
     ) -> None:
         today = self._today()
         now = self._now()
@@ -713,7 +745,11 @@ class StateManager:
                 """,
                 (now, provider_name),
             )
-        await db.commit()
+        if commit:
+            await db.commit()
+
+    async def _configure_connection(self, db: aiosqlite.Connection) -> None:
+        await db.execute(f"PRAGMA busy_timeout = {max(0, int(self.busy_timeout_ms))}")
 
     async def _fetch_state(self, db: aiosqlite.Connection, provider_name: str) -> aiosqlite.Row:
         db.row_factory = aiosqlite.Row
