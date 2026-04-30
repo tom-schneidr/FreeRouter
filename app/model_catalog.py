@@ -182,72 +182,121 @@ DEFAULT_MODEL_ROUTES.extend(
     for model_id, display_name, context_window, modality in _OPENROUTER_FREE_MODELS
 )
 
+_AA_INTELLIGENCE_INDEX_SCALE = 3000
+
+# Artificial Analysis Intelligence Index scores for models represented in the
+# default catalog. Values are kept as leaderboard-style index scores and scaled
+# in _get_model_score so small tie-breakers cannot overwhelm capability rank.
+_AA_INTELLIGENCE_INDEX_SCORES = {
+    "gemini-3.1-pro": 57,
+    "kimi-k2-thinking": 54,
+    "deepseek-v4-pro": 52,
+    "minimax-m2.7": 50,
+    "deepseek-v4-flash": 47,
+    "gemini-3-flash": 46,
+    "qwen-3-235b": 42,
+    "hy3-preview": 42,
+    "deepseek-v3.1": 39,
+    "glm-4.5-air": 39,
+    "gemma-4-31b": 39,
+    "step-3.5-flash": 38,
+    "kimi-k2-instruct-0905": 37,
+    "kimi-k2-instruct": 37,
+    "nemotron-3-super-120b": 36,
+    "gemini-2.5-pro": 35,
+    "ling-2.6-1t": 34,
+    "gemini-3.1-flash-lite": 34,
+    "seed-oss-36b": 34,
+    "gpt-oss-120b": 33,
+    "gemma-4-26b": 31,
+    "gemini-2.5-flash": 30,
+    "qwen3-coder": 28,
+    "qwen3-next-80b": 27,
+    "ling-2.6-flash": 26,
+    "qwen3-32b": 25,
+    "gpt-oss-20b": 24,
+    "nemotron-3-nano-30b": 24,
+    "nemotron-3-nano-omni": 24,
+    "mistral-large-3": 23,
+    "devstral-2": 22,
+    "gemini-2.5-flash-lite": 22,
+    "mistral-nemotron": 19,
+    "magistral-small": 18,
+    "llama-4-maverick": 18,
+    "llama-3.1-405b": 17,
+    "nemotron-nano-12b": 15,
+    "nemotron-nano-9b": 15,
+    "llama-3.3-70b": 14,
+    "llama-4-scout": 14,
+    "gemma-3-27b": 12,
+    "dolphin-mistral-24b": 12,
+    "pixtral-12b": 10,
+    "phi-4-multimodal": 10,
+    "gemma-3-12b": 9,
+    "lfm-2.5-1.2b": 8,
+    "gemma-3-4b": 8,
+    "gemma-3n-e4b": 8,
+    "gemma-2-2b": 7,
+    "gemma-3n-e2b": 6,
+    "openrouter/free": 1,
+}
 
 
 def _get_model_score(route: ModelRoute) -> int:
-    """Heuristic quality score based on Artificial Analysis benchmarks and model metadata."""
+    """Capability score guided by the Artificial Analysis Intelligence Index."""
     text = (route.display_name + " " + route.model_id + " " + " ".join(route.tags)).lower()
+
+    if "safety" in text or "guard" in text or "pii" in text or "translate" in text or "paligemma" in text:
+        return -500000
+
     score = 0
-
-    base_scores = {
-        "gpt-oss": 92000,
-        "deepseek-v4-pro": 91000,
-        "llama-3.1-405b": 88000,
-        "gemini-3.1-pro": 87000,
-        "deepseek-v3": 86000,
-        "deepseek-v4-flash": 86000,
-        "qwen3-coder-480b": 85000,
-        "gemini-2.5-pro": 85000,
-        "gemini-3.1-flash": 84000,
-        "qwen-3-235b": 84000,
-        "qwen3-next-80b": 83000,
-        "nemotron-3-super-120b": 82000,
-        "llama-3.3-70b": 82000,
-        "qwen3-32b": 81000,
-        "ling-2.6-1t": 81000,
-        "gemini-2.5-flash": 80000,
-        "mistral-large-3": 80000,
-        "glm-4.7": 79000,
-        "nemotron-3-nano-omni": 75000,
-        "gemma-4-31b": 72000,
-        "pixtral-12b": 71000,
-        "llama-3.1-8b": 70000,
-    }
-
-    for key, val in base_scores.items():
+    for key, val in sorted(_AA_INTELLIGENCE_INDEX_SCORES.items(), key=lambda item: len(item[0]), reverse=True):
         if key in text:
-            score += val
+            score = val * _AA_INTELLIGENCE_INDEX_SCALE
             break
+
+    if score == 0:
+        quality_scores = {
+            "very high": 26,
+            "high": 22,
+            "agentic": 21,
+            "good": 14,
+            "vision": 10,
+            "utility": 8,
+            "translation": 6,
+            "safety": -100,
+            "unknown": 10,
+        }
+        score = quality_scores.get(route.quality.lower(), 10) * _AA_INTELLIGENCE_INDEX_SCALE
+
     size_match = re.search(r"(\d+(?:\.\d+)?)b", text)
     if size_match:
-        score += float(size_match.group(1)) * 10
+        score += min(int(float(size_match.group(1)) * 2), 900)
 
     size_t_match = re.search(r"(\d+(?:\.\d+)?)t", text)
     if size_t_match:
-        score += float(size_t_match.group(1)) * 10000
+        score += min(int(float(size_t_match.group(1)) * 600), 900)
 
     if "pro" in text:
-        score += 1000
+        score += 25
     if "large" in text:
-        score += 800
+        score += 20
     if "versatile" in text:
-        score += 200
+        score += 10
     if "flash" in text:
-        score += 100
+        score += 5
     if "lite" in text:
-        score -= 100
+        score -= 5
     if "mini" in text:
-        score -= 100
+        score -= 10
     if "nano" in text:
-        score -= 150
+        score -= 15
     if "vision" in text:
-        score -= 50
+        score -= 5
     if "coder" in text:
-        score += 50
+        score += 10
     if "reasoning" in text:
-        score += 200
-    if "safety" in text or "guard" in text or "pii" in text or "translate" in text or "paligemma" in text:
-        score -= 500000
+        score += 15
 
     return score
 
