@@ -2,11 +2,9 @@
 
 Local OpenAI-compatible gateway with a state-aware waterfall router for free-tier AI providers.
 
-Default provider waterfall:
+Default model-strength waterfall:
 
-```text
-Cerebras -> Groq -> Google AI Studio -> NVIDIA NIM -> OpenRouter
-```
+The router ranks all available free-tier models based on their raw benchmark strength and capabilities (DeepSeek V4 Pro, GPT OSS 120B, Gemini Pro, etc.). It queries the most powerful models first. If the top model is rate-limited or unavailable, it gracefully falls back to the next strongest model in the list. If two providers offer the exact same model, the router prioritizes the provider with the most generous free-tier limits.
 
 ## File Structure
 

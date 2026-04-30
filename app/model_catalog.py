@@ -251,10 +251,24 @@ def _get_model_score(route: ModelRoute) -> int:
 
     return score
 
+def _get_provider_score(provider_name: str) -> int:
+    """Score providers based on the generosity of their free usage limits."""
+    scores = {
+        "gemini": 100,      # Dynamic but highly generous token limits
+        "groq": 90,         # 30 RPM, 14.4K RPD
+        "cerebras": 80,     # 30 RPM, 1M TPD
+        "nvidia": 70,       # Generous but undocumented limits
+        "openrouter": 60,   # Aggressive free tier rate limits
+    }
+    return scores.get(provider_name.lower(), 0)
+
 
 def _assign_default_ranks() -> None:
-    """Sort DEFAULT_MODEL_ROUTES by benchmark score and assign contiguous rank values."""
-    DEFAULT_MODEL_ROUTES.sort(key=_get_model_score, reverse=True)
+    """Sort DEFAULT_MODEL_ROUTES by benchmark score, breaking ties by provider free limits."""
+    DEFAULT_MODEL_ROUTES.sort(
+        key=lambda x: (_get_model_score(x), _get_provider_score(x.provider_name)),
+        reverse=True,
+    )
     for i, route in enumerate(DEFAULT_MODEL_ROUTES):
         object.__setattr__(route, "rank", i + 1)
 
