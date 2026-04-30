@@ -15,7 +15,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from app.chat_page import CHAT_HTML
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS, ProviderError, ProviderRateLimited, build_provider_adapters
-from app.router import NoProviderAvailable, WaterfallRouter, validate_chat_completion_payload
+from app.router import (
+    NoProviderAvailable,
+    WaterfallRouter,
+    _looks_like_missing_endpoint,
+    validate_chat_completion_payload,
+)
 from app.settings import get_settings
 from app.state import StateManager
 
@@ -89,6 +94,7 @@ async def index() -> str:
           <a href="/">Home</a>
           <a href="/chat">Chat</a>
           <a href="/models">Models</a>
+          <a href="/health">Health</a>
         </nav>
         <main>
           <h2>Welcome to FreeRouter</h2>
@@ -97,6 +103,7 @@ async def index() -> str:
           <div class="links">
             <a href="/chat" class="link-card"><span class="link-icon">💬</span> Chat Playground</a>
             <a href="/models" class="link-card"><span class="link-icon">📊</span> Model Catalog & Ranking</a>
+            <a href="/health" class="link-card"><span class="link-icon">🩺</span> Route Health</a>
             <a href="/docs" class="link-card"><span class="link-icon">📖</span> API Documentation</a>
             <a href="/v1/providers/status" class="link-card"><span class="link-icon">📈</span> Provider Quota Status</a>
           </div>
@@ -121,9 +128,9 @@ async def model_catalog_page() -> str:
     return MODEL_CATALOG_HTML
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+@app.get("/health", response_class=HTMLResponse)
+async def route_health_page() -> str:
+    return ROUTE_HEALTH_HTML
 
 
 @app.get("/v1/models")
@@ -156,7 +163,8 @@ async def models(request: Request) -> dict[str, Any]:
 @app.get("/v1/gateway/models")
 async def gateway_models(request: Request) -> dict[str, Any]:
     catalog: ModelCatalog = request.app.state.model_catalog
-    return catalog.to_payload()
+    state: StateManager = request.app.state.gateway_state
+    return await _catalog_payload_with_health(catalog, state)
 
 
 @app.put("/v1/gateway/models")
@@ -170,14 +178,51 @@ async def update_gateway_models(request: Request) -> dict[str, Any]:
         catalog.replace_routes(routes)
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return catalog.to_payload()
+    state: StateManager = request.app.state.gateway_state
+    return await _catalog_payload_with_health(catalog, state)
 
 
 @app.post("/v1/gateway/models/reset")
 async def reset_gateway_models(request: Request) -> dict[str, Any]:
     catalog: ModelCatalog = request.app.state.model_catalog
+    state: StateManager = request.app.state.gateway_state
     catalog.reset_to_defaults()
-    return catalog.to_payload()
+    return await _catalog_payload_with_health(catalog, state)
+
+
+@app.post("/v1/gateway/models/{route_id}/disable")
+async def disable_gateway_model(route_id: str, request: Request) -> dict[str, Any]:
+    catalog: ModelCatalog = request.app.state.model_catalog
+    state: StateManager = request.app.state.gateway_state
+    try:
+        route = catalog.set_route_enabled(route_id, False)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    route_state = await state.get_route_state(route.route_id, route.provider_name, route.model_id)
+    return {"data": {**asdict(route), "health": asdict(route_state)}}
+
+
+@app.post("/v1/gateway/models/{route_id}/health/reset")
+async def reset_gateway_model_health(route_id: str, request: Request) -> dict[str, Any]:
+    catalog: ModelCatalog = request.app.state.model_catalog
+    state: StateManager = request.app.state.gateway_state
+    route = next((route for route in catalog.all_routes() if route.route_id == route_id), None)
+    if route is None:
+        raise HTTPException(status_code=404, detail=f"Unknown route_id: {route_id}")
+    route_state = await state.clear_route_health(route.route_id, route.provider_name, route.model_id)
+    return {"data": {**asdict(route), "health": asdict(route_state)}}
+
+
+async def _catalog_payload_with_health(catalog: ModelCatalog, state: StateManager) -> dict[str, Any]:
+    payload = catalog.to_payload()
+    for route_payload in payload["data"]:
+        route_state = await state.get_route_state(
+            route_payload["route_id"],
+            route_payload["provider_name"],
+            route_payload["model_id"],
+        )
+        route_payload["health"] = asdict(route_state)
+    return payload
 
 
 @app.get("/v1/providers/status")
@@ -190,6 +235,14 @@ async def provider_status(request: Request) -> dict[str, Any]:
     for provider in router.providers:
         provider_state = await state.get_state(provider.name)
         availability = await state.check_available(provider.name)
+        models = []
+        for route in catalog.all_routes():
+            if route.provider_name != provider.name:
+                continue
+            route_state = await state.get_route_state(route.route_id, route.provider_name, route.model_id)
+            route_payload = asdict(route)
+            route_payload["health"] = asdict(route_state)
+            models.append(route_payload)
         providers.append(
             {
                 "name": provider.name,
@@ -202,11 +255,7 @@ async def provider_status(request: Request) -> dict[str, Any]:
                 "requests_this_minute": provider_state.requests_this_minute,
                 "cooldown_until": provider_state.cooldown_until,
                 "max_context_tokens": provider.max_context_tokens,
-                "models": [
-                    asdict(route)
-                    for route in catalog.all_routes()
-                    if route.provider_name == provider.name
-                ],
+                "models": models,
             }
         )
 
@@ -283,57 +332,87 @@ async def _sse_route_chat(
     )
     max_new = payload.get("max_tokens") or 4096
     estimated_total = estimated_prompt_tokens + max_new
+    rate_limit_probe_providers: set[str] = set()
 
     async with httpx.AsyncClient(timeout=router.request_timeout_seconds) as client:
         for route in routes:
             provider = router.provider_by_name.get(route.provider_name)
             if not provider or not provider.is_configured:
-                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "reason": "not_configured"})
+                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "not_configured"})
                 continue
 
 
             ctx = route.context_window or provider.max_context_tokens
             if ctx and estimated_prompt_tokens > ctx:
-                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "reason": "context_exceeded"})
+                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "context_exceeded"})
                 continue
+
+            provider_avail = await router.state.check_available(route.provider_name, estimated_total)
+            if not provider_avail.available:
+                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": provider_avail.reason or "quota_exhausted"})
+                continue
+
+            route_avail = await router.state.check_route_available(
+                route.route_id,
+                route.provider_name,
+                route.model_id,
+                allow_rate_limit_probe=route.provider_name not in rate_limit_probe_providers,
+            )
+            if not route_avail.available:
+                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": route_avail.reason or "route_unavailable"})
+                continue
+            if route_avail.reason in {"rate_limit_probe", "too_slow_probe"}:
+                rate_limit_probe_providers.add(route.provider_name)
 
             avail = await router.state.try_reserve_request(route.provider_name, estimated_total)
             if not avail.available:
-                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "reason": avail.reason or "quota_exhausted"})
+                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": avail.reason or "quota_exhausted"})
                 continue
 
-            yield evt({"type": "route_trying", "provider": route.provider_name, "model_id": route.model_id})
+            yield evt({"type": "route_trying", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id})
             await asyncio.sleep(0)
 
             try:
                 response = await provider.chat_completion(client, payload, route.model_id)
             except ProviderRateLimited as exc:
+                route_state = await router.state.mark_route_rate_limited(route.route_id, route.provider_name, route.model_id, headers=exc.headers, status_code=exc.status_code)
                 await router.state.mark_exhausted(route.provider_name, headers=exc.headers, status_code=exc.status_code)
-                yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "reason": "rate_limited_429"})
+                yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "rate_limited_429"})
+                yield evt({"type": "route_flagged", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": route_state.status})
                 continue
             except httpx.TimeoutException:
-                yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "reason": "timeout"})
+                route_state = await router.state.mark_route_timeout(route.route_id, route.provider_name, route.model_id)
+                yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "timeout"})
+                if route_state.status == "too_slow":
+                    yield evt({"type": "route_flagged", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "too_slow"})
                 continue
             except httpx.RequestError as exc:
-                yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "reason": exc.__class__.__name__})
+                yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": exc.__class__.__name__})
                 continue
             except ProviderError as exc:
-                if exc.status_code and (500 <= exc.status_code < 600 or exc.status_code in {401, 403, 404}):
+                if exc.status_code and (500 <= exc.status_code < 600 or exc.status_code in {401, 403}):
                     reason = "server_error" if exc.status_code >= 500 else ("auth_error" if exc.status_code in {401, 403} else "model_not_found")
-                    yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "reason": reason})
+                    yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": reason})
+                    continue
+                if _looks_like_missing_endpoint(exc):
+                    route_state = await router.state.mark_route_not_found(route.route_id, route.provider_name, route.model_id, status_code=exc.status_code)
+                    yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "model_not_found"})
+                    if route_state.status == "potentially_outdated":
+                        yield evt({"type": "route_flagged", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "potentially_outdated"})
                     continue
                 yield evt({"type": "error", "message": str(exc)})
                 return
 
             # Success
             usage = response.body.get("usage")
+            await router.state.record_route_success(route.route_id, route.provider_name, route.model_id)
             await router.state.record_success(
                 route.provider_name,
                 usage=usage if isinstance(usage, dict) else None,
                 headers=response.headers,
                 status_code=response.status_code,
             )
-            yield evt({"type": "route_selected", "provider": route.provider_name, "model_id": route.model_id})
+            yield evt({"type": "route_selected", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id})
 
             content = ""
             try:
@@ -345,7 +424,7 @@ async def _sse_route_chat(
                 yield evt({"type": "content", "text": content[i:i + chunk_size]})
                 await asyncio.sleep(0.015)
 
-            yield evt({"type": "done", "content": content, "provider": route.provider_name, "model_id": route.model_id})
+            yield evt({"type": "done", "content": content, "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id})
             return
 
     yield evt({"type": "error", "message": "All providers exhausted. No model could serve this request."})
@@ -360,6 +439,92 @@ async def chat_completions_stream_route(request: Request) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+ROUTE_HEALTH_HTML = """
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Route Health - FreeRouter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      :root { --bg-primary: #0a0e1a; --bg-secondary: #111827; --bg-tertiary: #1e293b; --border: #2d3a4f; --text: #e2e8f0; --text-muted: #94a3b8; --accent: #3b82f6; --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --font: 'Inter', system-ui, sans-serif; }
+      body { font-family: var(--font); background: var(--bg-primary); color: var(--text); }
+      nav { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+      nav h1 { font-size: 1rem; font-weight: 700; background: linear-gradient(135deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+      nav a { color: var(--text-muted); text-decoration: none; font-size: 0.85rem; }
+      nav a:hover { color: var(--text); }
+      .nav-spacer { flex: 1; }
+      main { max-width: 1100px; margin: auto; padding: 2rem; }
+      h2 { margin-bottom: 0.5rem; }
+      .muted { color: var(--text-muted); }
+      .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1.5rem 0; }
+      button { border: none; border-radius: 8px; background: var(--accent); color: white; padding: 0.55rem 0.8rem; font: inherit; cursor: pointer; }
+      button.secondary { background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); }
+      .grid { display: grid; gap: 0.75rem; }
+      .card { display: grid; grid-template-columns: 1fr auto; gap: 1rem; padding: 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
+      .provider { color: var(--green); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; font-weight: 700; }
+      .model { margin-top: 0.25rem; color: var(--text-muted); font-size: 0.85rem; }
+      .pill { align-self: start; padding: 0.25rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); color: var(--text-muted); font-size: 0.78rem; }
+      .pill.rate_limited { border-color: rgba(245,158,11,0.5); color: #fcd34d; background: rgba(245,158,11,0.12); }
+      .pill.potentially_outdated, .pill.too_slow { border-color: rgba(239,68,68,0.5); color: #fecaca; background: rgba(239,68,68,0.12); }
+      .empty { padding: 2rem; text-align: center; color: var(--text-muted); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <h1>FreeRouter</h1><span class="nav-spacer"></span>
+      <a href="/">Home</a><a href="/chat">Chat</a><a href="/models">Models</a><a href="/health">Health</a>
+    </nav>
+    <main>
+      <h2>Route Health</h2>
+      <p class="muted">Routes automatically limited by FreeRouter are listed here. Active routes are hidden.</p>
+      <div class="toolbar"><span id="summary" class="muted">Loading...</span><button id="reload">Reload</button></div>
+      <div id="routes" class="grid"></div>
+    </main>
+    <script>
+      const routesEl = document.getElementById('routes');
+      const summaryEl = document.getElementById('summary');
+      const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+      const formatTime = (value) => value ? new Date(value * 1000).toLocaleString() : 'not scheduled';
+      async function load() {
+        const response = await fetch('/v1/gateway/models');
+        const payload = await response.json();
+        const limited = payload.data.filter((route) => route.health && route.health.status !== 'active');
+        summaryEl.textContent = `${limited.length} automatically limited route${limited.length === 1 ? '' : 's'}`;
+        routesEl.innerHTML = limited.length ? limited.map((route) => `
+          <div class="card">
+            <div>
+              <div class="provider">${esc(route.provider_name)}</div>
+              <strong>${esc(route.display_name)}</strong>
+              <div class="model">${esc(route.model_id)}</div>
+              <div class="model">Reason: ${esc(route.health.status_reason || route.health.status)} · failures: ${route.health.consecutive_failures}</div>
+              <div class="model">Next probe: ${esc(formatTime(route.health.next_probe_at))}</div>
+              <div class="model"><button class="secondary" data-route-id="${esc(route.route_id)}">Clear flag</button></div>
+            </div>
+            <span class="pill ${esc(route.health.status)}">${esc(route.health.status.replace(/_/g, ' '))}</span>
+          </div>
+        `).join('') : '<div class="empty">No routes are currently automatically limited.</div>';
+        routesEl.querySelectorAll('[data-route-id]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            button.disabled = true;
+            button.textContent = 'Clearing...';
+            const response = await fetch(`/v1/gateway/models/${encodeURIComponent(button.dataset.routeId)}/health/reset`, { method: 'POST' });
+            if (response.ok) load();
+            else button.textContent = 'Failed';
+          });
+        });
+      }
+      document.getElementById('reload').addEventListener('click', load);
+      load();
+    </script>
+  </body>
+</html>
+"""
 
 
 MODEL_CATALOG_HTML = """
@@ -404,6 +569,7 @@ MODEL_CATALOG_HTML = """
       .provider { text-transform: uppercase; color: var(--green); font-size: 0.75rem; letter-spacing: 0.05em; font-weight: 600; }
       .muted { color: var(--text-muted); }
       .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--bg-tertiary); margin: 0.1rem; font-size: 0.75rem; border: 1px solid var(--border); }
+      .pill.warning { border-color: rgba(245, 158, 11, 0.45); color: #fcd34d; background: rgba(245, 158, 11, 0.12); }
       .body { border-top: 1px solid var(--border); padding: 1.25rem; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); background: var(--bg-primary); }
       label { display: grid; gap: 0.4rem; color: var(--text-muted); font-size: 0.85rem; font-weight: 500; }
       .meta { display: grid; gap: 0.35rem; color: var(--text-muted); font-size: 0.85rem; font-weight: 500; }
@@ -453,6 +619,7 @@ MODEL_CATALOG_HTML = """
       <a href="/">Home</a>
       <a href="/chat">Chat</a>
       <a href="/models">Models</a>
+      <a href="/health">Health</a>
       <a href="/v1/providers/status">Quota Status</a>
     </nav>
     <main>
@@ -640,6 +807,9 @@ MODEL_CATALOG_HTML = """
 
       function card(route) {
         const tags = (route.tags || []).map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join('');
+        const health = route.health?.status && route.health.status !== 'active'
+          ? `<span class="pill warning">${escapeHtml(route.health.status.replace(/_/g, ' '))}</span>`
+          : '';
         return `
           <details class="${route.enabled ? '' : 'disabled'}" draggable="true"
             ondragstart="dragStart(event, '${route.route_id}')"
@@ -655,6 +825,7 @@ MODEL_CATALOG_HTML = """
                 <span class="muted"> ${escapeHtml(route.model_id)}</span><br>
                 <span class="provider">${escapeHtml(route.provider_name)}</span>
                 ${tags}
+                ${health}
               </span>
               <span class="summary-actions">
                 <span class="state-label">${route.enabled ? 'Enabled' : 'Disabled'}</span>

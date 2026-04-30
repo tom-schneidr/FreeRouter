@@ -418,6 +418,30 @@ class ModelCatalog:
         self.save()
         return self.all_routes()
 
+    def set_route_enabled(self, route_id: str, enabled: bool) -> ModelRoute:
+        for index, route in enumerate(self._routes):
+            if route.route_id != route_id:
+                continue
+            updated = ModelRoute(
+                route_id=route.route_id,
+                provider_name=route.provider_name,
+                model_id=route.model_id,
+                display_name=route.display_name,
+                rank=route.rank,
+                enabled=enabled,
+                context_window=route.context_window,
+                quality=route.quality,
+                speed=route.speed,
+                cost=route.cost,
+                tags=route.tags,
+                notes=route.notes,
+                source_url=route.source_url,
+            )
+            self._routes[index] = updated
+            self.save()
+            return updated
+        raise KeyError(f"Unknown route_id: {route_id}")
+
     def reset_to_defaults(self) -> list[ModelRoute]:
         self._routes = DEFAULT_MODEL_ROUTES.copy()
         self.save()

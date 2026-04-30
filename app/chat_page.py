@@ -35,14 +35,14 @@ CHAT_HTML = """\
     /* === LAYOUT === */
     .app { display: flex; flex: 1; overflow: hidden; }
     .chat-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    .route-panel { width: 380px; flex-shrink: 0; background: var(--bg-secondary);
+    .route-panel { width: 380px; height: calc(100vh - 49px); flex-shrink: 0; min-height: 0; background: var(--bg-secondary);
       border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
     .route-panel-header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
       font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem; }
     .route-panel-header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green);
       animation: pulse 2s infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-    .route-log { flex: 1; overflow-y: auto; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+    .route-log { flex: 1; min-height: 0; overflow-y: scroll; overscroll-behavior: contain; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
 
     /* === MESSAGES === */
     .messages { flex: 1; overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
@@ -79,7 +79,7 @@ CHAT_HTML = """\
     .send-btn svg { width: 20px; height: 20px; }
 
     /* === ROUTE EVENT CARDS === */
-    .route-group { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 10px;
+    .route-group { flex-shrink: 0; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 10px;
       overflow: hidden; animation: fadeIn 0.3s ease; }
     .route-group-header { padding: 0.6rem 0.85rem; font-size: 0.78rem; font-weight: 600;
       color: var(--text-muted); border-bottom: 1px solid var(--border);
@@ -87,6 +87,8 @@ CHAT_HTML = """\
     .route-group-header .req-id { color: var(--purple); font-weight: 500; }
     .route-event { padding: 0.5rem 0.85rem; font-size: 0.78rem; display: flex; align-items: center;
       gap: 0.5rem; border-bottom: 1px solid rgba(45,58,79,0.5); }
+    .route-event.flagged { margin: 0.35rem; border: 1px solid rgba(245,158,11,0.45); border-radius: 10px;
+      background: linear-gradient(135deg, rgba(245,158,11,0.16), rgba(167,139,250,0.08)); }
     .route-event:last-child { border-bottom: none; }
     .route-event .icon { width: 18px; height: 18px; border-radius: 50%; display: flex;
       align-items: center; justify-content: center; font-size: 0.65rem; flex-shrink: 0; font-weight: 700; }
@@ -95,12 +97,17 @@ CHAT_HTML = """\
     .icon.ok { background: rgba(34,197,94,0.2); color: var(--green); border: 1px solid var(--green); }
     .icon.fail { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid var(--red); }
     .icon.skip { background: rgba(245,158,11,0.15); color: var(--amber); border: 1px solid var(--amber); }
+    .icon.flagged-skip { background: rgba(245,158,11,0.22); color: #fcd34d; border: 1px solid var(--amber); }
+    .icon.flagged { background: rgba(245,158,11,0.25); color: #fcd34d; border: 1px solid var(--amber); }
     .route-event .info { flex: 1; min-width: 0; }
     .route-event .provider-name { font-weight: 600; color: var(--text); }
     .route-event .model-name { color: var(--text-muted); font-size: 0.72rem; display: block;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .route-event .reason { color: var(--text-muted); font-size: 0.72rem; margin-left: auto; flex-shrink: 0; }
     .route-event .duration { color: var(--text-muted); font-size: 0.68rem; margin-left: 0.5rem; }
+    .route-disable { border: 1px solid rgba(239,68,68,0.35); border-radius: 999px; background: rgba(239,68,68,0.1);
+      color: #fecaca; padding: 0.2rem 0.45rem; font: inherit; font-size: 0.68rem; cursor: pointer; flex-shrink: 0; }
+    .route-disable:hover { background: rgba(239,68,68,0.18); }
 
     .empty-state { text-align: center; color: var(--text-muted); padding: 3rem 1rem; font-size: 0.85rem; }
     .empty-state .icon-lg { font-size: 2.5rem; margin-bottom: 0.5rem; display: block; }
@@ -122,6 +129,7 @@ CHAT_HTML = """\
     <span class="nav-spacer"></span>
     <a href="/">Home</a>
     <a href="/models">Models</a>
+    <a href="/health">Health</a>
     <a href="/v1/providers/status">Status</a>
   </nav>
 
@@ -216,16 +224,18 @@ function startRouteGroup() {
   return group;
 }
 
-function addRouteEvent(group, status, providerName, modelId, reason, durationMs) {
+function addRouteEvent(group, status, providerName, modelId, reason, durationMs, routeId) {
   let iconClass, iconText;
   switch (status) {
     case 'trying':  iconClass = 'trying'; iconText = '⟳'; break;
     case 'selected':iconClass = 'ok';     iconText = '✓'; break;
-    case 'skipped': iconClass = 'skip';   iconText = '–'; break;
+    case 'skipped': iconClass = isFlaggedSkip(reason) ? 'flagged-skip' : 'skip'; iconText = '⏭'; break;
+    case 'flagged': iconClass = 'flagged'; iconText = '!'; break;
     default:        iconClass = 'fail';   iconText = '✗'; break;
   }
+  const showDisable = routeId && status !== 'flagged';
   const ev = document.createElement('div');
-  ev.className = 'route-event';
+  ev.className = `route-event ${status === 'flagged' ? 'flagged' : ''}`;
   ev.innerHTML = `
     <div class="icon ${iconClass}">${iconText}</div>
     <div class="info">
@@ -234,16 +244,31 @@ function addRouteEvent(group, status, providerName, modelId, reason, durationMs)
     </div>
     ${reason ? `<span class="reason">${esc(reason)}</span>` : ''}
     ${durationMs != null ? `<span class="duration">${durationMs}ms</span>` : ''}
+    ${showDisable ? `<button class="route-disable" data-route-id="${esc(routeId)}">Disable</button>` : ''}
   `;
+  const disableBtn = ev.querySelector('.route-disable');
+  if (disableBtn) disableBtn.addEventListener('click', () => disableRoute(disableBtn.dataset.routeId, disableBtn));
   group.appendChild(ev);
   routeLog.scrollTop = 0;
   return ev;
 }
 
+function isFlaggedSkip(reason) {
+  return ['potentially_outdated', 'route_rate_limited', 'route_too_slow'].includes(reason);
+}
+
+async function disableRoute(routeId, button) {
+  if (!routeId || !confirm('Disable this model route?')) return;
+  button.disabled = true;
+  button.textContent = 'Disabling...';
+  const response = await fetch(`/v1/gateway/models/${encodeURIComponent(routeId)}/disable`, { method: 'POST' });
+  button.textContent = response.ok ? 'Disabled' : 'Failed';
+}
+
 function updateTryingEvent(ev, status, reason, durationMs) {
   const icon = ev.querySelector('.icon');
-  icon.className = 'icon ' + (status === 'selected' ? 'ok' : status === 'skipped' ? 'skip' : 'fail');
-  icon.textContent = status === 'selected' ? '✓' : status === 'skipped' ? '–' : '✗';
+  icon.className = 'icon ' + (status === 'selected' ? 'ok' : status === 'skipped' ? (isFlaggedSkip(reason) ? 'flagged-skip' : 'skip') : 'fail');
+  icon.textContent = status === 'selected' ? '✓' : status === 'skipped' ? '⏭' : '✗';
   if (reason) {
     let span = ev.querySelector('.reason');
     if (!span) { span = document.createElement('span'); span.className = 'reason'; ev.appendChild(span); }
@@ -305,20 +330,22 @@ async function sendMessage() {
         try { evt = JSON.parse(raw); } catch { continue; }
 
         if (evt.type === 'route_trying') {
-          const ev = addRouteEvent(group, 'trying', evt.provider, evt.model_id, null, null);
+          const ev = addRouteEvent(group, 'trying', evt.provider, evt.model_id, null, null, evt.route_id);
           tryingEvents[evt.provider + '/' + evt.model_id] = { el: ev, t: performance.now() };
         } else if (evt.type === 'route_skip' || evt.type === 'route_fail') {
           const key = evt.provider + '/' + evt.model_id;
           const te = tryingEvents[key];
           const dur = te ? Math.round(performance.now() - te.t) : null;
           if (te) { updateTryingEvent(te.el, evt.type === 'route_skip' ? 'skipped' : 'failed', evt.reason, dur); }
-          else { addRouteEvent(group, evt.type === 'route_skip' ? 'skipped' : 'failed', evt.provider, evt.model_id, evt.reason, dur); }
+          else { addRouteEvent(group, evt.type === 'route_skip' ? 'skipped' : 'failed', evt.provider, evt.model_id, evt.reason, dur, evt.route_id); }
+        } else if (evt.type === 'route_flagged') {
+          addRouteEvent(group, 'flagged', evt.provider, evt.model_id, `Automatically flagged: ${evt.reason}`, null, evt.route_id);
         } else if (evt.type === 'route_selected') {
           const key = evt.provider + '/' + evt.model_id;
           const te = tryingEvents[key];
           const dur = te ? Math.round(performance.now() - te.t) : null;
           if (te) updateTryingEvent(te.el, 'selected', null, dur);
-          else addRouteEvent(group, 'selected', evt.provider, evt.model_id, null, dur);
+          else addRouteEvent(group, 'selected', evt.provider, evt.model_id, null, dur, evt.route_id);
           finalProvider = evt.provider;
           finalModel = evt.model_id;
           activeBadge.textContent = evt.provider + ' / ' + evt.model_id;

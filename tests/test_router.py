@@ -141,6 +141,40 @@ async def test_router_falls_back_on_429_and_marks_cooldown(tmp_path):
     assert [attempt.status for attempt in result.attempts] == ["rate_limited", "selected"]
 
 
+async def test_router_marks_repeated_404_as_potentially_outdated(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary", error=ProviderError("not found", status_code=404))
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+
+    await router.route_chat_completion(_payload())
+    await router.route_chat_completion(_payload())
+    result = await router.route_chat_completion(_payload())
+    route_state = await state.get_route_state("primary-test", "primary", "primary/model")
+
+    assert primary.calls == 2
+    assert fallback.calls == 3
+    assert route_state.status == "potentially_outdated"
+    assert result.attempts[0].reason == "potentially_outdated"
+
+
+async def test_router_marks_repeated_timeouts_as_too_slow(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary", error=httpx.ReadTimeout("timed out"))
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+
+    await router.route_chat_completion(_payload())
+    await router.route_chat_completion(_payload())
+    result = await router.route_chat_completion(_payload())
+    route_state = await state.get_route_state("primary-test", "primary", "primary/model")
+
+    assert primary.calls == 2
+    assert fallback.calls == 3
+    assert route_state.status == "too_slow"
+    assert result.attempts[0].reason == "route_too_slow"
+
+
 # ── New coverage: NoProviderAvailable ────────────────────────────────────────
 
 

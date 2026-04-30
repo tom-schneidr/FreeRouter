@@ -40,6 +40,21 @@ class Availability:
     retry_after_seconds: int | None = None
 
 
+@dataclass(frozen=True)
+class RouteState:
+    """Health state for one provider/model route."""
+
+    route_id: str
+    provider_name: str
+    model_id: str
+    status: str
+    status_reason: str | None
+    consecutive_failures: int
+    rate_limited_until: int
+    next_probe_at: int
+    updated_at: int
+
+
 class StateManager:
     """SQLite-backed local quota tracker.
 
@@ -82,6 +97,21 @@ class StateManager:
                     total_tokens INTEGER NOT NULL DEFAULT 0,
                     status_code INTEGER,
                     created_at INTEGER NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS route_state (
+                    route_id TEXT PRIMARY KEY,
+                    provider_name TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    status_reason TEXT,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    rate_limited_until INTEGER NOT NULL DEFAULT 0,
+                    next_probe_at INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL
                 )
                 """
             )
@@ -155,6 +185,220 @@ class StateManager:
                 await db.commit()
 
         return Availability(available=True)
+
+    async def check_route_available(
+        self,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+        *,
+        allow_rate_limit_probe: bool = False,
+    ) -> Availability:
+        async with aiosqlite.connect(self.database_path) as db:
+            await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
+            row = await self._fetch_route_state(db, route_id)
+        state = self._row_to_route_state(row)
+        now = self._now()
+
+        if state.status == "potentially_outdated":
+            return Availability(available=False, reason="potentially_outdated")
+
+        if state.status in {"rate_limited", "too_slow"}:
+            retry_after = max(1, max(state.rate_limited_until, state.next_probe_at) - now)
+            if not allow_rate_limit_probe or state.next_probe_at > now:
+                reason = "route_rate_limited" if state.status == "rate_limited" else "route_too_slow"
+                return Availability(
+                    available=False,
+                    reason=reason,
+                    retry_after_seconds=retry_after,
+                )
+            reason = "rate_limit_probe" if state.status == "rate_limited" else "too_slow_probe"
+            return Availability(available=True, reason=reason)
+
+        return Availability(available=True)
+
+    async def get_route_state(
+        self,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+    ) -> RouteState:
+        async with aiosqlite.connect(self.database_path) as db:
+            await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
+            row = await self._fetch_route_state(db, route_id)
+        return self._row_to_route_state(row)
+
+    async def record_route_success(
+        self,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+    ) -> None:
+        async with self._lock:
+            async with aiosqlite.connect(self.database_path) as db:
+                await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
+                await db.execute(
+                    """
+                    UPDATE route_state
+                    SET status = 'active',
+                        status_reason = NULL,
+                        consecutive_failures = 0,
+                        rate_limited_until = 0,
+                        next_probe_at = 0,
+                        updated_at = ?
+                    WHERE route_id = ?
+                    """,
+                    (self._now(), route_id),
+                )
+                await db.commit()
+
+    async def clear_route_health(
+        self,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+    ) -> RouteState:
+        async with self._lock:
+            async with aiosqlite.connect(self.database_path) as db:
+                await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
+                await db.execute(
+                    """
+                    UPDATE route_state
+                    SET status = 'active',
+                        status_reason = NULL,
+                        consecutive_failures = 0,
+                        rate_limited_until = 0,
+                        next_probe_at = 0,
+                        updated_at = ?
+                    WHERE route_id = ?
+                    """,
+                    (self._now(), route_id),
+                )
+                await db.commit()
+                row = await self._fetch_route_state(db, route_id)
+        return self._row_to_route_state(row)
+
+    async def mark_route_rate_limited(
+        self,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+        headers: Mapping[str, str] | None = None,
+        status_code: int | None = None,
+    ) -> RouteState:
+        headers = headers or {}
+        async with self._lock:
+            async with aiosqlite.connect(self.database_path) as db:
+                await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
+                row = await self._fetch_route_state(db, route_id)
+                state = self._row_to_route_state(row)
+                failures = state.consecutive_failures + 1 if state.status == "rate_limited" else 1
+                fallback_cooldown = min(3600, 60 * (2 ** min(failures - 1, 5)))
+                rate_limited_until = self._cooldown_from_headers(headers) or self._now() + fallback_cooldown
+                next_probe_at = rate_limited_until + self._route_probe_jitter(route_id)
+                await db.execute(
+                    """
+                    UPDATE route_state
+                    SET status = 'rate_limited',
+                        status_reason = ?,
+                        consecutive_failures = ?,
+                        rate_limited_until = ?,
+                        next_probe_at = ?,
+                        updated_at = ?
+                    WHERE route_id = ?
+                    """,
+                    (
+                        f"provider_{status_code or 429}",
+                        failures,
+                        rate_limited_until,
+                        next_probe_at,
+                        self._now(),
+                        route_id,
+                    ),
+                )
+                await db.commit()
+                row = await self._fetch_route_state(db, route_id)
+        return self._row_to_route_state(row)
+
+    async def mark_route_not_found(
+        self,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+        *,
+        status_code: int | None = None,
+        threshold: int = 2,
+    ) -> RouteState:
+        async with self._lock:
+            async with aiosqlite.connect(self.database_path) as db:
+                await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
+                row = await self._fetch_route_state(db, route_id)
+                state = self._row_to_route_state(row)
+                failures = state.consecutive_failures + 1 if (state.status_reason or "").startswith("model_not_found") else 1
+                status = "potentially_outdated" if failures >= threshold else "active"
+                await db.execute(
+                    """
+                    UPDATE route_state
+                    SET status = ?,
+                        status_reason = ?,
+                        consecutive_failures = ?,
+                        rate_limited_until = 0,
+                        next_probe_at = 0,
+                        updated_at = ?
+                    WHERE route_id = ?
+                    """,
+                    (
+                        status,
+                        f"model_not_found_{status_code or 'unknown'}",
+                        failures,
+                        self._now(),
+                        route_id,
+                    ),
+                )
+                await db.commit()
+                row = await self._fetch_route_state(db, route_id)
+        return self._row_to_route_state(row)
+
+    async def mark_route_timeout(
+        self,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+        *,
+        threshold: int = 2,
+    ) -> RouteState:
+        async with self._lock:
+            async with aiosqlite.connect(self.database_path) as db:
+                await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
+                row = await self._fetch_route_state(db, route_id)
+                state = self._row_to_route_state(row)
+                failures = state.consecutive_failures + 1 if state.status_reason == "request_timeout" else 1
+                status = "too_slow" if failures >= threshold else "active"
+                cooldown_seconds = min(3600, 120 * (2 ** max(0, failures - threshold)))
+                next_probe_at = self._now() + cooldown_seconds + self._route_probe_jitter(route_id)
+                await db.execute(
+                    """
+                    UPDATE route_state
+                    SET status = ?,
+                        status_reason = 'request_timeout',
+                        consecutive_failures = ?,
+                        rate_limited_until = ?,
+                        next_probe_at = ?,
+                        updated_at = ?
+                    WHERE route_id = ?
+                    """,
+                    (
+                        status,
+                        failures,
+                        next_probe_at if status == "too_slow" else 0,
+                        next_probe_at if status == "too_slow" else 0,
+                        self._now(),
+                        route_id,
+                    ),
+                )
+                await db.commit()
+                row = await self._fetch_route_state(db, route_id)
+        return self._row_to_route_state(row)
 
     def _availability_for_state(
         self,
@@ -352,6 +596,58 @@ class StateManager:
             raise KeyError(f"Unknown provider: {provider_name}")
         return row
 
+    async def _ensure_route_state_on_connection(
+        self,
+        db: aiosqlite.Connection,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+    ) -> None:
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO route_state (
+                route_id,
+                provider_name,
+                model_id,
+                updated_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (route_id, provider_name, model_id, self._now()),
+        )
+        await db.execute(
+            """
+            UPDATE route_state
+            SET provider_name = ?,
+                model_id = ?
+            WHERE route_id = ?
+            """,
+            (provider_name, model_id, route_id),
+        )
+        await db.commit()
+
+    async def _fetch_route_state(self, db: aiosqlite.Connection, route_id: str) -> aiosqlite.Row:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT route_id,
+                   provider_name,
+                   model_id,
+                   status,
+                   status_reason,
+                   consecutive_failures,
+                   rate_limited_until,
+                   next_probe_at,
+                   updated_at
+            FROM route_state
+            WHERE route_id = ?
+            """,
+            (route_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            raise KeyError(f"Unknown route: {route_id}")
+        return row
+
     @staticmethod
     def _row_to_state(row: aiosqlite.Row) -> ProviderState:
         return ProviderState(
@@ -365,12 +661,30 @@ class StateManager:
         )
 
     @staticmethod
+    def _row_to_route_state(row: aiosqlite.Row) -> RouteState:
+        return RouteState(
+            route_id=row["route_id"],
+            provider_name=row["provider_name"],
+            model_id=row["model_id"],
+            status=row["status"],
+            status_reason=row["status_reason"],
+            consecutive_failures=row["consecutive_failures"],
+            rate_limited_until=row["rate_limited_until"],
+            next_probe_at=row["next_probe_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
     def _now() -> int:
         return int(time())
 
     @staticmethod
     def _today() -> str:
         return datetime.now(UTC).date().isoformat()
+
+    @staticmethod
+    def _route_probe_jitter(route_id: str) -> int:
+        return sum(ord(char) for char in route_id) % 60
 
     @classmethod
     def _cooldown_from_headers(cls, headers: Mapping[str, str]) -> int | None:

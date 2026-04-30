@@ -199,3 +199,93 @@ async def test_remaining_requests_zero_sets_cooldown(tmp_path):
     availability = await state.check_available("test")
     assert availability.available is False
     assert availability.reason == "cooldown"
+
+
+async def test_route_not_found_marks_potentially_outdated_after_threshold(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+    )
+    await state.initialize()
+
+    first = await state.mark_route_not_found("route-a", "test", "missing/model", status_code=404)
+    second = await state.mark_route_not_found("route-a", "test", "missing/model", status_code=404)
+    availability = await state.check_route_available("route-a", "test", "missing/model")
+
+    assert first.status == "active"
+    assert second.status == "potentially_outdated"
+    assert availability.available is False
+    assert availability.reason == "potentially_outdated"
+
+
+async def test_route_rate_limit_probe_is_staggered(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+    )
+    now = 1_000
+    state._now = lambda: now
+    await state.initialize()
+
+    route_state = await state.mark_route_rate_limited("route-a", "test", "model-a")
+    early = await state.check_route_available(
+        "route-a",
+        "test",
+        "model-a",
+        allow_rate_limit_probe=True,
+    )
+    state._now = lambda: route_state.next_probe_at
+    due_without_probe_budget = await state.check_route_available(
+        "route-a",
+        "test",
+        "model-a",
+        allow_rate_limit_probe=False,
+    )
+    due_with_probe_budget = await state.check_route_available(
+        "route-a",
+        "test",
+        "model-a",
+        allow_rate_limit_probe=True,
+    )
+
+    assert route_state.next_probe_at > route_state.rate_limited_until
+    assert early.available is False
+    assert due_without_probe_budget.available is False
+    assert due_with_probe_budget.available is True
+    assert due_with_probe_budget.reason == "rate_limit_probe"
+
+
+async def test_route_timeout_marks_too_slow_after_threshold(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+    )
+    now = 2_000
+    state._now = lambda: now
+    await state.initialize()
+
+    first = await state.mark_route_timeout("route-a", "test", "slow/model")
+    second = await state.mark_route_timeout("route-a", "test", "slow/model")
+    availability = await state.check_route_available("route-a", "test", "slow/model")
+
+    assert first.status == "active"
+    assert second.status == "too_slow"
+    assert availability.available is False
+    assert availability.reason == "route_too_slow"
+
+
+async def test_clear_route_health_resets_limited_route(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [ProviderQuota("test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+    )
+    await state.initialize()
+    await state.mark_route_not_found("route-a", "test", "missing/model", status_code=404)
+    await state.mark_route_not_found("route-a", "test", "missing/model", status_code=404)
+
+    cleared = await state.clear_route_health("route-a", "test", "missing/model")
+    availability = await state.check_route_available("route-a", "test", "missing/model")
+
+    assert cleared.status == "active"
+    assert cleared.consecutive_failures == 0
+    assert availability.available is True

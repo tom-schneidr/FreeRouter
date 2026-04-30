@@ -73,6 +73,7 @@ class WaterfallRouter:
             payload.get("max_completion_tokens") or payload.get("max_tokens") or 0
         )
         attempts: list[ProviderAttempt] = []
+        rate_limit_probe_providers: set[str] = set()
 
         timeout = httpx.Timeout(self.request_timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -118,6 +119,42 @@ class WaterfallRouter:
                     )
                     continue
 
+                provider_availability = await self.state.check_available(
+                    provider.name,
+                    estimated_total_tokens,
+                )
+                if not provider_availability.available:
+                    attempts.append(
+                        ProviderAttempt(
+                            provider.name,
+                            "skipped",
+                            provider_availability.reason,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                        ),
+                    )
+                    continue
+
+                route_availability = await self.state.check_route_available(
+                    route.route_id,
+                    provider.name,
+                    route.model_id,
+                    allow_rate_limit_probe=provider.name not in rate_limit_probe_providers,
+                )
+                if not route_availability.available:
+                    attempts.append(
+                        ProviderAttempt(
+                            provider.name,
+                            "skipped",
+                            route_availability.reason,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                        ),
+                    )
+                    continue
+                if route_availability.reason in {"rate_limit_probe", "too_slow_probe"}:
+                    rate_limit_probe_providers.add(provider.name)
+
                 availability = await self.state.try_reserve_request(
                     provider.name,
                     estimated_total_tokens,
@@ -137,6 +174,13 @@ class WaterfallRouter:
                 try:
                     response = await provider.chat_completion(client, payload, route.model_id)
                 except ProviderRateLimited as exc:
+                    await self.state.mark_route_rate_limited(
+                        route.route_id,
+                        provider.name,
+                        route.model_id,
+                        headers=exc.headers,
+                        status_code=exc.status_code,
+                    )
                     await self.state.mark_exhausted(
                         provider.name,
                         headers=exc.headers,
@@ -154,6 +198,11 @@ class WaterfallRouter:
                     )
                     continue
                 except httpx.TimeoutException:
+                    timeout_state = await self.state.mark_route_timeout(
+                        route.route_id,
+                        provider.name,
+                        route.model_id,
+                    )
                     attempts.append(
                         ProviderAttempt(
                             provider.name,
@@ -163,6 +212,16 @@ class WaterfallRouter:
                             model_id=route.model_id,
                         )
                     )
+                    if timeout_state.status == "too_slow":
+                        attempts.append(
+                            ProviderAttempt(
+                                provider.name,
+                                "flagged",
+                                "too_slow",
+                                route_id=route.route_id,
+                                model_id=route.model_id,
+                            )
+                        )
                     continue
                 except httpx.RequestError as exc:
                     attempts.append(
@@ -201,6 +260,30 @@ class WaterfallRouter:
                         )
                         continue
                     if exc.status_code == 404:
+                        await self.state.mark_route_not_found(
+                            route.route_id,
+                            provider.name,
+                            route.model_id,
+                            status_code=exc.status_code,
+                        )
+                        attempts.append(
+                            ProviderAttempt(
+                                provider.name,
+                                "failed",
+                                "model_not_found",
+                                exc.status_code,
+                                route.route_id,
+                                route.model_id,
+                            ),
+                        )
+                        continue
+                    if _looks_like_missing_endpoint(exc):
+                        await self.state.mark_route_not_found(
+                            route.route_id,
+                            provider.name,
+                            route.model_id,
+                            status_code=exc.status_code,
+                        )
                         attempts.append(
                             ProviderAttempt(
                                 provider.name,
@@ -215,6 +298,11 @@ class WaterfallRouter:
                     raise
 
                 usage = response.body.get("usage")
+                await self.state.record_route_success(
+                    route.route_id,
+                    provider.name,
+                    route.model_id,
+                )
                 await self.state.record_success(
                     provider.name,
                     usage=usage if isinstance(usage, dict) else None,
@@ -273,6 +361,23 @@ def _content_to_text(content: Any) -> str:
         if "content" in content:
             return _content_to_text(content["content"])
     return str(content)
+
+
+def _looks_like_missing_endpoint(exc: ProviderError) -> bool:
+    if exc.status_code in {404, 410}:
+        return True
+    if exc.status_code not in {400, 422} or not exc.body:
+        return False
+    body = exc.body.lower()
+    return (
+        "model" in body
+        and (
+            "not found" in body
+            or "does not exist" in body
+            or "not exist" in body
+            or "unknown model" in body
+        )
+    )
 
 
 def validate_chat_completion_payload(payload: dict[str, Any]) -> None:
