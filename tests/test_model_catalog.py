@@ -5,7 +5,9 @@ from app.model_catalog import (
     DEFAULT_MODEL_ROUTES,
     ModelCatalog,
     ModelRoute,
+    NON_TEXT_ROUTE_TAGS,
     _get_model_score,
+    is_text_chat_route,
 )
 
 
@@ -25,14 +27,9 @@ def test_default_routes_are_sorted_descending_by_score():
         )
 
 
-def test_safety_models_ranked_last():
-    """Safety/guard/PII models should always sort below enabled routes."""
-    safety_routes = [r for r in DEFAULT_MODEL_ROUTES if not r.enabled]
-    enabled_routes = [r for r in DEFAULT_MODEL_ROUTES if r.enabled]
-    if safety_routes and enabled_routes:
-        worst_chat = max(r.rank for r in enabled_routes)
-        best_safety = min(r.rank for r in safety_routes)
-        assert best_safety > worst_chat, "Disabled safety models should rank below all enabled routes"
+def test_specialized_models_are_excluded_from_defaults():
+    """Non-chat/specialized routes should not appear in the default catalog."""
+    assert all(is_text_chat_route(route) for route in DEFAULT_MODEL_ROUTES)
 
 
 def test_no_duplicate_route_ids():
@@ -58,6 +55,13 @@ def test_text_is_available_as_a_filterable_capability():
     """Text should be represented explicitly in the capability filters."""
     assert "text" in CANONICAL_MODEL_TAGS
     assert any("text" in route.tags for route in DEFAULT_MODEL_ROUTES)
+
+
+def test_default_routes_are_text_input_text_output_only():
+    assert DEFAULT_MODEL_ROUTES
+    assert all(is_text_chat_route(route) for route in DEFAULT_MODEL_ROUTES)
+    assert any("vision" in route.tags or "audio" in route.tags for route in DEFAULT_MODEL_ROUTES)
+    assert not any(set(route.tags) & NON_TEXT_ROUTE_TAGS for route in DEFAULT_MODEL_ROUTES)
 
 
 def test_every_route_has_provider_and_model_id():
@@ -167,3 +171,63 @@ def test_get_model_score_safety_very_low():
         display_name="Safety Guard", rank=1, tags=["safety", "moderation"],
     )
     assert _get_model_score(route) < 0
+
+
+def test_discovered_routes_are_inserted_by_auto_rank_and_disabled(tmp_path):
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes(
+        [
+            {
+                "route_id": "baseline",
+                "provider_name": "groq",
+                "model_id": "openai/gpt-oss-20b",
+                "display_name": "GPT OSS 20B",
+                "rank": 1,
+                "enabled": True,
+            }
+        ]
+    )
+    discovered = ModelRoute(
+        route_id="new-high",
+        provider_name="gemini",
+        model_id="gemini-3.1-pro-preview",
+        display_name="Gemini 3.1 Pro Preview",
+        rank=999,
+        enabled=True,
+        tags=["reasoning", "text"],
+    )
+    added = catalog.add_discovered_routes([discovered])
+    all_routes = catalog.all_routes()
+
+    assert len(added) == 1
+    assert added[0].enabled is False
+    assert all_routes[0].route_id == "new-high"
+    assert all_routes[0].rank_score is not None
+
+
+def test_auto_rank_keeps_multimodal_text_routes(tmp_path):
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes(
+        [
+            {
+                "route_id": "text-route",
+                "provider_name": "p",
+                "model_id": "text-model",
+                "display_name": "Text Model",
+                "rank": 1,
+                "enabled": True,
+                "tags": ["text"],
+            },
+            {
+                "route_id": "vision-route",
+                "provider_name": "p",
+                "model_id": "vision-chat-model",
+                "display_name": "Vision Chat Model",
+                "rank": 2,
+                "enabled": True,
+                "tags": ["text", "vision"],
+            },
+        ]
+    )
+
+    assert [route.route_id for route in catalog.all_routes()] == ["text-route", "vision-route"]

@@ -39,10 +39,14 @@ def route_from_catalog_item(
 
     route_model_id = route_model_id_from_catalog_id(model_id)
     display_name = str(item.get("name") or route_model_id)
+    tags = tags_for_model(item)
 
     if provider.name == "openrouter":
-        enabled = True
-        notes = "Discovered automatically from OpenRouter /api/v1/models as a zero-cost or :free model."
+        enabled = False
+        notes = (
+            "Discovered automatically from OpenRouter /api/v1/models as a zero-cost or :free model. "
+            "Disabled by default until reviewed."
+        )
     elif assume_free and not free_by_payload:
         enabled = False
         notes = (
@@ -64,7 +68,7 @@ def route_from_catalog_item(
         route_model_id,
         display_name=display_name,
         context_window=_int_or_none(item.get("context_length")),
-        tags=tags_for_model(item),
+        tags=tags,
         source_url=f"{provider.base_url.rstrip('/')}/models",
         notes=notes,
         enabled=enabled,
@@ -113,16 +117,14 @@ def tags_for_model(item: dict[str, Any]) -> list[str]:
     text = _model_search_text(item)
 
     tags = ["text"] if is_chat_model(item) else []
-    if any(term in text for term in ("vision", "image", "vl", "ocr", "pixtral", "gemma-3")):
+    if any(term in text for term in ("vision", "image", "vl", "pixtral", "gemma-3")):
         tags.append("vision")
-    if any(term in text for term in ("audio", "lyria", "speech", "music")):
+    if any(term in text for term in ("audio", "speech")):
         tags.append("audio")
     if any(term in text for term in ("reason", "thinking", "qwen", "hermes", "gpt-oss")):
         tags.append("reasoning")
     if any(term in text for term in ("coder", "code")):
         tags.append("coding")
-    if "ocr" in text:
-        tags.append("classification")
     return list(dict.fromkeys(tags))
 
 
@@ -136,15 +138,17 @@ def is_chat_model(item: dict[str, Any]) -> bool:
     if isinstance(architecture, dict):
         input_modalities = _string_list(architecture.get("input_modalities"))
         output_modalities = _string_list(architecture.get("output_modalities"))
+        if input_modalities and "text" not in input_modalities:
+            return False
         if output_modalities and "text" not in output_modalities:
             return False
         modality = str(architecture.get("modality") or "").lower()
         if modality:
             parts = [part.strip() for part in modality.replace(",", "->").split("->") if part.strip()]
-            if parts and "text" not in parts[-1]:
+            if parts and ("text" not in parts[0] or "text" not in parts[-1]):
                 return False
         if input_modalities and output_modalities:
-            return "text" in output_modalities
+            return "text" in input_modalities and "text" in output_modalities
 
     if any(term in text for term in _CHAT_MODEL_TERMS):
         return True
@@ -184,6 +188,7 @@ _CHAT_MODEL_TERMS = (
 _NON_CHAT_MODEL_TERMS = (
     "veo",
     "video generation",
+    "ocr",
     "generate-preview",
     "generate-001",
     "imagen",

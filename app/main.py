@@ -216,6 +216,15 @@ async def reset_gateway_models(request: Request) -> dict[str, Any]:
     return await _catalog_payload_with_health(catalog, state)
 
 
+@app.post("/v1/gateway/models/auto-rank")
+async def auto_rank_gateway_models(request: Request) -> dict[str, Any]:
+    catalog: ModelCatalog = request.app.state.model_catalog
+    state: StateManager = request.app.state.gateway_state
+    catalog.auto_rank_routes()
+    catalog.save()
+    return await _catalog_payload_with_health(catalog, state)
+
+
 @app.post("/v1/gateway/models/{route_id}/disable")
 async def disable_gateway_model(route_id: str, request: Request) -> dict[str, Any]:
     catalog: ModelCatalog = request.app.state.model_catalog
@@ -873,6 +882,7 @@ MODEL_CATALOG_HTML = """
           </div>
         </details>
         <button id="save">Save Ranking</button>
+        <button id="autoRank" class="secondary" type="button" title="Reorder text-only routes by automatic quality score. Non-text routes are removed; disabled routes stay disabled.">Auto-rank</button>
         <button id="reload" class="secondary">Reload</button>
         <button id="updates" class="secondary" type="button">Updates <span id="updateCount" class="update-count"></span></button>
         <button id="reset" class="secondary" style="margin-left: auto; color: var(--red); border-color: rgba(239, 68, 68, 0.3);">Reset to Defaults</button>
@@ -1076,6 +1086,9 @@ MODEL_CATALOG_HTML = """
               ${meta('Provider model ID', route.model_id)}
               ${meta('Context window', route.context_window ? route.context_window.toLocaleString() : 'Unknown')}
               ${meta('Quality', route.quality)}
+              ${meta('Rank score', route.rank_score ?? 'Unknown')}
+              ${meta('Rank source', route.rank_source || 'heuristic')}
+              ${meta('Rank reason', route.rank_reason || 'N/A')}
               ${meta('Speed', route.speed)}
               ${meta('Cost', route.cost)}
               ${meta('Tags', tags || 'None', true)}
@@ -1118,6 +1131,15 @@ MODEL_CATALOG_HTML = """
           else if (key === 'tags') route[key] = input.value.split(',').map((tag) => tag.trim()).filter(Boolean);
           else route[key] = input.value;
         });
+      }
+
+      function summarizeAutoRank(before, after) {
+        const beforeById = new Map(before.map((route) => [route.route_id, route]));
+        const afterIds = new Set(after.map((route) => route.route_id));
+        const removed = before.filter((route) => !afterIds.has(route.route_id)).length;
+        const moved = after.filter((route) => beforeById.has(route.route_id) && beforeById.get(route.route_id).rank !== route.rank).length;
+        const disabled = after.filter((route) => !route.enabled).length;
+        return `Auto-ranked ${after.length} text-only route${after.length === 1 ? '' : 's'}: ${moved} moved, ${removed} non-text/specialized removed, ${disabled} disabled kept disabled.`;
       }
 
       async function save() {
@@ -1271,6 +1293,22 @@ MODEL_CATALOG_HTML = """
         }
       });
       $('save').addEventListener('click', save);
+      $('autoRank').addEventListener('click', async () => {
+        const before = routes.map((route) => ({ ...route }));
+        $('status').textContent = 'Auto-ranking text-only routes by quality score; disabled routes will stay disabled...';
+        $('autoRank').disabled = true;
+        const response = await fetch('/v1/gateway/models/auto-rank', { method: 'POST' });
+        const payload = await response.json();
+        $('autoRank').disabled = false;
+        if (!response.ok) {
+          $('status').textContent = payload.detail || 'Auto-rank failed';
+          return;
+        }
+        routes = payload.data;
+        populateFilters();
+        render();
+        $('status').textContent = summarizeAutoRank(before, routes);
+      });
       $('reload').addEventListener('click', load);
       $('updates').addEventListener('click', openUpdateModal);
       $('closeUpdates').addEventListener('click', closeUpdateModal);

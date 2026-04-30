@@ -201,6 +201,25 @@ class EndpointDiagnosisService:
         )
         self._lock = asyncio.Lock()
         self.last_report: DiagnosisReport | None = None
+        self._supervisor_verdict_cache: dict[str, SupervisorVerdict] = self._build_supervisor_cache()
+
+    def _build_supervisor_cache(self) -> dict[str, SupervisorVerdict]:
+        cached: dict[str, SupervisorVerdict] = {}
+        for route in self.catalog.all_routes():
+            if route.rank_source != "ai_supervisor":
+                continue
+            key = self._supervisor_cache_key(route.provider_name, route.model_id)
+            cached[key] = SupervisorVerdict(
+                free_chat_model=True,
+                confidence="high",
+                reason=route.rank_reason or "Previously approved by supervisor.",
+                sources=[],
+            )
+        return cached
+
+    @staticmethod
+    def _supervisor_cache_key(provider_name: str, model_id: str) -> str:
+        return f"{provider_name.lower()}::{model_id.lower()}"
 
     async def run_once(self) -> DiagnosisReport:
         async with self._lock:
@@ -383,19 +402,45 @@ class EndpointDiagnosisService:
         if route_from_catalog_item(provider, item, assume_free=True) is None:
             return None
 
-        verdict = await self.supervisor.verify_free_chat_model(
-            client,
-            provider_name=provider.name,
-            model_id=model_id,
-            display_name=display_name,
-        )
+        cache_key = self._supervisor_cache_key(provider.name, model_id)
+        verdict = self._supervisor_verdict_cache.get(cache_key)
+        if verdict is None:
+            verdict = await self.supervisor.verify_free_chat_model(
+                client,
+                provider_name=provider.name,
+                model_id=model_id,
+                display_name=display_name,
+            )
+            if verdict.free_chat_model:
+                self._supervisor_verdict_cache[cache_key] = verdict
         if not verdict.free_chat_model:
             return None
-        return route_from_catalog_item(
+
+        route = route_from_catalog_item(
             provider,
             item,
             assume_free=True,
             supervisor_note=_supervisor_note(verdict),
+        )
+        if route is None:
+            return None
+        return ModelRoute(
+            route_id=route.route_id,
+            provider_name=route.provider_name,
+            model_id=route.model_id,
+            display_name=route.display_name,
+            rank=route.rank,
+            enabled=route.enabled,
+            context_window=route.context_window,
+            quality=route.quality,
+            speed=route.speed,
+            cost=route.cost,
+            tags=route.tags,
+            notes=route.notes,
+            source_url=route.source_url,
+            rank_score=route.rank_score,
+            rank_reason=verdict.reason,
+            rank_source="ai_supervisor",
         )
 
     async def _route_health_suggestions(

@@ -39,6 +39,7 @@ def test_openrouter_catalog_payload_creates_free_routes_only():
     assert routes[0].display_name == "New Free Model"
     assert routes[0].context_window == 65536
     assert "text" in routes[0].tags
+    assert routes[0].enabled is False
 
 
 def test_non_openrouter_catalog_payload_requires_structured_free_pricing():
@@ -94,7 +95,7 @@ def test_non_openrouter_catalog_payload_requires_structured_free_pricing():
     assert "free-tier limits can still vary" in routes[0].notes
 
 
-def test_openrouter_catalog_payload_excludes_non_chat_free_models():
+def test_openrouter_catalog_payload_allows_multimodal_text_models():
     provider = FakeProvider("openrouter")
     routes = routes_from_payload(
         provider,
@@ -107,6 +108,12 @@ def test_openrouter_catalog_payload_excludes_non_chat_free_models():
                     "pricing": {"prompt": "0", "completion": "0"},
                 },
                 {
+                    "id": "mistralai/pixtral-12b:free",
+                    "name": "Mistral: Pixtral 12B",
+                    "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+                    "pricing": {"prompt": "0", "completion": "0"},
+                },
+                {
                     "id": "qwen/qwen3-coder:free",
                     "name": "Qwen3 Coder",
                     "architecture": {"modality": "text->text"},
@@ -116,8 +123,37 @@ def test_openrouter_catalog_payload_excludes_non_chat_free_models():
         },
     )
 
-    assert [route.model_id for route in routes] == ["qwen/qwen3-coder:free"]
+    assert [route.model_id for route in routes] == [
+        "mistralai/pixtral-12b:free",
+        "qwen/qwen3-coder:free",
+    ]
     assert routes[0].tags[0] == "text"
+    assert "vision" in routes[0].tags
+
+
+def test_catalog_payload_allows_multimodal_text_exchange_models():
+    provider = FakeProvider("openrouter")
+    routes = routes_from_payload(
+        provider,
+        {
+            "data": [
+                {
+                    "id": "vision-chat:free",
+                    "name": "Vision Chat",
+                    "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+                    "pricing": {"prompt": "0", "completion": "0"},
+                },
+                {
+                    "id": "plain-chat:free",
+                    "name": "Plain Chat",
+                    "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                    "pricing": {"prompt": "0", "completion": "0"},
+                },
+            ]
+        },
+    )
+
+    assert [route.model_id for route in routes] == ["vision-chat:free", "plain-chat:free"]
 
 
 def test_malformed_or_missing_price_fields_do_not_count_as_free():

@@ -6,6 +6,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from app.model_ranking import compute_rank_score, rank_sort_key
+
 
 CANONICAL_MODEL_TAGS = {
     "text",
@@ -20,6 +22,13 @@ CANONICAL_MODEL_TAGS = {
     "translation",
     "classification",
     "rag",
+}
+
+NON_TEXT_ROUTE_TAGS = {
+    "safety",
+    "moderation",
+    "translation",
+    "classification",
 }
 
 
@@ -40,6 +49,9 @@ class ModelRoute:
     tags: list[str] = field(default_factory=list)
     notes: str = ""
     source_url: str = ""
+    rank_score: int | None = None
+    rank_reason: str = ""
+    rank_source: str = "heuristic"
 
 
 def _route(
@@ -90,7 +102,7 @@ def route_from_discovered_model(
     tags: list[str] | None = None,
     source_url: str = "",
     notes: str = "Discovered automatically from provider model catalog.",
-    enabled: bool = True,
+    enabled: bool = False,
 ) -> ModelRoute:
     return _route(
         provider_name,
@@ -117,6 +129,8 @@ def promote_routes_to_default_catalog(routes: list[ModelRoute]) -> list[ModelRou
     promoted: list[ModelRoute] = []
 
     for route in routes:
+        if not is_text_chat_route(route):
+            continue
         if route.route_id in existing_ids or (route.provider_name, route.model_id) in existing_targets:
             continue
         default_route = ModelRoute(
@@ -133,6 +147,9 @@ def promote_routes_to_default_catalog(routes: list[ModelRoute]) -> list[ModelRou
             tags=_canonical_tags(route.tags),
             notes=route.notes,
             source_url=route.source_url,
+            rank_score=route.rank_score,
+            rank_reason=route.rank_reason,
+            rank_source=route.rank_source,
         )
         DEFAULT_MODEL_ROUTES.append(default_route)
         promoted.append(default_route)
@@ -160,6 +177,32 @@ def remove_routes_from_default_catalog(route_ids: set[str]) -> list[ModelRoute]:
 
 def _canonical_tags(tags: list[str]) -> list[str]:
     return list(dict.fromkeys(tag for tag in tags if tag in CANONICAL_MODEL_TAGS))
+
+
+def is_text_chat_route(route: ModelRoute) -> bool:
+    """Return true for routes that can handle a normal text exchange.
+
+    Multimodal models are allowed as long as they also support text chat.
+    """
+    tags = set(route.tags)
+    text = f"{route.display_name} {route.model_id} {route.quality} {' '.join(route.tags)}".lower()
+    if "text" not in tags:
+        return False
+    if tags & NON_TEXT_ROUTE_TAGS:
+        return False
+    return not any(
+        term in text
+        for term in (
+            "ocr",
+            "paligemma",
+            "pii",
+            "safety",
+            "speech",
+            "translate",
+            "translation",
+            "tts",
+        )
+    )
 
 
 DEFAULT_MODEL_ROUTES = [
@@ -306,146 +349,24 @@ DEFAULT_MODEL_ROUTES.extend(
         source_url="https://openrouter.ai/api/v1/models",
     )
     for model_id, display_name, context_window, modality in _OPENROUTER_FREE_MODELS
+    if modality in {"text", "vision"}
 )
 
-_AA_INTELLIGENCE_INDEX_SCALE = 3000
-
-# Artificial Analysis Intelligence Index scores for models represented in the
-# default catalog. Values are kept as leaderboard-style index scores and scaled
-# in _get_model_score so small tie-breakers cannot overwhelm capability rank.
-_AA_INTELLIGENCE_INDEX_SCORES = {
-    "gemini-3.1-pro": 57,
-    "kimi-k2-thinking": 54,
-    "deepseek-v4-pro": 52,
-    "minimax-m2.7": 50,
-    "deepseek-v4-flash": 47,
-    "gemini-3-flash": 46,
-    "qwen-3-235b": 42,
-    "hy3-preview": 42,
-    "deepseek-v3.1": 39,
-    "glm-4.5-air": 39,
-    "gemma-4-31b": 39,
-    "step-3.5-flash": 38,
-    "kimi-k2-instruct-0905": 37,
-    "kimi-k2-instruct": 37,
-    "nemotron-3-super-120b": 36,
-    "gemini-2.5-pro": 35,
-    "ling-2.6-1t": 34,
-    "gemini-3.1-flash-lite": 34,
-    "seed-oss-36b": 34,
-    "gpt-oss-120b": 33,
-    "gemma-4-26b": 31,
-    "gemini-2.5-flash": 30,
-    "qwen3-coder": 28,
-    "qwen3-next-80b": 27,
-    "ling-2.6-flash": 26,
-    "qwen3-32b": 25,
-    "gpt-oss-20b": 24,
-    "nemotron-3-nano-30b": 24,
-    "nemotron-3-nano-omni": 24,
-    "mistral-large-3": 23,
-    "devstral-2": 22,
-    "gemini-2.5-flash-lite": 22,
-    "mistral-nemotron": 19,
-    "magistral-small": 18,
-    "llama-4-maverick": 18,
-    "llama-3.1-405b": 17,
-    "nemotron-nano-12b": 15,
-    "nemotron-nano-9b": 15,
-    "llama-3.3-70b": 14,
-    "llama-4-scout": 14,
-    "gemma-3-27b": 12,
-    "dolphin-mistral-24b": 12,
-    "pixtral-12b": 10,
-    "phi-4-multimodal": 10,
-    "gemma-3-12b": 9,
-    "lfm-2.5-1.2b": 8,
-    "gemma-3-4b": 8,
-    "gemma-3n-e4b": 8,
-    "gemma-2-2b": 7,
-    "gemma-3n-e2b": 6,
-    "openrouter/free": 1,
-}
-
+DEFAULT_MODEL_ROUTES[:] = [route for route in DEFAULT_MODEL_ROUTES if is_text_chat_route(route)]
 
 def _get_model_score(route: ModelRoute) -> int:
-    """Capability score guided by the Artificial Analysis Intelligence Index."""
-    text = (route.display_name + " " + route.model_id + " " + " ".join(route.tags)).lower()
-
-    if "safety" in text or "guard" in text or "pii" in text or "translate" in text or "paligemma" in text:
-        return -500000
-
-    score = 0
-    for key, val in sorted(_AA_INTELLIGENCE_INDEX_SCORES.items(), key=lambda item: len(item[0]), reverse=True):
-        if key in text:
-            score = val * _AA_INTELLIGENCE_INDEX_SCALE
-            break
-
-    if score == 0:
-        quality_scores = {
-            "very high": 26,
-            "high": 22,
-            "agentic": 21,
-            "good": 14,
-            "vision": 10,
-            "utility": 8,
-            "translation": 6,
-            "safety": -100,
-            "unknown": 10,
-        }
-        score = quality_scores.get(route.quality.lower(), 10) * _AA_INTELLIGENCE_INDEX_SCALE
-
-    size_match = re.search(r"(\d+(?:\.\d+)?)b", text)
-    if size_match:
-        score += min(int(float(size_match.group(1)) * 2), 900)
-
-    size_t_match = re.search(r"(\d+(?:\.\d+)?)t", text)
-    if size_t_match:
-        score += min(int(float(size_t_match.group(1)) * 600), 900)
-
-    if "pro" in text:
-        score += 25
-    if "large" in text:
-        score += 20
-    if "versatile" in text:
-        score += 10
-    if "flash" in text:
-        score += 5
-    if "lite" in text:
-        score -= 5
-    if "mini" in text:
-        score -= 10
-    if "nano" in text:
-        score -= 15
-    if "vision" in text:
-        score -= 5
-    if "coder" in text:
-        score += 10
-    if "reasoning" in text:
-        score += 15
-
-    return score
-
-def _get_provider_score(provider_name: str) -> int:
-    """Score providers based on the generosity of their free usage limits."""
-    scores = {
-        "gemini": 100,      # Dynamic but highly generous token limits
-        "groq": 90,         # 30 RPM, 14.4K RPD
-        "cerebras": 80,     # 30 RPM, 1M TPD
-        "nvidia": 70,       # Generous but undocumented limits
-        "openrouter": 60,   # Aggressive free tier rate limits
-    }
-    return scores.get(provider_name.lower(), 0)
+    """Backward-compatible wrapper around the extracted ranking module."""
+    return compute_rank_score(route)
 
 
 def _assign_default_ranks() -> None:
     """Sort DEFAULT_MODEL_ROUTES by benchmark score, breaking ties by provider free limits."""
-    DEFAULT_MODEL_ROUTES.sort(
-        key=lambda x: (_get_model_score(x), _get_provider_score(x.provider_name)),
-        reverse=True,
-    )
+    DEFAULT_MODEL_ROUTES.sort(key=rank_sort_key, reverse=True)
     for i, route in enumerate(DEFAULT_MODEL_ROUTES):
         object.__setattr__(route, "rank", i + 1)
+        object.__setattr__(route, "rank_score", compute_rank_score(route))
+        object.__setattr__(route, "rank_reason", "deterministic_quality_score")
+        object.__setattr__(route, "rank_source", "heuristic")
 
 
 _assign_default_ranks()
@@ -468,7 +389,7 @@ class ModelCatalog:
             self.save()
             return
 
-        self._routes = self._load_routes()
+        self._routes = [route for route in self._load_routes() if is_text_chat_route(route)]
         self._merge_new_defaults()
         self.save()
 
@@ -490,7 +411,7 @@ class ModelCatalog:
         return routes
 
     def replace_routes(self, raw_routes: list[dict[str, Any]]) -> list[ModelRoute]:
-        routes = [self._route_from_dict(raw_route) for raw_route in raw_routes]
+        routes = [route for route in (self._route_from_dict(raw_route) for raw_route in raw_routes) if is_text_chat_route(route)]
         seen = set()
         for route in routes:
             if route.route_id in seen:
@@ -518,6 +439,9 @@ class ModelCatalog:
                 tags=route.tags,
                 notes=route.notes,
                 source_url=route.source_url,
+                rank_score=route.rank_score,
+                rank_reason=route.rank_reason,
+                rank_source=route.rank_source,
             )
             self._routes[index] = updated
             self.save()
@@ -525,16 +449,17 @@ class ModelCatalog:
         raise KeyError(f"Unknown route_id: {route_id}")
 
     def add_discovered_routes(self, routes: list[ModelRoute]) -> list[ModelRoute]:
-        """Merge newly discovered routes without disturbing existing user ranking choices."""
+        """Merge newly discovered routes and re-rank the full catalog."""
         if not routes:
             return []
 
         existing_ids = {route.route_id for route in self._routes}
         existing_targets = {(route.provider_name, route.model_id) for route in self._routes}
-        next_rank = max((route.rank for route in self._routes), default=0) + 1
         added: list[ModelRoute] = []
 
-        for route in sorted(routes, key=_get_model_score, reverse=True):
+        for route in sorted(routes, key=compute_rank_score, reverse=True):
+            if not is_text_chat_route(route):
+                continue
             if route.route_id in existing_ids or (route.provider_name, route.model_id) in existing_targets:
                 continue
             updated = ModelRoute(
@@ -542,8 +467,8 @@ class ModelCatalog:
                 provider_name=route.provider_name,
                 model_id=route.model_id,
                 display_name=route.display_name,
-                rank=next_rank,
-                enabled=route.enabled,
+                rank=0,
+                enabled=False,
                 context_window=route.context_window,
                 quality=route.quality,
                 speed=route.speed,
@@ -551,14 +476,17 @@ class ModelCatalog:
                 tags=_canonical_tags(route.tags),
                 notes=route.notes,
                 source_url=route.source_url,
+                rank_score=compute_rank_score(route),
+                rank_reason=route.rank_reason,
+                rank_source=route.rank_source,
             )
             self._routes.append(updated)
             added.append(updated)
             existing_ids.add(updated.route_id)
             existing_targets.add((updated.provider_name, updated.model_id))
-            next_rank += 1
 
         if added:
+            self.auto_rank_routes()
             self.save()
         return added
 
@@ -578,6 +506,34 @@ class ModelCatalog:
     def reset_to_defaults(self) -> list[ModelRoute]:
         self._routes = DEFAULT_MODEL_ROUTES.copy()
         self.save()
+        return self.all_routes()
+
+    def auto_rank_routes(self) -> list[ModelRoute]:
+        ranked = sorted((route for route in self._routes if is_text_chat_route(route)), key=rank_sort_key, reverse=True)
+        rebuilt: list[ModelRoute] = []
+        for index, route in enumerate(ranked, start=1):
+            score = compute_rank_score(route)
+            rebuilt.append(
+                ModelRoute(
+                    route_id=route.route_id,
+                    provider_name=route.provider_name,
+                    model_id=route.model_id,
+                    display_name=route.display_name,
+                    rank=index,
+                    enabled=route.enabled,
+                    context_window=route.context_window,
+                    quality=route.quality,
+                    speed=route.speed,
+                    cost=route.cost,
+                    tags=_canonical_tags(route.tags),
+                    notes=route.notes,
+                    source_url=route.source_url,
+                    rank_score=score,
+                    rank_reason=route.rank_reason or "deterministic_quality_score",
+                    rank_source=route.rank_source or "heuristic",
+                )
+            )
+        self._routes = rebuilt
         return self.all_routes()
 
     def to_payload(self) -> dict[str, Any]:
@@ -621,6 +577,9 @@ class ModelCatalog:
                         tags=_canonical_tags(route.tags),
                         notes=route.notes,
                         source_url=route.source_url,
+                        rank_score=route.rank_score,
+                        rank_reason=route.rank_reason,
+                        rank_source=route.rank_source,
                     )
                 )
                 continue
@@ -640,17 +599,21 @@ class ModelCatalog:
                     tags=_canonical_tags(default.tags),
                     notes=default.notes,
                     source_url=default.source_url,
+                    rank_score=route.rank_score,
+                    rank_reason=route.rank_reason,
+                    rank_source=route.rank_source,
                 )
             )
 
         existing = {route.route_id for route in refreshed}
         refreshed.extend(route for route in DEFAULT_MODEL_ROUTES if route.route_id not in existing)
-        self._routes = refreshed
+        self._routes = [route for route in refreshed if is_text_chat_route(route)]
 
     @staticmethod
     def _route_from_dict(raw: dict[str, Any]) -> ModelRoute:
         if not isinstance(raw, dict):
             raise ValueError("Each model catalog entry must be an object")
+        tags = _canonical_tags([str(tag) for tag in raw.get("tags", [])]) or ["text"]
         return ModelRoute(
             route_id=str(raw["route_id"]),
             provider_name=str(raw["provider_name"]),
@@ -664,7 +627,14 @@ class ModelCatalog:
             quality=str(raw.get("quality", "unknown")),
             speed=str(raw.get("speed", "unknown")),
             cost=str(raw.get("cost", "free-tier")),
-            tags=_canonical_tags([str(tag) for tag in raw.get("tags", [])]),
+            tags=tags,
             notes=str(raw.get("notes", "")),
             source_url=str(raw.get("source_url", "")),
+            rank_score=(
+                int(raw["rank_score"])
+                if raw.get("rank_score") is not None
+                else None
+            ),
+            rank_reason=str(raw.get("rank_reason", "")),
+            rank_source=str(raw.get("rank_source", "heuristic")),
         )

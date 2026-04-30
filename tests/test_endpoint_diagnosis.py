@@ -229,6 +229,52 @@ async def test_endpoint_diagnosis_uses_supervisor_for_missing_pricing_discovery(
     assert "Supervisor web search verified" in str(report.suggestions[0].route["notes"])
 
 
+async def test_endpoint_diagnosis_caches_supervisor_verdicts_between_runs(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [ProviderQuota("groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+    )
+    await state.initialize()
+
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes([])
+    provider = FakeCatalogProvider(
+        "groq",
+        {
+            "data": [
+                {
+                    "id": "cached-free-model",
+                    "name": "Cached Free Model",
+                    "context_length": 131072,
+                    "architecture": {"modality": "text->text"},
+                },
+            ]
+        },
+    )
+    supervisor = FakeSupervisor(
+        {
+            "cached-free-model": SupervisorVerdict(
+                True,
+                "high",
+                "Cached by supervisor.",
+                ["https://example.test/groq/free"],
+            )
+        }
+    )
+    service = EndpointDiagnosisService(
+        [provider],
+        catalog,
+        state,
+        request_timeout_seconds=5,
+        supervisor=supervisor,
+    )
+
+    await service.run_once()
+    await service.run_once()
+
+    assert supervisor.calls == [("groq", "cached-free-model")]
+
+
 async def test_local_endpoint_supervisor_uses_enabled_free_catalog_route(tmp_path):
     state = StateManager(
         str(tmp_path / "state.sqlite3"),

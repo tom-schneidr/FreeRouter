@@ -69,3 +69,13 @@ def test_stream_route_returns_error_event_on_invalid_payload(tmp_path, monkeypat
     body = response.text
     assert "data:" in body
     assert '"type": "error"' in body
+
+
+def test_auto_rank_endpoint_returns_catalog_payload(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post("/v1/gateway/models/auto-rank")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["object"] == "list"
+    assert payload["data"]
+    assert "rank_score" in payload["data"][0]
