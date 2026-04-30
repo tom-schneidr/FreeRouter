@@ -28,6 +28,92 @@ fallback, quota awareness, endpoint health, and low-touch maintenance across mul
 - **Transparent control:** The Models and Status pages show ranking, route health, usage, and
   pending endpoint updates.
 
+## Integration Guide For Other Projects
+
+Prefer integrating FreeRouter over HTTP. Run FreeRouter as a local service, then point your app or
+agent framework at:
+
+```text
+http://localhost:8000/v1
+```
+
+Use the default model name:
+
+```text
+auto
+```
+
+Send chat requests to:
+
+```text
+POST /v1/chat/completions
+```
+
+Example request:
+
+```json
+{
+  "model": "auto",
+  "messages": [
+    { "role": "system", "content": "You are a helpful assistant." },
+    { "role": "user", "content": "Summarize today's company status." }
+  ],
+  "temperature": 0.7,
+  "max_tokens": 800
+}
+```
+
+Example Python HTTP integration:
+
+```python
+import httpx
+
+response = httpx.post(
+    "http://localhost:8000/v1/chat/completions",
+    json={
+        "model": "auto",
+        "messages": [{"role": "user", "content": "Write a short update."}],
+    },
+    timeout=120,
+)
+response.raise_for_status()
+print(response.json()["choices"][0]["message"]["content"])
+```
+
+Most OpenAI-compatible SDKs can also use FreeRouter by setting:
+
+```text
+base_url = http://localhost:8000/v1
+model = auto
+```
+
+For Python projects running in the same environment, there is also a small programmatic wrapper:
+
+```python
+from app.client import ask_ai
+
+result = await ask_ai([
+    {"role": "user", "content": "Draft a weekly CEO briefing."}
+])
+print(result.body)
+```
+
+HTTP is usually the cleaner boundary between projects. The Python wrapper is useful for scripts or
+tightly coupled local tooling.
+
+### Integration Rules For Agentic Coding AIs
+
+If another coding agent is integrating with this repository, give it these rules:
+
+- Treat FreeRouter as the AI gateway. Do not call provider APIs directly unless explicitly asked.
+- Use `http://localhost:8000/v1` as the base URL and `auto` as the model.
+- Send normal chat-completion payloads with `messages`.
+- Let FreeRouter choose models, handle fallback, track quotas, and manage route health.
+- Expect `429` with `code=request_queue_timeout` when the local gateway is overloaded; retry with
+  backoff instead of spawning more parallel calls.
+- New discovered models are intentionally disabled until accepted in the Models UI.
+- Runtime state lives in `data/`; do not commit SQLite databases or generated model catalogs.
+
 ## File Structure
 
 ```text
