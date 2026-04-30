@@ -325,6 +325,11 @@ class ModelCatalog:
         self.save()
         return self.all_routes()
 
+    def reset_to_defaults(self) -> list[ModelRoute]:
+        self._routes = DEFAULT_MODEL_ROUTES.copy()
+        self.save()
+        return self.all_routes()
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "object": "list",

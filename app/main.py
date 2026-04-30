@@ -173,6 +173,13 @@ async def update_gateway_models(request: Request) -> dict[str, Any]:
     return catalog.to_payload()
 
 
+@app.post("/v1/gateway/models/reset")
+async def reset_gateway_models(request: Request) -> dict[str, Any]:
+    catalog: ModelCatalog = request.app.state.model_catalog
+    catalog.reset_to_defaults()
+    return catalog.to_payload()
+
+
 @app.get("/v1/providers/status")
 async def provider_status(request: Request) -> dict[str, Any]:
     router: WaterfallRouter = request.app.state.waterfall_router
@@ -424,6 +431,7 @@ MODEL_CATALOG_HTML = """
         <select id="provider"><option value="">All providers</option></select>
         <button id="save">Save Ranking</button>
         <button id="reload" class="secondary">Reload</button>
+        <button id="reset" class="secondary" style="margin-left: auto; color: var(--red); border-color: rgba(239, 68, 68, 0.3);">Reset to Defaults</button>
       </div>
       <p class="status" id="status"></p>
       <div id="models" class="grid"></div>
@@ -591,6 +599,16 @@ MODEL_CATALOG_HTML = """
       $('provider').addEventListener('change', render);
       $('save').addEventListener('click', save);
       $('reload').addEventListener('click', load);
+      $('reset').addEventListener('click', async () => {
+        if (!confirm('Are you sure you want to restore the default model rankings? This will overwrite your custom order.')) return;
+        $('status').textContent = 'Resetting catalog...';
+        const response = await fetch('/v1/gateway/models/reset', { method: 'POST' });
+        const payload = await response.json();
+        routes = payload.data;
+        populateProviders();
+        render();
+        $('status').textContent = 'Restored default model rankings.';
+      });
       document.addEventListener('input', (event) => {
         if (event.target.matches('[data-id][data-key]')) collectEdits();
       });
