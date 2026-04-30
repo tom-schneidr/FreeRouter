@@ -74,6 +74,38 @@ data/model_catalog.json
 
 The launcher keeps `.env` in sync with new config keys but does not overwrite existing API keys.
 
+## Automatic Endpoint Diagnosis
+
+FreeRouter can check provider model availability in the background. When enabled, it calls each
+configured provider's OpenAI-compatible `/models` endpoint and creates reviewable suggestions for
+confirmed dead-route removals, recovered routes, and newly discovered models. The gateway does
+not apply those changes automatically; open the Models page and use the Updates popup to choose what
+to accept.
+
+Configure the cadence in `.env`:
+
+```text
+AUTO_ENDPOINT_DIAGNOSIS_ENABLED=true
+AUTO_ENDPOINT_DIAGNOSIS_INTERVAL_SECONDS=21600
+AUTO_ENDPOINT_DIAGNOSIS_STARTUP_DELAY_SECONDS=10
+ENDPOINT_DIAGNOSIS_SUPERVISOR_ENABLED=false
+ENDPOINT_DIAGNOSIS_SUPERVISOR_MODEL=
+```
+
+When `ENDPOINT_DIAGNOSIS_SUPERVISOR_ENABLED=true`, missing provider pricing data can be checked by
+an enabled free route from the local catalog. Set `ENDPOINT_DIAGNOSIS_SUPERVISOR_MODEL` to a route
+ID, provider model ID, or display name to prefer one; otherwise FreeRouter picks an enabled text route
+and prioritizes routes tagged `web-search`. The supervisor only allows add-route suggestions when it
+returns a high-confidence free-tier chat-model verdict; otherwise discovery fails closed.
+
+You can inspect or trigger the refresh manually:
+
+```text
+GET  /v1/gateway/endpoint-diagnosis
+POST /v1/gateway/endpoint-diagnosis/refresh
+POST /v1/gateway/endpoint-diagnosis/apply
+```
+
 ## Endpoints
 
 ```text
@@ -82,6 +114,9 @@ GET  /models
 GET  /v1/models
 GET  /v1/gateway/models
 PUT  /v1/gateway/models
+GET  /v1/gateway/endpoint-diagnosis
+POST /v1/gateway/endpoint-diagnosis/refresh
+POST /v1/gateway/endpoint-diagnosis/apply
 GET  /v1/providers/status
 POST /v1/chat/completions
 ```

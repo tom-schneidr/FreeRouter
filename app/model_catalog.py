@@ -76,6 +76,88 @@ def _route(
     )
 
 
+def route_id_for(provider_name: str, model_id: str) -> str:
+    raw_id = f"{provider_name}-{model_id}".lower()
+    return re.sub(r"[/:._]+", "-", raw_id).strip("-")
+
+
+def route_from_discovered_model(
+    provider_name: str,
+    model_id: str,
+    display_name: str | None = None,
+    context_window: int | None = None,
+    *,
+    tags: list[str] | None = None,
+    source_url: str = "",
+    notes: str = "Discovered automatically from provider model catalog.",
+    enabled: bool = True,
+) -> ModelRoute:
+    return _route(
+        provider_name,
+        model_id,
+        display_name or model_id,
+        context_window,
+        quality="unknown",
+        speed="variable",
+        tags=_canonical_tags(tags or ["text"]),
+        notes=notes,
+        source_url=source_url,
+        enabled=enabled,
+        text=False,
+    )
+
+
+def promote_routes_to_default_catalog(routes: list[ModelRoute]) -> list[ModelRoute]:
+    """Make approved discovered routes part of the reset baseline for this process."""
+    if not routes:
+        return []
+
+    existing_ids = {route.route_id for route in DEFAULT_MODEL_ROUTES}
+    existing_targets = {(route.provider_name, route.model_id) for route in DEFAULT_MODEL_ROUTES}
+    promoted: list[ModelRoute] = []
+
+    for route in routes:
+        if route.route_id in existing_ids or (route.provider_name, route.model_id) in existing_targets:
+            continue
+        default_route = ModelRoute(
+            route_id=route.route_id,
+            provider_name=route.provider_name,
+            model_id=route.model_id,
+            display_name=route.display_name,
+            rank=0,
+            enabled=route.enabled,
+            context_window=route.context_window,
+            quality=route.quality,
+            speed=route.speed,
+            cost=route.cost,
+            tags=_canonical_tags(route.tags),
+            notes=route.notes,
+            source_url=route.source_url,
+        )
+        DEFAULT_MODEL_ROUTES.append(default_route)
+        promoted.append(default_route)
+        existing_ids.add(default_route.route_id)
+        existing_targets.add((default_route.provider_name, default_route.model_id))
+
+    if promoted:
+        _assign_default_ranks()
+    return promoted
+
+
+def remove_routes_from_default_catalog(route_ids: set[str]) -> list[ModelRoute]:
+    """Remove approved dead routes from the reset baseline for this process."""
+    if not route_ids:
+        return []
+
+    removed = [route for route in DEFAULT_MODEL_ROUTES if route.route_id in route_ids]
+    if not removed:
+        return []
+
+    DEFAULT_MODEL_ROUTES[:] = [route for route in DEFAULT_MODEL_ROUTES if route.route_id not in route_ids]
+    _assign_default_ranks()
+    return removed
+
+
 def _canonical_tags(tags: list[str]) -> list[str]:
     return list(dict.fromkeys(tag for tag in tags if tag in CANONICAL_MODEL_TAGS))
 
@@ -382,7 +464,7 @@ class ModelCatalog:
             os.makedirs(directory, exist_ok=True)
 
         if not os.path.exists(self.path):
-            self._routes = DEFAULT_MODEL_ROUTES
+            self._routes = DEFAULT_MODEL_ROUTES.copy()
             self.save()
             return
 
@@ -441,6 +523,57 @@ class ModelCatalog:
             self.save()
             return updated
         raise KeyError(f"Unknown route_id: {route_id}")
+
+    def add_discovered_routes(self, routes: list[ModelRoute]) -> list[ModelRoute]:
+        """Merge newly discovered routes without disturbing existing user ranking choices."""
+        if not routes:
+            return []
+
+        existing_ids = {route.route_id for route in self._routes}
+        existing_targets = {(route.provider_name, route.model_id) for route in self._routes}
+        next_rank = max((route.rank for route in self._routes), default=0) + 1
+        added: list[ModelRoute] = []
+
+        for route in sorted(routes, key=_get_model_score, reverse=True):
+            if route.route_id in existing_ids or (route.provider_name, route.model_id) in existing_targets:
+                continue
+            updated = ModelRoute(
+                route_id=route.route_id,
+                provider_name=route.provider_name,
+                model_id=route.model_id,
+                display_name=route.display_name,
+                rank=next_rank,
+                enabled=route.enabled,
+                context_window=route.context_window,
+                quality=route.quality,
+                speed=route.speed,
+                cost=route.cost,
+                tags=_canonical_tags(route.tags),
+                notes=route.notes,
+                source_url=route.source_url,
+            )
+            self._routes.append(updated)
+            added.append(updated)
+            existing_ids.add(updated.route_id)
+            existing_targets.add((updated.provider_name, updated.model_id))
+            next_rank += 1
+
+        if added:
+            self.save()
+        return added
+
+    def remove_routes(self, route_ids: set[str]) -> list[ModelRoute]:
+        """Remove routes by id while preserving all unrelated catalog entries."""
+        if not route_ids:
+            return []
+
+        removed = [route for route in self._routes if route.route_id in route_ids]
+        if not removed:
+            return []
+
+        self._routes = [route for route in self._routes if route.route_id not in route_ids]
+        self.save()
+        return removed
 
     def reset_to_defaults(self) -> list[ModelRoute]:
         self._routes = DEFAULT_MODEL_ROUTES.copy()

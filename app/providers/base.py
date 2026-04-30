@@ -50,6 +50,55 @@ class ProviderAdapter:
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
+    async def list_models(self, client: httpx.AsyncClient) -> dict[str, Any]:
+        """Return the provider's OpenAI-compatible /models payload."""
+        if not self.api_key:
+            raise ProviderError(f"{self.name} is missing an API key")
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            **(self.extra_headers or {}),
+        }
+        response = await client.get(
+            f"{self.base_url.rstrip('/')}/models",
+            headers=headers,
+        )
+
+        if response.status_code == 429:
+            raise ProviderRateLimited(
+                f"{self.name} returned 429",
+                status_code=response.status_code,
+                headers=response.headers,
+                body=response.text,
+            )
+
+        if response.status_code >= 400:
+            raise ProviderError(
+                f"{self.name} returned HTTP {response.status_code}",
+                status_code=response.status_code,
+                headers=response.headers,
+                body=response.text,
+            )
+
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise ProviderError(
+                f"{self.name} returned a non-JSON response",
+                status_code=response.status_code,
+                headers=response.headers,
+                body=response.text,
+            ) from exc
+
+        if not isinstance(body, dict):
+            raise ProviderError(
+                f"{self.name} returned an invalid models payload",
+                status_code=response.status_code,
+                headers=response.headers,
+                body=response.text,
+            )
+        return body
+
     async def chat_completion(
         self,
         client: httpx.AsyncClient,

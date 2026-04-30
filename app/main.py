@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from app.chat_page import CHAT_HTML
+from app.endpoint_diagnosis import BackgroundEndpointDiagnosis, EndpointDiagnosisService, EndpointSupervisor
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS, ProviderError, ProviderRateLimited, build_provider_adapters
 from app.router import (
@@ -32,16 +33,44 @@ async def lifespan(app: FastAPI):
     await state.initialize()
     model_catalog = ModelCatalog(settings.model_catalog_path)
     model_catalog.initialize()
+    providers = build_provider_adapters(settings)
 
     app.state.gateway_state = state
     app.state.model_catalog = model_catalog
     app.state.waterfall_router = WaterfallRouter(
-        build_provider_adapters(settings),
+        providers,
         model_catalog,
         state,
         request_timeout_seconds=settings.request_timeout_seconds,
     )
-    yield
+    app.state.endpoint_diagnosis = EndpointDiagnosisService(
+        providers,
+        model_catalog,
+        state,
+        request_timeout_seconds=settings.request_timeout_seconds,
+        supervisor=EndpointSupervisor(
+            enabled=settings.endpoint_diagnosis_supervisor_enabled,
+            providers=providers,
+            catalog=model_catalog,
+            state=state,
+            preferred_model=settings.endpoint_diagnosis_supervisor_model,
+        ),
+    )
+    app.state.background_endpoint_diagnosis = None
+    if settings.auto_endpoint_diagnosis_enabled:
+        background = BackgroundEndpointDiagnosis(
+            app.state.endpoint_diagnosis,
+            interval_seconds=settings.auto_endpoint_diagnosis_interval_seconds,
+            startup_delay_seconds=settings.auto_endpoint_diagnosis_startup_delay_seconds,
+        )
+        app.state.background_endpoint_diagnosis = background
+        background.start()
+    try:
+        yield
+    finally:
+        background = app.state.background_endpoint_diagnosis
+        if background is not None:
+            await background.stop()
 
 
 app = FastAPI(
@@ -224,6 +253,34 @@ async def reset_gateway_model_health(route_id: str, request: Request) -> dict[st
         raise HTTPException(status_code=404, detail=f"Unknown route_id: {route_id}")
     route_state = await state.clear_route_health(route.route_id, route.provider_name, route.model_id)
     return {"data": {**asdict(route), "health": asdict(route_state)}}
+
+
+@app.get("/v1/gateway/endpoint-diagnosis")
+async def endpoint_diagnosis_status(request: Request) -> dict[str, Any]:
+    service: EndpointDiagnosisService = request.app.state.endpoint_diagnosis
+    report = service.last_report
+    return {
+        "enabled": get_settings().auto_endpoint_diagnosis_enabled,
+        "last_report": asdict(report) if report is not None else None,
+    }
+
+
+@app.post("/v1/gateway/endpoint-diagnosis/refresh")
+async def refresh_endpoint_diagnosis(request: Request) -> dict[str, Any]:
+    service: EndpointDiagnosisService = request.app.state.endpoint_diagnosis
+    report = await service.run_once()
+    return {"data": asdict(report)}
+
+
+@app.post("/v1/gateway/endpoint-diagnosis/apply")
+async def apply_endpoint_diagnosis(request: Request) -> dict[str, Any]:
+    service: EndpointDiagnosisService = request.app.state.endpoint_diagnosis
+    payload = await request.json()
+    suggestion_ids = payload.get("suggestion_ids") if isinstance(payload, dict) else None
+    if not isinstance(suggestion_ids, list) or not all(isinstance(item, str) for item in suggestion_ids):
+        raise HTTPException(status_code=400, detail="Expected { suggestion_ids: [string, ...] }")
+    applied = await service.apply_suggestions(suggestion_ids)
+    return {"data": [asdict(suggestion) for suggestion in applied]}
 
 
 async def _catalog_payload_with_health(catalog: ModelCatalog, state: StateManager) -> dict[str, Any]:
@@ -888,6 +945,19 @@ MODEL_CATALOG_HTML = """
       details.drag-over { border-top: 2px solid var(--accent); }
       details[draggable="true"] summary { cursor: grab; }
       details[draggable="true"] summary:active { cursor: grabbing; }
+      .update-count { display: none; margin-left: 0.35rem; min-width: 1.25rem; height: 1.25rem; padding: 0 0.35rem; border-radius: 999px; background: var(--amber); color: #111827; font-size: 0.72rem; align-items: center; justify-content: center; }
+      .update-count.active { display: inline-flex; }
+      .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center; padding: 1rem; background: rgba(2, 6, 23, 0.72); }
+      .modal-backdrop.open { display: flex; }
+      .modal { width: min(46rem, 100%); max-height: min(42rem, calc(100vh - 2rem)); overflow: auto; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45); }
+      .modal-header, .modal-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border-bottom: 1px solid var(--border); }
+      .modal-actions { border-top: 1px solid var(--border); border-bottom: none; justify-content: flex-end; }
+      .modal-body { display: grid; gap: 0.75rem; padding: 1rem; }
+      .suggestion { display: grid; grid-template-columns: auto 1fr; gap: 0.75rem; align-items: start; padding: 0.85rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); }
+      .suggestion input { margin-top: 0.2rem; accent-color: var(--accent); }
+      .suggestion-title { font-weight: 700; }
+      .suggestion-meta { margin-top: 0.25rem; color: var(--text-muted); font-size: 0.8rem; word-break: break-word; }
+      .empty-updates { color: var(--text-muted); padding: 0.5rem 0; }
     </style>
   </head>
   <body>
@@ -937,6 +1007,7 @@ MODEL_CATALOG_HTML = """
         </details>
         <button id="save">Save Ranking</button>
         <button id="reload" class="secondary">Reload</button>
+        <button id="updates" class="secondary" type="button">Updates <span id="updateCount" class="update-count"></span></button>
         <button id="reset" class="secondary" style="margin-left: auto; color: var(--red); border-color: rgba(239, 68, 68, 0.3);">Reset to Defaults</button>
       </div>
       <p class="filter-help">Tags are normalized to capabilities. Use the filter menu to combine capabilities, provider, context, and routeability.</p>
@@ -944,8 +1015,26 @@ MODEL_CATALOG_HTML = """
       <p class="status" id="status"></p>
       <div id="models" class="grid"></div>
     </main>
+    <div id="updateModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <h2 id="updateTitle">Endpoint Updates</h2>
+            <p class="muted" id="updateSummary">Loading suggestions...</p>
+          </div>
+          <button id="closeUpdates" class="secondary" type="button">Close</button>
+        </div>
+        <div id="updateList" class="modal-body"></div>
+        <div class="modal-actions">
+          <button id="refreshUpdates" class="secondary" type="button">Check now</button>
+          <button id="selectAllUpdates" class="secondary" type="button">Select all</button>
+          <button id="applyUpdates" type="button">Apply selected</button>
+        </div>
+      </div>
+    </div>
     <script>
       let routes = [];
+      let endpointSuggestions = [];
 
       const $ = (id) => document.getElementById(id);
       const normalize = (value) => String(value || '').toLowerCase();
@@ -972,6 +1061,7 @@ MODEL_CATALOG_HTML = """
         populateFilters();
         render();
         $('status').textContent = `Loaded ${routes.length} model routes from ${payload.catalog_path}`;
+        checkEndpointSuggestions(false);
       }
 
       function populateCheckboxes(containerId, name, options) {
@@ -1188,6 +1278,83 @@ MODEL_CATALOG_HTML = """
         }[char]));
       }
 
+      async function checkEndpointSuggestions(openWhenFound = true) {
+        const response = await fetch('/v1/gateway/endpoint-diagnosis');
+        if (!response.ok) return;
+        const payload = await response.json();
+        endpointSuggestions = payload.last_report?.suggestions || [];
+        $('updateCount').textContent = endpointSuggestions.length || '';
+        $('updateCount').classList.toggle('active', endpointSuggestions.length > 0);
+        if (openWhenFound && endpointSuggestions.length) openUpdateModal();
+      }
+
+      function openUpdateModal() {
+        $('updateModal').classList.add('open');
+        renderEndpointSuggestions();
+      }
+
+      function closeUpdateModal() {
+        $('updateModal').classList.remove('open');
+      }
+
+      function suggestionActionLabel(action) {
+        return {
+          add_route: 'New route',
+          remove_route: 'Remove route',
+          clear_stale: 'Recovered route',
+        }[action] || action;
+      }
+
+      function renderEndpointSuggestions() {
+        $('updateSummary').textContent = endpointSuggestions.length
+          ? `${endpointSuggestions.length} suggested update${endpointSuggestions.length === 1 ? '' : 's'} found. Nothing changes until you apply them.`
+          : 'No pending endpoint updates.';
+        $('updateList').innerHTML = endpointSuggestions.length ? endpointSuggestions.map((item) => `
+          <label class="suggestion">
+            <input type="checkbox" name="endpointSuggestion" value="${escapeHtml(item.suggestion_id)}">
+            <span>
+              <span class="suggestion-title">${escapeHtml(item.title)}</span>
+              <span class="pill">${escapeHtml(suggestionActionLabel(item.action))}</span>
+              <div class="suggestion-meta">${escapeHtml(item.provider_name)} / ${escapeHtml(item.model_id)}</div>
+              <div class="suggestion-meta">${escapeHtml(item.details)}</div>
+            </span>
+          </label>
+        `).join('') : '<div class="empty-updates">No pending endpoint updates.</div>';
+      }
+
+      async function refreshEndpointSuggestions() {
+        $('updateSummary').textContent = 'Checking provider catalogs...';
+        const response = await fetch('/v1/gateway/endpoint-diagnosis/refresh', { method: 'POST' });
+        const payload = await response.json();
+        endpointSuggestions = payload.data?.suggestions || [];
+        $('updateCount').textContent = endpointSuggestions.length || '';
+        $('updateCount').classList.toggle('active', endpointSuggestions.length > 0);
+        renderEndpointSuggestions();
+      }
+
+      async function applyEndpointSuggestions() {
+        const suggestionIds = [...document.querySelectorAll('input[name="endpointSuggestion"]:checked')]
+          .map((input) => input.value);
+        if (!suggestionIds.length) {
+          $('updateSummary').textContent = 'Choose at least one suggestion to apply.';
+          return;
+        }
+        $('updateSummary').textContent = 'Applying selected updates...';
+        const response = await fetch('/v1/gateway/endpoint-diagnosis/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ suggestion_ids: suggestionIds }),
+        });
+        if (!response.ok) {
+          $('updateSummary').textContent = 'Could not apply selected updates.';
+          return;
+        }
+        await checkEndpointSuggestions(false);
+        await load();
+        renderEndpointSuggestions();
+        $('updateSummary').textContent = 'Applied selected updates.';
+      }
+
       function dragStart(e, id) {
         draggedId = id;
         e.dataTransfer.effectAllowed = 'move';
@@ -1231,10 +1398,25 @@ MODEL_CATALOG_HTML = """
         if (!$('filterMenu').contains(event.target)) $('filterMenu').open = false;
       });
       document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') $('filterMenu').open = false;
+        if (event.key === 'Escape') {
+          $('filterMenu').open = false;
+          closeUpdateModal();
+        }
       });
       $('save').addEventListener('click', save);
       $('reload').addEventListener('click', load);
+      $('updates').addEventListener('click', openUpdateModal);
+      $('closeUpdates').addEventListener('click', closeUpdateModal);
+      $('refreshUpdates').addEventListener('click', refreshEndpointSuggestions);
+      $('selectAllUpdates').addEventListener('click', () => {
+        document.querySelectorAll('input[name="endpointSuggestion"]').forEach((input) => {
+          input.checked = true;
+        });
+      });
+      $('applyUpdates').addEventListener('click', applyEndpointSuggestions);
+      $('updateModal').addEventListener('click', (event) => {
+        if (event.target === $('updateModal')) closeUpdateModal();
+      });
       $('reset').addEventListener('click', async () => {
         if (!confirm('Are you sure you want to restore the default model rankings? This will overwrite your custom order.')) return;
         $('status').textContent = 'Resetting catalog...';
@@ -1249,6 +1431,8 @@ MODEL_CATALOG_HTML = """
         if (event.target.matches('[data-id][data-key]')) collectEdits();
       });
       load();
+      setTimeout(() => checkEndpointSuggestions(true), 1500);
+      setInterval(() => checkEndpointSuggestions(true), 60000);
     </script>
   </body>
 </html>
