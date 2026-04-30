@@ -8,9 +8,8 @@ from app.endpoint_diagnosis import (
     EndpointSupervisor,
     EndpointDiagnosisService,
     SupervisorVerdict,
-    _routes_from_payload,
 )
-from app.model_catalog import ModelCatalog, ModelRoute, route_id_for
+from app.model_catalog import ModelCatalog, route_id_for
 from app.providers.base import ProviderError, ProviderRateLimited, ProviderResponse
 from app.state import ProviderQuota, StateManager
 
@@ -108,114 +107,6 @@ class FakeSupervisor:
             model_id,
             SupervisorVerdict(False, "low", "No official free-tier evidence."),
         )
-
-
-def test_openrouter_catalog_payload_creates_free_routes_only():
-    provider = FakeCatalogProvider("openrouter", {})
-    routes = _routes_from_payload(
-        provider,
-        {
-            "data": [
-                {
-                    "id": "new/free-model:free",
-                    "name": "New Free Model",
-                    "context_length": 65536,
-                    "architecture": {"modality": "text->text"},
-                    "pricing": {"prompt": "0", "completion": "0"},
-                },
-                {
-                    "id": "paid/model",
-                    "name": "Paid Model",
-                    "pricing": {"prompt": "1", "completion": "1"},
-                },
-            ]
-        },
-    )
-
-    assert [route.model_id for route in routes] == ["new/free-model:free"]
-    assert routes[0].display_name == "New Free Model"
-    assert routes[0].context_window == 65536
-    assert "text" in routes[0].tags
-
-
-def test_non_openrouter_catalog_payload_requires_structured_free_pricing():
-    provider = FakeCatalogProvider("groq", {})
-    routes = _routes_from_payload(
-        provider,
-        {
-            "data": [
-                {
-                    "id": "llama-new-70b",
-                    "name": "Llama New 70B",
-                    "context_length": 131072,
-                    "architecture": {"modality": "text->text"},
-                },
-                {
-                    "id": "llama-free-70b",
-                    "name": "Llama Free 70B",
-                    "context_length": 131072,
-                    "architecture": {"modality": "text->text"},
-                    "pricing": {"prompt": "0", "completion": "0"},
-                },
-                {
-                    "id": "llama-paid-70b",
-                    "name": "Llama Paid 70B",
-                    "context_length": 131072,
-                    "architecture": {"modality": "text->text"},
-                    "pricing": {"prompt": "0.1", "completion": "0"},
-                },
-                {
-                    "id": "embedding-model",
-                    "name": "Embedding Model",
-                    "architecture": {"modality": "text->embedding"},
-                },
-                {
-                    "id": "veo-3.1-generate-preview",
-                    "name": "Veo 3.1",
-                    "description": "Video generation model",
-                    "architecture": {"modality": "text->video"},
-                },
-                {
-                    "id": "imagen-4.0-generate-001",
-                    "name": "Imagen 4",
-                    "description": "Image generation model",
-                    "architecture": {"input_modalities": ["text"], "output_modalities": ["image"]},
-                },
-            ]
-        },
-    )
-
-    assert [route.model_id for route in routes] == ["llama-free-70b"]
-    assert routes[0].provider_name == "groq"
-    assert routes[0].enabled is False
-    assert "free-tier limits can still vary" in routes[0].notes
-
-
-def test_openrouter_catalog_payload_excludes_non_chat_free_models():
-    provider = FakeCatalogProvider("openrouter", {})
-    routes = _routes_from_payload(
-        provider,
-        {
-            "data": [
-                {
-                    "id": "google/lyria-3-pro-preview",
-                    "name": "Google: Lyria 3 Pro Preview",
-                    "description": "Music generation model",
-                    "pricing": {"prompt": "0", "completion": "0"},
-                },
-                {
-                    "id": "qwen/qwen3-coder:free",
-                    "name": "Qwen3 Coder",
-                    "architecture": {"modality": "text->text"},
-                    "pricing": {"prompt": "0", "completion": "0"},
-                },
-            ]
-        },
-    )
-
-    assert [route.model_id for route in routes] == ["qwen/qwen3-coder:free"]
-    assert routes[0].tags[0] == "text"
-
 
 async def test_endpoint_diagnosis_suggests_openrouter_free_routes_and_stale_routes(tmp_path):
     state = StateManager(

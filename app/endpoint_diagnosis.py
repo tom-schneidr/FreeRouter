@@ -13,10 +13,10 @@ from app.model_catalog import (
     ModelRoute,
     promote_routes_to_default_catalog,
     remove_routes_from_default_catalog,
-    route_from_discovered_model,
 )
+from app.model_discovery import route_from_catalog_item, route_model_id_from_catalog_id
+from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderAdapter, ProviderError, ProviderRateLimited
-from app.router import _looks_like_missing_endpoint
 from app.state import StateManager
 
 
@@ -370,51 +370,32 @@ class EndpointDiagnosisService:
         provider: ProviderAdapter,
         item: dict[str, Any],
     ) -> ModelRoute | None:
+        route = route_from_catalog_item(provider, item)
+        if route is not None:
+            return route
+
         model_id = item.get("id")
         if not isinstance(model_id, str) or not model_id:
             return None
-        model_id = _route_model_id_from_catalog_id(model_id)
+        model_id = route_model_id_from_catalog_id(model_id)
         display_name = str(item.get("name") or model_id)
 
-        if not _is_chat_model(item):
+        if route_from_catalog_item(provider, item, assume_free=True) is None:
             return None
 
-        supervisor_note = ""
-        if _is_discoverable_free_model(provider, item):
-            supervisor_verified = False
-        else:
-            verdict = await self.supervisor.verify_free_chat_model(
-                client,
-                provider_name=provider.name,
-                model_id=model_id,
-                display_name=display_name,
-            )
-            if not verdict.free_chat_model:
-                return None
-            supervisor_verified = True
-            supervisor_note = _supervisor_note(verdict)
-
-        if provider.name == "openrouter":
-            enabled = True
-            notes = "Discovered automatically from OpenRouter /api/v1/models as a zero-cost or :free model."
-        else:
-            enabled = False
-            notes = (
-                "Discovered automatically after free-tier verification. Disabled by default until reviewed "
-                "because provider free-tier limits can still vary by account."
-            )
-        if supervisor_verified:
-            notes = f"{notes} {supervisor_note}".strip()
-
-        return route_from_discovered_model(
-            provider.name,
-            model_id,
+        verdict = await self.supervisor.verify_free_chat_model(
+            client,
+            provider_name=provider.name,
+            model_id=model_id,
             display_name=display_name,
-            context_window=_int_or_none(item.get("context_length")),
-            tags=_tags_for_model(item),
-            source_url=f"{provider.base_url.rstrip('/')}/models",
-            notes=notes,
-            enabled=enabled,
+        )
+        if not verdict.free_chat_model:
+            return None
+        return route_from_catalog_item(
+            provider,
+            item,
+            assume_free=True,
+            supervisor_note=_supervisor_note(verdict),
         )
 
     async def _route_health_suggestions(
@@ -512,7 +493,7 @@ class EndpointDiagnosisService:
         except httpx.RequestError:
             return "inconclusive"
         except ProviderError as exc:
-            return "missing" if _looks_like_missing_endpoint(exc) else "inconclusive"
+            return "missing" if looks_like_missing_model(exc) else "inconclusive"
         return "available"
 
 
@@ -551,10 +532,6 @@ class BackgroundEndpointDiagnosis:
                 # The request path must never depend on background refresh health.
                 pass
             await asyncio.sleep(self.interval_seconds)
-
-
-def _model_ids_from_payload(payload: dict[str, Any]) -> set[str]:
-    return _model_id_variants_from_ids(_raw_model_ids_from_payload(payload))
 
 
 def _raw_model_ids_from_payload(payload: dict[str, Any]) -> set[str]:
@@ -622,85 +599,6 @@ def _probe_payload() -> dict[str, Any]:
     }
 
 
-def _routes_from_payload(provider: ProviderAdapter, payload: dict[str, Any]) -> list[ModelRoute]:
-    routes: list[ModelRoute] = []
-    for item in payload.get("data", []):
-        if not isinstance(item, dict):
-            continue
-        route = _route_from_structured_free_catalog_item(provider, item)
-        if route is not None:
-            routes.append(route)
-    return routes
-
-
-def _route_from_structured_free_catalog_item(
-    provider: ProviderAdapter,
-    item: dict[str, Any],
-) -> ModelRoute | None:
-    model_id = item.get("id")
-    if not isinstance(model_id, str) or not model_id:
-        return None
-    model_id = _route_model_id_from_catalog_id(model_id)
-
-    if not _is_discoverable_free_model(provider, item) or not _is_chat_model(item):
-        return None
-
-    if provider.name == "openrouter":
-        enabled = True
-        notes = "Discovered automatically from OpenRouter /api/v1/models as a zero-cost or :free model."
-    else:
-        enabled = False
-        notes = (
-            "Discovered automatically from structured zero pricing in the provider /models endpoint. "
-            "Disabled by default until reviewed because provider free-tier limits can still vary by account."
-        )
-
-    return route_from_discovered_model(
-        provider.name,
-        model_id,
-        display_name=str(item.get("name") or model_id),
-        context_window=_int_or_none(item.get("context_length")),
-        tags=_tags_for_model(item),
-        source_url=f"{provider.base_url.rstrip('/')}/models",
-        notes=notes,
-        enabled=enabled,
-    )
-
-
-def _is_discoverable_free_model(provider: ProviderAdapter, item: dict[str, Any]) -> bool:
-    if provider.name == "openrouter":
-        return _is_openrouter_free_model(item)
-    return _has_structured_zero_price(item)
-
-
-def _is_openrouter_free_model(item: dict[str, Any]) -> bool:
-    model_id = item.get("id")
-    if isinstance(model_id, str) and model_id.endswith(":free"):
-        return True
-    return _has_structured_zero_price(item)
-
-
-def _has_structured_zero_price(item: dict[str, Any]) -> bool:
-    pricing = item.get("pricing")
-    if not isinstance(pricing, dict):
-        return False
-
-    price_keys = (
-        "prompt",
-        "completion",
-        "input",
-        "output",
-        "input_price",
-        "output_price",
-        "prompt_price",
-        "completion_price",
-    )
-    prices = [_float_or_none(pricing.get(key)) for key in price_keys if key in pricing]
-    if not prices or any(price is None for price in prices):
-        return False
-    return all(price == 0 for price in prices)
-
-
 def _chat_response_text(payload: dict[str, Any]) -> str:
     choices = payload.get("choices")
     if not isinstance(choices, list):
@@ -750,138 +648,3 @@ def _supervisor_note(verdict: SupervisorVerdict) -> str:
     if source_text:
         return f"Supervisor web search verified free-tier status: {verdict.reason} Sources: {source_text}"
     return f"Supervisor web search verified free-tier status: {verdict.reason}"
-
-
-def _route_model_id_from_catalog_id(model_id: str) -> str:
-    return model_id.removeprefix("models/")
-
-
-def _tags_for_model(item: dict[str, Any]) -> list[str]:
-    text = _model_search_text(item)
-
-    tags = ["text"] if _is_chat_model(item) else []
-    if any(term in text for term in ("vision", "image", "vl", "ocr", "pixtral", "gemma-3")):
-        tags.append("vision")
-    if any(term in text for term in ("audio", "lyria", "speech", "music")):
-        tags.append("audio")
-    if any(term in text for term in ("reason", "thinking", "qwen", "hermes", "gpt-oss")):
-        tags.append("reasoning")
-    if any(term in text for term in ("coder", "code")):
-        tags.append("coding")
-    if "ocr" in text:
-        tags.append("classification")
-    return list(dict.fromkeys(tags))
-
-
-def _is_chat_model(item: dict[str, Any]) -> bool:
-    text = _model_search_text(item)
-    if any(term in text for term in _NON_CHAT_MODEL_TERMS):
-        return False
-
-    architecture = item.get("architecture")
-    if isinstance(architecture, dict):
-        input_modalities = _string_list(architecture.get("input_modalities"))
-        output_modalities = _string_list(architecture.get("output_modalities"))
-        if output_modalities and "text" not in output_modalities:
-            return False
-        modality = str(architecture.get("modality") or "").lower()
-        if modality:
-            parts = [part.strip() for part in modality.replace(",", "->").split("->") if part.strip()]
-            if parts and "text" not in parts[-1]:
-                return False
-        if input_modalities and output_modalities:
-            return "text" in output_modalities
-
-    if any(term in text for term in _CHAT_MODEL_TERMS):
-        return True
-    if not isinstance(architecture, dict):
-        return False
-    return "text" in text and not any(term in text for term in ("generate", "generation"))
-
-
-_CHAT_MODEL_TERMS = (
-    "chat",
-    "instruct",
-    "llm",
-    "language model",
-    "text->text",
-    "text to text",
-    "gemini",
-    "gemma",
-    "llama",
-    "qwen",
-    "deepseek",
-    "mistral",
-    "mixtral",
-    "gpt",
-    "claude",
-    "command",
-    "nemotron",
-    "hermes",
-    "kimi",
-    "minimax",
-    "glm",
-    "yi",
-    "phi",
-    "dolphin",
-    "ling",
-)
-
-_NON_CHAT_MODEL_TERMS = (
-    "veo",
-    "video generation",
-    "generate-preview",
-    "generate-001",
-    "imagen",
-    "image generation",
-    "lyria",
-    "music generation",
-    "tts",
-    "text-to-speech",
-    "speech generation",
-    "embedding",
-    "embed",
-    "rerank",
-    "moderation",
-    "safety",
-    "guard",
-    "translat",
-)
-
-
-def _model_search_text(item: dict[str, Any]) -> str:
-    architecture = item.get("architecture")
-    architecture_values: list[str] = []
-    if isinstance(architecture, dict):
-        architecture_values = [str(value) for value in architecture.values()]
-    return " ".join(
-        str(value)
-        for value in (
-            item.get("id"),
-            item.get("name"),
-            item.get("description"),
-            *architecture_values,
-        )
-    ).lower()
-
-
-def _string_list(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [str(item).lower() for item in value if isinstance(item, str)]
-    if isinstance(value, str):
-        return [part.strip().lower() for part in value.replace(",", " ").split() if part.strip()]
-    return []
-
-
-def _float_or_none(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _int_or_none(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None

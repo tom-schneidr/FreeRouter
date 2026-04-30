@@ -407,3 +407,27 @@ async def test_router_rejects_streaming(tmp_path):
         await router.route_chat_completion(
             {"model": "auto", "messages": [{"role": "user", "content": "hi"}], "stream": True}
         )
+
+
+async def test_router_event_stream_classifies_missing_model_bodies(tmp_path):
+    """Model-not-found provider errors should emit canonical route_failed events."""
+    state = await _state(tmp_path)
+    primary = FakeProvider(
+        "primary",
+        error=ProviderError(
+            "bad request",
+            status_code=400,
+            body='{"error":{"message":"Unknown model: primary/model"}}',
+        ),
+    )
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+
+    events = [event async for event in router.iter_route_events(_payload())]
+
+    failed = [event for event in events if event.event_type == "route_failed"]
+    selected = [event for event in events if event.event_type == "route_selected"]
+    assert failed
+    assert failed[0].reason == "model_not_found"
+    assert selected
+    assert selected[0].provider_name == "fallback"

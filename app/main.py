@@ -1,29 +1,25 @@
 from __future__ import annotations
 
-import asyncio
 import json
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from time import time
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from app.chat_page import CHAT_HTML
 from app.endpoint_diagnosis import BackgroundEndpointDiagnosis, EndpointDiagnosisService, EndpointSupervisor
 from app.model_catalog import ModelCatalog
-from app.providers import PROVIDER_QUOTAS, ProviderError, ProviderRateLimited, build_provider_adapters
+from app.providers import PROVIDER_QUOTAS, ProviderError, build_provider_adapters
 from app.router import (
     NoProviderAvailable,
     WaterfallRouter,
-    _looks_like_missing_endpoint,
-    validate_chat_completion_payload,
 )
 from app.settings import get_settings
 from app.state import StateManager
+from app.stream_route import stream_route_chat
 
 
 @asynccontextmanager
@@ -635,141 +631,12 @@ async def chat_completions(request: Request) -> JSONResponse:
     )
 
 
-async def _sse_route_chat(
-    payload: dict[str, Any],
-    router: WaterfallRouter,
-) -> AsyncGenerator[str, None]:
-    """Generator that emits SSE events as the waterfall tries each route."""
-
-    def evt(data: dict[str, Any]) -> str:
-        return f"data: {json.dumps(data)}\n\n"
-
-    try:
-        validate_chat_completion_payload(payload)
-    except ValueError as exc:
-        yield evt({"type": "error", "message": str(exc)})
-        return
-    if payload.get("stream"):
-        yield evt({"type": "error", "message": "Streaming not supported via this endpoint."})
-        return
-
-    requested_model = payload.get("model", "auto")
-    routes = router.model_catalog.enabled_routes(requested_model)
-    estimated_prompt_tokens = sum(
-        len(str(m.get("content", ""))) // 4 for m in payload.get("messages", [])
-    )
-    max_new = payload.get("max_tokens") or 4096
-    estimated_total = estimated_prompt_tokens + max_new
-    rate_limit_probe_providers: set[str] = set()
-
-    async with httpx.AsyncClient(timeout=router.request_timeout_seconds) as client:
-        for route in routes:
-            provider = router.provider_by_name.get(route.provider_name)
-            if not provider or not provider.is_configured:
-                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "not_configured"})
-                continue
-
-
-            ctx = route.context_window or provider.max_context_tokens
-            if ctx and estimated_prompt_tokens > ctx:
-                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "context_exceeded"})
-                continue
-
-            provider_avail = await router.state.check_available(route.provider_name, estimated_total)
-            if not provider_avail.available:
-                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": provider_avail.reason or "quota_exhausted"})
-                continue
-
-            route_avail = await router.state.check_route_available(
-                route.route_id,
-                route.provider_name,
-                route.model_id,
-                allow_rate_limit_probe=route.provider_name not in rate_limit_probe_providers,
-            )
-            if not route_avail.available:
-                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": route_avail.reason or "route_unavailable"})
-                continue
-            if route_avail.reason in {"rate_limit_probe", "too_slow_probe"}:
-                rate_limit_probe_providers.add(route.provider_name)
-
-            avail = await router.state.try_reserve_request(route.provider_name, estimated_total)
-            if not avail.available:
-                yield evt({"type": "route_skip", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": avail.reason or "quota_exhausted"})
-                continue
-
-            yield evt({"type": "route_trying", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id})
-            await asyncio.sleep(0)
-
-            try:
-                response = await provider.chat_completion(client, payload, route.model_id)
-            except ProviderRateLimited as exc:
-                route_state = await router.state.mark_route_rate_limited(route.route_id, route.provider_name, route.model_id, headers=exc.headers, status_code=exc.status_code)
-                await router.state.mark_exhausted(route.provider_name, headers=exc.headers, status_code=exc.status_code)
-                yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "rate_limited_429"})
-                yield evt({"type": "route_flagged", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": route_state.status})
-                continue
-            except httpx.TimeoutException:
-                route_state = await router.state.mark_route_timeout(route.route_id, route.provider_name, route.model_id)
-                yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "timeout"})
-                if route_state.status == "too_slow":
-                    yield evt({"type": "route_flagged", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "too_slow"})
-                continue
-            except httpx.RequestError as exc:
-                yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": exc.__class__.__name__})
-                continue
-            except ProviderError as exc:
-                if exc.status_code and (500 <= exc.status_code < 600 or exc.status_code in {401, 403}):
-                    reason = "server_error" if exc.status_code >= 500 else ("auth_error" if exc.status_code in {401, 403} else "model_not_found")
-                    yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": reason})
-                    continue
-                if _looks_like_missing_endpoint(exc):
-                    route_state = await router.state.mark_route_not_found(route.route_id, route.provider_name, route.model_id, status_code=exc.status_code)
-                    yield evt({"type": "route_fail", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "model_not_found"})
-                    if route_state.status == "potentially_outdated":
-                        yield evt({"type": "route_flagged", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id, "reason": "potentially_outdated"})
-                    continue
-                yield evt({"type": "error", "message": str(exc)})
-                return
-
-            # Success
-            usage = response.body.get("usage")
-            await router.state.record_route_success(
-                route.route_id,
-                route.provider_name,
-                route.model_id,
-                usage=usage if isinstance(usage, dict) else None,
-                status_code=response.status_code,
-            )
-            await router.state.record_success(
-                route.provider_name,
-                usage=usage if isinstance(usage, dict) else None,
-                headers=response.headers,
-                status_code=response.status_code,
-            )
-            yield evt({"type": "route_selected", "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id})
-
-            content = ""
-            try:
-                content = response.body["choices"][0]["message"]["content"] or ""
-            except (KeyError, IndexError):
-                pass
-            chunk_size = 12
-            for i in range(0, len(content), chunk_size):
-                yield evt({"type": "content", "text": content[i:i + chunk_size]})
-                await asyncio.sleep(0.015)
-
-            yield evt({"type": "done", "content": content, "provider": route.provider_name, "model_id": route.model_id, "route_id": route.route_id})
-            return
-
-    yield evt({"type": "error", "message": "All providers exhausted. No model could serve this request."})
-
-
 @app.post("/v1/chat/completions/stream-route")
 async def chat_completions_stream_route(request: Request) -> StreamingResponse:
     payload: dict[str, Any] = await request.json()
     router: WaterfallRouter = request.app.state.waterfall_router
     return StreamingResponse(
-        _sse_route_chat(payload, router),
+        stream_route_chat(payload, router),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

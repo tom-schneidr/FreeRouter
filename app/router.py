@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from app.model_catalog import ModelCatalog
-from app.providers.base import ProviderAdapter, ProviderError, ProviderRateLimited
+from app.provider_errors import looks_like_missing_model
+from app.providers.base import ProviderAdapter, ProviderError, ProviderRateLimited, ProviderResponse
 from app.state import StateManager
 
 
@@ -39,6 +41,20 @@ class RouteResult:
     attempts: list[ProviderAttempt]
 
 
+@dataclass(frozen=True)
+class RouteEvent:
+    """Structured event emitted while evaluating waterfall routes."""
+
+    event_type: str
+    provider_name: str | None = None
+    route_id: str | None = None
+    model_id: str | None = None
+    reason: str | None = None
+    status_code: int | None = None
+    attempts: list[ProviderAttempt] | None = None
+    response: "ProviderResponse" | None = None
+
+
 class WaterfallRouter:
     def __init__(
         self,
@@ -61,8 +77,24 @@ class WaterfallRouter:
         Automatically handles rate-limit responses, timeouts, and server errors by falling
         through to the next route. Raises NoProviderAvailable if all routes are exhausted.
         """
-        validate_chat_completion_payload(payload)
+        async for event in self.iter_route_events(payload):
+            if event.event_type != "route_selected":
+                continue
+            if event.response is None or event.attempts is None:
+                raise RuntimeError("route_selected event is missing response context")
+            return RouteResult(
+                event.response.body,
+                event.provider_name or "",
+                event.route_id or "",
+                event.model_id or "",
+                event.attempts,
+            )
 
+        raise RuntimeError("Router event stream ended unexpectedly")
+
+    async def iter_route_events(self, payload: dict[str, Any]) -> AsyncGenerator[RouteEvent, None]:
+        """Yield structured route events while executing waterfall routing."""
+        validate_chat_completion_payload(payload)
         if payload.get("stream"):
             raise ValueError(
                 "Streaming is not supported yet because transparent fallback needs a full response"
@@ -80,42 +112,57 @@ class WaterfallRouter:
             for route in self.model_catalog.enabled_routes(payload.get("model")):
                 provider = self.provider_by_name.get(route.provider_name)
                 if provider is None:
-                    attempts.append(
-                        ProviderAttempt(
-                            route.provider_name,
-                            "skipped",
-                            "unknown_provider",
-                            route_id=route.route_id,
-                            model_id=route.model_id,
-                        ),
+                    attempt = ProviderAttempt(
+                        route.provider_name,
+                        "skipped",
+                        "unknown_provider",
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=route.provider_name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
                     )
                     continue
 
                 if not provider.is_configured:
-                    attempts.append(
-                        ProviderAttempt(
-                            provider.name,
-                            "skipped",
-                            "missing_api_key",
-                            route_id=route.route_id,
-                            model_id=route.model_id,
-                        ),
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "skipped",
+                        "missing_api_key",
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
                     )
                     continue
 
                 max_context_tokens = route.context_window or provider.max_context_tokens
-                if (
-                    max_context_tokens is not None
-                    and estimated_prompt_tokens > max_context_tokens
-                ):
-                    attempts.append(
-                        ProviderAttempt(
-                            provider.name,
-                            "skipped",
-                            "context_window_exceeded",
-                            route_id=route.route_id,
-                            model_id=route.model_id,
-                        ),
+                if max_context_tokens is not None and estimated_prompt_tokens > max_context_tokens:
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "skipped",
+                        "context_window_exceeded",
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
                     )
                     continue
 
@@ -124,14 +171,20 @@ class WaterfallRouter:
                     estimated_total_tokens,
                 )
                 if not provider_availability.available:
-                    attempts.append(
-                        ProviderAttempt(
-                            provider.name,
-                            "skipped",
-                            provider_availability.reason,
-                            route_id=route.route_id,
-                            model_id=route.model_id,
-                        ),
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "skipped",
+                        provider_availability.reason,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
                     )
                     continue
 
@@ -142,14 +195,20 @@ class WaterfallRouter:
                     allow_rate_limit_probe=provider.name not in rate_limit_probe_providers,
                 )
                 if not route_availability.available:
-                    attempts.append(
-                        ProviderAttempt(
-                            provider.name,
-                            "skipped",
-                            route_availability.reason,
-                            route_id=route.route_id,
-                            model_id=route.model_id,
-                        ),
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "skipped",
+                        route_availability.reason,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
                     )
                     continue
                 if route_availability.reason in {"rate_limit_probe", "too_slow_probe"}:
@@ -160,21 +219,34 @@ class WaterfallRouter:
                     estimated_total_tokens,
                 )
                 if not availability.available:
-                    attempts.append(
-                        ProviderAttempt(
-                            provider.name,
-                            "skipped",
-                            availability.reason,
-                            route_id=route.route_id,
-                            model_id=route.model_id,
-                        ),
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "skipped",
+                        availability.reason,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
                     )
                     continue
+
+                yield RouteEvent(
+                    event_type="route_trying",
+                    provider_name=provider.name,
+                    route_id=route.route_id,
+                    model_id=route.model_id,
+                )
 
                 try:
                     response = await provider.chat_completion(client, payload, route.model_id)
                 except ProviderRateLimited as exc:
-                    await self.state.mark_route_rate_limited(
+                    flagged_state = await self.state.mark_route_rate_limited(
                         route.route_id,
                         provider.name,
                         route.model_id,
@@ -186,15 +258,29 @@ class WaterfallRouter:
                         headers=exc.headers,
                         status_code=exc.status_code,
                     )
-                    attempts.append(
-                        ProviderAttempt(
-                            provider.name,
-                            "rate_limited",
-                            "provider_429",
-                            exc.status_code,
-                            route.route_id,
-                            route.model_id,
-                        ),
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "rate_limited",
+                        "provider_429",
+                        exc.status_code,
+                        route.route_id,
+                        route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_failed",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                        status_code=exc.status_code,
+                    )
+                    yield RouteEvent(
+                        event_type="route_flagged",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=flagged_state.status,
                     )
                     continue
                 except httpx.TimeoutException:
@@ -203,97 +289,134 @@ class WaterfallRouter:
                         provider.name,
                         route.model_id,
                     )
-                    attempts.append(
-                        ProviderAttempt(
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "failed",
+                        "timeout",
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_failed",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                    )
+                    if timeout_state.status == "too_slow":
+                        flagged = ProviderAttempt(
                             provider.name,
-                            "failed",
-                            "timeout",
+                            "flagged",
+                            "too_slow",
                             route_id=route.route_id,
                             model_id=route.model_id,
                         )
-                    )
-                    if timeout_state.status == "too_slow":
-                        attempts.append(
-                            ProviderAttempt(
-                                provider.name,
-                                "flagged",
-                                "too_slow",
-                                route_id=route.route_id,
-                                model_id=route.model_id,
-                            )
+                        attempts.append(flagged)
+                        yield RouteEvent(
+                            event_type="route_flagged",
+                            provider_name=provider.name,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                            reason=flagged.reason,
                         )
                     continue
                 except httpx.RequestError as exc:
-                    attempts.append(
-                        ProviderAttempt(
-                            provider.name,
-                            "failed",
-                            exc.__class__.__name__,
-                            route_id=route.route_id,
-                            model_id=route.model_id,
-                        )
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "failed",
+                        exc.__class__.__name__,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_failed",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
                     )
                     continue
                 except ProviderError as exc:
                     if exc.status_code is not None and 500 <= exc.status_code < 600:
-                        attempts.append(
-                            ProviderAttempt(
-                                provider.name,
-                                "failed",
-                                "provider_5xx",
-                                exc.status_code,
-                                route.route_id,
-                                route.model_id,
-                            ),
+                        attempt = ProviderAttempt(
+                            provider.name,
+                            "failed",
+                            "provider_5xx",
+                            exc.status_code,
+                            route.route_id,
+                            route.model_id,
+                        )
+                        attempts.append(attempt)
+                        yield RouteEvent(
+                            event_type="route_failed",
+                            provider_name=provider.name,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                            reason=attempt.reason,
+                            status_code=exc.status_code,
                         )
                         continue
                     if exc.status_code in {401, 403}:
-                        attempts.append(
-                            ProviderAttempt(
-                                provider.name,
-                                "failed",
-                                "auth_error",
-                                exc.status_code,
-                                route.route_id,
-                                route.model_id,
-                            ),
+                        attempt = ProviderAttempt(
+                            provider.name,
+                            "failed",
+                            "auth_error",
+                            exc.status_code,
+                            route.route_id,
+                            route.model_id,
+                        )
+                        attempts.append(attempt)
+                        yield RouteEvent(
+                            event_type="route_failed",
+                            provider_name=provider.name,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                            reason=attempt.reason,
+                            status_code=exc.status_code,
                         )
                         continue
-                    if exc.status_code == 404:
-                        await self.state.mark_route_not_found(
+                    if looks_like_missing_model(exc):
+                        route_state = await self.state.mark_route_not_found(
                             route.route_id,
                             provider.name,
                             route.model_id,
                             status_code=exc.status_code,
                         )
-                        attempts.append(
-                            ProviderAttempt(
-                                provider.name,
-                                "failed",
-                                "model_not_found",
-                                exc.status_code,
-                                route.route_id,
-                                route.model_id,
-                            ),
-                        )
-                        continue
-                    if _looks_like_missing_endpoint(exc):
-                        await self.state.mark_route_not_found(
-                            route.route_id,
+                        attempt = ProviderAttempt(
                             provider.name,
+                            "failed",
+                            "model_not_found",
+                            exc.status_code,
+                            route.route_id,
                             route.model_id,
+                        )
+                        attempts.append(attempt)
+                        yield RouteEvent(
+                            event_type="route_failed",
+                            provider_name=provider.name,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                            reason=attempt.reason,
                             status_code=exc.status_code,
                         )
-                        attempts.append(
-                            ProviderAttempt(
+                        if route_state.status == "potentially_outdated":
+                            flagged = ProviderAttempt(
                                 provider.name,
-                                "failed",
-                                "model_not_found",
-                                exc.status_code,
-                                route.route_id,
-                                route.model_id,
-                            ),
-                        )
+                                "flagged",
+                                "potentially_outdated",
+                                route_id=route.route_id,
+                                model_id=route.model_id,
+                            )
+                            attempts.append(flagged)
+                            yield RouteEvent(
+                                event_type="route_flagged",
+                                provider_name=provider.name,
+                                route_id=route.route_id,
+                                model_id=route.model_id,
+                                reason=flagged.reason,
+                            )
                         continue
                     raise
 
@@ -311,22 +434,24 @@ class WaterfallRouter:
                     headers=response.headers,
                     status_code=response.status_code,
                 )
-                attempts.append(
-                    ProviderAttempt(
-                        provider.name,
-                        "selected",
-                        route_id=route.route_id,
-                        model_id=route.model_id,
-                    )
-                )
-                return RouteResult(
-                    response.body,
+                selected = ProviderAttempt(
                     provider.name,
-                    route.route_id,
-                    route.model_id,
-                    attempts,
+                    "selected",
+                    route_id=route.route_id,
+                    model_id=route.model_id,
                 )
+                attempts.append(selected)
+                yield RouteEvent(
+                    event_type="route_selected",
+                    provider_name=provider.name,
+                    route_id=route.route_id,
+                    model_id=route.model_id,
+                    attempts=list(attempts),
+                    response=response,
+                )
+                return
 
+        yield RouteEvent(event_type="routing_exhausted", attempts=list(attempts))
         raise NoProviderAvailable(attempts)
 
 
@@ -363,23 +488,6 @@ def _content_to_text(content: Any) -> str:
         if "content" in content:
             return _content_to_text(content["content"])
     return str(content)
-
-
-def _looks_like_missing_endpoint(exc: ProviderError) -> bool:
-    if exc.status_code in {404, 410}:
-        return True
-    if exc.status_code not in {400, 422} or not exc.body:
-        return False
-    body = exc.body.lower()
-    return (
-        "model" in body
-        and (
-            "not found" in body
-            or "does not exist" in body
-            or "not exist" in body
-            or "unknown model" in body
-        )
-    )
 
 
 def validate_chat_completion_payload(payload: dict[str, Any]) -> None:

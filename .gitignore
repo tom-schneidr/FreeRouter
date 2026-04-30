@@ -1,35 +1,37 @@
-# ── Secrets ───────────────────────────────────────────────
+# Secrets
 .env
 
-# ── Python ────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyo
 
-# ── Virtual environments ─────────────────────────────────
+# Virtual environments
 .venv/
 venv/
 env/
 
-# ── Distribution / packaging ─────────────────────────────
+# Distribution / packaging
 *.egg-info/
 *.egg
 dist/
 build/
 *.whl
 
-# ── Testing ───────────────────────────────────────────────
+# Testing
 .pytest_cache/
+.pytest-temp/
+data/pytest-temp/
 .coverage
 htmlcov/
 .tox/
 
-# ── Linting / formatting ─────────────────────────────────
+# Linting / formatting
 .ruff_cache/
 .mypy_cache/
 
-# ── IDE / editor ──────────────────────────────────────────
+# IDE / editor
 .vscode/
 .idea/
 *.swp
@@ -38,7 +40,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# ── Runtime data (user-specific, not source) ──────────────
+# Runtime data (user-specific, not source)
 data/*.sqlite3
 data/*.sqlite3-*
 data/model_catalog.json

@@ -2,7 +2,8 @@ param(
     [string]$HostName = $(if ($env:GATEWAY_HOST) { $env:GATEWAY_HOST } else { "127.0.0.1" }),
     [int]$Port = $(if ($env:GATEWAY_PORT) { [int]$env:GATEWAY_PORT } else { 8000 }),
     [switch]$NoReload,
-    [switch]$InstallOnly
+    [switch]$InstallOnly,
+    [switch]$RuntimeOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,7 +91,12 @@ if (-not (Test-Path $VenvPython)) {
 
 Write-Host "Installing/updating gateway dependencies..."
 & $VenvPython -m pip install --upgrade pip
-& $VenvPython -m pip install -e .
+if ($RuntimeOnly) {
+    & $VenvPython -m pip install -e .
+}
+else {
+    & $VenvPython -m pip install -e ".[dev]"
+}
 
 $EnvPath = Join-Path $ProjectRoot ".env"
 $EnvExamplePath = Join-Path $ProjectRoot ".env.example"

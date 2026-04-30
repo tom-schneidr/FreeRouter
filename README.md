@@ -11,8 +11,13 @@ The router ranks all available free-tier models based on their raw benchmark str
 ```text
 .
 ├── app/
+│   ├── chat_page.py            # Chat playground HTML template
+│   ├── client.py               # Programmatic client wrapper around router
+│   ├── endpoint_diagnosis.py   # Catalog diagnosis and reviewable update suggestions
 │   ├── main.py                 # FastAPI app and OpenAI-compatible endpoints
 │   ├── model_catalog.py        # Editable ranked model catalog defaults
+│   ├── model_discovery.py      # Structured /models payload discovery helpers
+│   ├── provider_errors.py      # Provider error classification helpers
 │   ├── router.py               # Ranked model waterfall routing engine
 │   ├── settings.py             # .env-backed configuration
 │   ├── state.py                # SQLite quota/cooldown/RPM tracker
@@ -20,7 +25,7 @@ The router ranks all available free-tier models based on their raw benchmark str
 │       ├── base.py             # OpenAI-compatible provider adapter
 │       └── registry.py         # Provider order, quotas, endpoints, models
 ├── data/                       # Runtime SQLite DB and editable model catalog
-├── tests/                      # State and router behavior tests
+├── tests/                      # Router/state/catalog/discovery/provider tests
 ├── .env.example                # API key template
 ├── run.bat                     # Execution-policy-safe Windows launcher
 ├── run.ps1                     # PowerShell bootstrap-and-run script
@@ -46,7 +51,12 @@ Useful options:
 .\run.bat -InstallOnly
 .\run.bat -Port 8080
 .\run.bat -NoReload
+.\run.bat -RuntimeOnly
 ```
+
+By default `run.ps1` installs the project with dev extras (`.[dev]`) so `pytest` and `ruff`
+are available in the local virtual environment. Use `-RuntimeOnly` when you only want
+runtime dependencies.
 
 Point OpenAI-compatible clients at:
 
@@ -128,6 +138,6 @@ returned as `X-Gateway-Provider`, `X-Gateway-Route`, `X-Gateway-Model`, and
 ## Validate
 
 ```powershell
-python -m pytest
-python -m ruff check .
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff check .
 ```
