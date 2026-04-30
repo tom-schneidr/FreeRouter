@@ -406,6 +406,36 @@ MODEL_CATALOG_HTML = """
       .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--bg-tertiary); margin: 0.1rem; font-size: 0.75rem; border: 1px solid var(--border); }
       .body { border-top: 1px solid var(--border); padding: 1.25rem; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); background: var(--bg-primary); }
       label { display: grid; gap: 0.4rem; color: var(--text-muted); font-size: 0.85rem; font-weight: 500; }
+      .meta { display: grid; gap: 0.35rem; color: var(--text-muted); font-size: 0.85rem; font-weight: 500; }
+      .meta span { color: var(--text); font-weight: 400; word-break: break-word; }
+      .filter-help { color: var(--text-muted); font-size: 0.85rem; margin-top: -0.75rem; margin-bottom: 1rem; }
+      .filter-menu { position: relative; overflow: visible; }
+      .filter-menu summary { display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-tertiary); cursor: pointer; user-select: none; }
+      .filter-menu[open] summary { border-color: var(--accent); }
+      .filter-badge { display: none; min-width: 1.35rem; height: 1.35rem; padding: 0 0.35rem; border-radius: 999px; background: var(--accent); color: white; font-size: 0.75rem; align-items: center; justify-content: center; }
+      .filter-badge.active { display: inline-flex; }
+      .filter-panel { position: fixed; z-index: 5; top: 7rem; left: 50%; transform: translateX(-50%); width: min(44rem, calc(100vw - 2rem)); max-height: calc(100vh - 8rem); overflow: auto; display: grid; gap: 1rem; padding: 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); }
+      .filter-section { display: grid; gap: 0.5rem; }
+      .filter-section h3 { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+      .filter-options { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+      .filter-option { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.55rem; border: 1px solid var(--border); border-radius: 999px; color: var(--text); background: var(--bg-primary); cursor: pointer; }
+      .filter-option input { width: auto; padding: 0; accent-color: var(--accent); }
+      .filter-option:has(input:checked) { border-color: var(--accent); background: var(--accent-glow); color: #bfdbfe; }
+      .active-filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: -0.5rem; margin-bottom: 1rem; }
+      .active-filter { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text); font-size: 0.8rem; }
+      .active-filter button { padding: 0; border: none; background: transparent; color: var(--text-muted); font-weight: 700; }
+      .active-filter button:hover { background: transparent; color: var(--text); }
+      .summary-actions { display: inline-flex; gap: 0.5rem; align-items: center; justify-content: flex-end; }
+      .state-label { font-size: 0.8rem; color: var(--text-muted); }
+      .toggle { min-width: 4.75rem; padding: 0.28rem 0.55rem; border-radius: 999px; font-size: 0.78rem; background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.35); color: #bbf7d0; }
+      .toggle:hover { background: rgba(34, 197, 94, 0.2); }
+      .toggle.disable { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.35); color: #fecaca; }
+      .toggle.disable:hover { background: rgba(239, 68, 68, 0.18); }
+      @media (max-width: 700px) {
+        summary { grid-template-columns: 3rem 1fr; }
+        .summary-actions { grid-column: 1 / -1; justify-content: flex-start; }
+        .filter-panel { top: 5rem; width: calc(100vw - 2rem); max-height: calc(100vh - 6rem); }
+      }
       textarea { min-height: 5rem; resize: vertical; }
       .status { min-height: 1.5rem; color: var(--green); font-size: 0.85rem; margin-bottom: 1rem; }
       .disabled { opacity: 0.6; filter: grayscale(1); }
@@ -428,11 +458,44 @@ MODEL_CATALOG_HTML = """
     <main>
       <div class="toolbar">
         <input id="search" placeholder="Search models/providers/tags..." style="flex: 1; min-width: 250px;">
-        <select id="provider"><option value="">All providers</option></select>
+        <details class="filter-menu" id="filterMenu">
+          <summary>Filters <span id="filterCount" class="filter-badge"></span></summary>
+          <div class="filter-panel">
+            <section class="filter-section">
+              <h3>Capabilities</h3>
+              <div id="capabilityOptions" class="filter-options"></div>
+            </section>
+            <section class="filter-section">
+              <h3>Provider</h3>
+              <div id="providerOptions" class="filter-options"></div>
+            </section>
+            <section class="filter-section">
+              <h3>Minimum context</h3>
+              <div class="filter-options">
+                <label class="filter-option"><input type="radio" name="contextFilter" value="" checked> Any</label>
+                <label class="filter-option"><input type="radio" name="contextFilter" value="32000"> 32K+</label>
+                <label class="filter-option"><input type="radio" name="contextFilter" value="128000"> 128K+</label>
+                <label class="filter-option"><input type="radio" name="contextFilter" value="256000"> 256K+</label>
+                <label class="filter-option"><input type="radio" name="contextFilter" value="1000000"> 1M+</label>
+              </div>
+            </section>
+            <section class="filter-section">
+              <h3>Routeability</h3>
+              <div class="filter-options">
+                <label class="filter-option"><input type="radio" name="routeability" value=""> All catalog entries</label>
+                <label class="filter-option"><input type="radio" name="routeability" value="routeable"> Enabled only</label>
+                <label class="filter-option"><input type="radio" name="routeability" value="disabled"> Disabled/specialized</label>
+              </div>
+            </section>
+            <button id="clearFilters" class="secondary" type="button">Clear filters</button>
+          </div>
+        </details>
         <button id="save">Save Ranking</button>
         <button id="reload" class="secondary">Reload</button>
         <button id="reset" class="secondary" style="margin-left: auto; color: var(--red); border-color: rgba(239, 68, 68, 0.3);">Reset to Defaults</button>
       </div>
+      <p class="filter-help">Tags are normalized to capabilities. Use the filter menu to combine capabilities, provider, context, and routeability.</p>
+      <div id="activeFilters" class="active-filters"></div>
       <p class="status" id="status"></p>
       <div id="models" class="grid"></div>
     </main>
@@ -441,34 +504,84 @@ MODEL_CATALOG_HTML = """
 
       const $ = (id) => document.getElementById(id);
       const normalize = (value) => String(value || '').toLowerCase();
+      const capabilityLabels = {
+        text: 'Text',
+        reasoning: 'Reasoning',
+        coding: 'Coding',
+        'tool-use': 'Tool use',
+        'web-search': 'Web search',
+        vision: 'Vision',
+        audio: 'Audio',
+        safety: 'Safety',
+        moderation: 'Moderation',
+        translation: 'Translation',
+        classification: 'Classification',
+        rag: 'RAG',
+      };
 
       async function load() {
         $('status').textContent = 'Loading model catalog...';
         const response = await fetch('/v1/gateway/models');
         const payload = await response.json();
         routes = payload.data;
-        populateProviders();
+        populateFilters();
         render();
         $('status').textContent = `Loaded ${routes.length} model routes from ${payload.catalog_path}`;
       }
 
-      function populateProviders() {
-        const providerSelect = $('provider');
-        const selected = providerSelect.value;
-        const providers = [...new Set(routes.map((route) => route.provider_name))].sort();
-        providerSelect.innerHTML = '<option value="">All providers</option>' + providers.map(
-          (provider) => `<option value="${provider}">${provider}</option>`
-        ).join('');
-        providerSelect.value = selected;
+      function populateCheckboxes(containerId, name, options) {
+        const selected = new Set(getChecked(name));
+        $(containerId).innerHTML = options.map((option) => `
+          <label class="filter-option">
+            <input type="checkbox" name="${name}" value="${escapeHtml(option.value)}" ${selected.has(option.value) ? 'checked' : ''}>
+            ${escapeHtml(option.label)}
+          </label>
+        `).join('');
+      }
+
+      function populateFilters() {
+        const capabilities = [...new Set(routes.flatMap((route) => route.tags || []))]
+          .sort((a, b) => (capabilityLabels[a] || a).localeCompare(capabilityLabels[b] || b))
+          .map((tag) => ({ value: tag, label: capabilityLabels[tag] || tag }));
+        populateCheckboxes('capabilityOptions', 'capabilityFilter', capabilities);
+        populateCheckboxes(
+          'providerOptions',
+          'providerFilter',
+          [...new Set(routes.map((route) => route.provider_name))].sort().map((provider) => ({ value: provider, label: provider }))
+        );
+      }
+
+      function getChecked(name) {
+        return [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
+      }
+
+      function getRadio(name) {
+        return document.querySelector(`input[name="${name}"]:checked`)?.value || '';
+      }
+
+      function setRadio(name, value) {
+        document.querySelectorAll(`input[name="${name}"]`).forEach((input) => {
+          input.checked = input.value === value;
+        });
       }
 
       function render() {
         const query = normalize($('search').value);
-        const provider = $('provider').value;
+        const capabilities = getChecked('capabilityFilter');
+        const providers = getChecked('providerFilter');
+        const minContext = Number(getRadio('contextFilter') || 0);
+        const routeability = getRadio('routeability');
         const visible = routes
           .slice()
           .sort((a, b) => a.rank - b.rank || a.provider_name.localeCompare(b.provider_name))
-          .filter((route) => !provider || route.provider_name === provider)
+          .filter((route) => !capabilities.length || capabilities.every((tag) => (route.tags || []).includes(tag)))
+          .filter((route) => !providers.length || providers.includes(route.provider_name))
+          .filter((route) => !minContext || Number(route.context_window || 0) >= minContext)
+          .filter((route) => {
+            if (routeability === 'routeable') return route.enabled;
+            if (routeability === 'disabled') return !route.enabled;
+            return true;
+          })
           .filter((route) => {
             const haystack = normalize([
               route.route_id, route.provider_name, route.model_id, route.display_name,
@@ -478,6 +591,49 @@ MODEL_CATALOG_HTML = """
           });
 
         $('models').innerHTML = visible.map((route) => card(route)).join('');
+        renderActiveFilters(capabilities, providers, minContext, routeability);
+        $('status').textContent = `Showing ${visible.length} of ${routes.length} model routes.`;
+      }
+
+      function contextLabel(value) {
+        return {
+          32000: '32K+ context',
+          128000: '128K+ context',
+          256000: '256K+ context',
+          1000000: '1M+ context',
+        }[value] || '';
+      }
+
+      function renderActiveFilters(capabilities, providers, minContext, routeability) {
+        const count = capabilities.length + providers.length + (minContext ? 1 : 0) + (routeability ? 1 : 0);
+        $('filterCount').textContent = count || '';
+        $('filterCount').classList.toggle('active', count > 0);
+
+        const chips = [
+          ...capabilities.map((tag) => ({ kind: 'capabilityFilter', value: tag, label: capabilityLabels[tag] || tag })),
+          ...providers.map((provider) => ({ kind: 'providerFilter', value: provider, label: provider })),
+        ];
+        if (minContext) chips.push({ kind: 'contextFilter', value: '', label: contextLabel(minContext) });
+        if (routeability === 'routeable') chips.push({ kind: 'routeability', value: '', label: 'Enabled only' });
+        if (routeability === 'disabled') chips.push({ kind: 'routeability', value: '', label: 'Disabled/specialized' });
+
+        $('activeFilters').innerHTML = chips.map((chip) => `
+          <span class="active-filter">
+            ${escapeHtml(chip.label)}
+            <button type="button" aria-label="Remove ${escapeHtml(chip.label)} filter" onclick="removeFilter('${escapeHtml(chip.kind)}', '${escapeHtml(chip.value)}')">x</button>
+          </span>
+        `).join('');
+      }
+
+      function removeFilter(kind, value) {
+        if (kind === 'contextFilter' || kind === 'routeability') {
+          setRadio(kind, value);
+        } else {
+          document.querySelectorAll(`input[name="${kind}"][value="${CSS.escape(value)}"]`).forEach((input) => {
+            input.checked = false;
+          });
+        }
+        render();
       }
 
       let draggedId = null;
@@ -500,23 +656,25 @@ MODEL_CATALOG_HTML = """
                 <span class="provider">${escapeHtml(route.provider_name)}</span>
                 ${tags}
               </span>
-              <span>${route.enabled ? 'Enabled' : 'Disabled'}</span>
+              <span class="summary-actions">
+                <span class="state-label">${route.enabled ? 'Enabled' : 'Disabled'}</span>
+                <button type="button" class="toggle ${route.enabled ? 'disable' : ''}" onclick="toggleRouteEnabled(event, '${route.route_id}')">
+                  ${route.enabled ? 'Disable' : 'Enable'}
+                </button>
+              </span>
             </summary>
             <div class="body">
               ${field(route, 'rank', 'Rank', 'number')}
-              ${field(route, 'enabled', 'Enabled', 'checkbox')}
-              ${field(route, 'display_name', 'Display name')}
-              ${field(route, 'provider_name', 'Provider')}
-              ${field(route, 'model_id', 'Provider model ID')}
-              ${field(route, 'context_window', 'Context window', 'number')}
-              ${field(route, 'quality', 'Quality')}
-              ${field(route, 'speed', 'Speed')}
-              ${field(route, 'cost', 'Cost')}
-              ${field(route, 'tags', 'Tags, comma-separated')}
-              ${field(route, 'source_url', 'Source URL')}
-              <label style="grid-column: 1 / -1">Notes
-                <textarea data-id="${route.route_id}" data-key="notes">${escapeHtml(route.notes || '')}</textarea>
-              </label>
+              ${meta('Display name', route.display_name)}
+              ${meta('Provider', route.provider_name)}
+              ${meta('Provider model ID', route.model_id)}
+              ${meta('Context window', route.context_window ? route.context_window.toLocaleString() : 'Unknown')}
+              ${meta('Quality', route.quality)}
+              ${meta('Speed', route.speed)}
+              ${meta('Cost', route.cost)}
+              ${meta('Tags', tags || 'None', true)}
+              ${meta('Source URL', route.source_url ? `<a href="${escapeHtml(route.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(route.source_url)}</a>` : 'None', true)}
+              ${meta('Notes', route.notes || 'None')}
             </div>
           </details>
         `;
@@ -528,6 +686,20 @@ MODEL_CATALOG_HTML = """
           return `<label>${label}<input type="checkbox" data-id="${route.route_id}" data-key="${key}" ${route[key] ? 'checked' : ''}></label>`;
         }
         return `<label>${label}<input type="${type}" data-id="${route.route_id}" data-key="${key}" value="${escapeHtml(value)}"></label>`;
+      }
+
+      function meta(label, value, html = false) {
+        return `<div class="meta">${label}<span>${html ? value : escapeHtml(value)}</span></div>`;
+      }
+
+      function toggleRouteEnabled(event, id) {
+        event.preventDefault();
+        event.stopPropagation();
+        const route = routes.find((item) => item.route_id === id);
+        if (!route) return;
+        route.enabled = !route.enabled;
+        render();
+        save();
       }
 
       function collectEdits() {
@@ -556,6 +728,7 @@ MODEL_CATALOG_HTML = """
           return;
         }
         routes = payload.data;
+        populateFilters();
         render();
         $('status').textContent = 'Saved. New requests will use the updated ranking immediately.';
       }
@@ -596,7 +769,21 @@ MODEL_CATALOG_HTML = """
       }
 
       $('search').addEventListener('input', render);
-      $('provider').addEventListener('change', render);
+      $('filterMenu').addEventListener('change', render);
+      $('clearFilters').addEventListener('click', () => {
+        document.querySelectorAll('input[name="capabilityFilter"], input[name="providerFilter"]').forEach((input) => {
+          input.checked = false;
+        });
+        setRadio('contextFilter', '');
+        setRadio('routeability', '');
+        render();
+      });
+      document.addEventListener('click', (event) => {
+        if (!$('filterMenu').contains(event.target)) $('filterMenu').open = false;
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') $('filterMenu').open = false;
+      });
       $('save').addEventListener('click', save);
       $('reload').addEventListener('click', load);
       $('reset').addEventListener('click', async () => {
@@ -605,7 +792,7 @@ MODEL_CATALOG_HTML = """
         const response = await fetch('/v1/gateway/models/reset', { method: 'POST' });
         const payload = await response.json();
         routes = payload.data;
-        populateProviders();
+        populateFilters();
         render();
         $('status').textContent = 'Restored default model rankings.';
       });

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.model_catalog import DEFAULT_MODEL_ROUTES, ModelCatalog, ModelRoute, _get_model_score
+from app.model_catalog import (
+    CANONICAL_MODEL_TAGS,
+    DEFAULT_MODEL_ROUTES,
+    ModelCatalog,
+    ModelRoute,
+    _get_model_score,
+)
 
 
 def test_default_routes_have_contiguous_ranks():
@@ -20,19 +26,38 @@ def test_default_routes_are_sorted_descending_by_score():
 
 
 def test_safety_models_ranked_last():
-    """Safety/guard/PII models should always sort below chat models."""
+    """Safety/guard/PII models should always sort below enabled routes."""
     safety_routes = [r for r in DEFAULT_MODEL_ROUTES if not r.enabled]
-    chat_routes = [r for r in DEFAULT_MODEL_ROUTES if r.enabled]
-    if safety_routes and chat_routes:
-        worst_chat = max(r.rank for r in chat_routes)
+    enabled_routes = [r for r in DEFAULT_MODEL_ROUTES if r.enabled]
+    if safety_routes and enabled_routes:
+        worst_chat = max(r.rank for r in enabled_routes)
         best_safety = min(r.rank for r in safety_routes)
-        assert best_safety > worst_chat, "Disabled safety models should rank below all enabled chat models"
+        assert best_safety > worst_chat, "Disabled safety models should rank below all enabled routes"
 
 
 def test_no_duplicate_route_ids():
     """Every route_id in the default catalog must be unique."""
     ids = [route.route_id for route in DEFAULT_MODEL_ROUTES]
     assert len(ids) == len(set(ids)), f"Duplicate route_ids found: {[x for x in ids if ids.count(x) > 1]}"
+
+
+def test_default_routes_only_use_canonical_tags():
+    """Tags should stay focused on user-visible capabilities."""
+    unknown_tags = sorted(
+        {
+            tag
+            for route in DEFAULT_MODEL_ROUTES
+            for tag in route.tags
+            if tag not in CANONICAL_MODEL_TAGS
+        }
+    )
+    assert unknown_tags == []
+
+
+def test_text_is_available_as_a_filterable_capability():
+    """Text should be represented explicitly in the capability filters."""
+    assert "text" in CANONICAL_MODEL_TAGS
+    assert any("text" in route.tags for route in DEFAULT_MODEL_ROUTES)
 
 
 def test_every_route_has_provider_and_model_id():
@@ -50,21 +75,23 @@ def test_catalog_initialize_creates_file(tmp_path):
     assert len(catalog.all_routes()) == len(DEFAULT_MODEL_ROUTES)
 
 
-def test_catalog_merge_preserves_user_customizations(tmp_path):
-    """Re-initialization should keep user routes and add new defaults."""
+def test_catalog_merge_refreshes_default_metadata_and_preserves_routing(tmp_path):
+    """Re-initialization should refresh model facts while preserving routing choices."""
     catalog = ModelCatalog(str(tmp_path / "models.json"))
     catalog.initialize()
 
-    # Simulate user customization: change rank of first route
+    # Simulate stale persisted metadata plus user routing choices.
     routes = catalog.all_routes()
+    original = routes[0]
     customized = [
         {
-            "route_id": routes[0].route_id,
-            "provider_name": routes[0].provider_name,
-            "model_id": routes[0].model_id,
+            "route_id": original.route_id,
+            "provider_name": original.provider_name,
+            "model_id": original.model_id,
             "display_name": "User Custom Name",
             "rank": 999,
             "enabled": False,
+            "tags": ["chat", "deprecated-soon", "fast"],
         }
     ]
     catalog.replace_routes(customized)
@@ -73,11 +100,11 @@ def test_catalog_merge_preserves_user_customizations(tmp_path):
     catalog2 = ModelCatalog(str(tmp_path / "models.json"))
     catalog2.initialize()
 
-    # The user's customized route should still exist
-    user_route = next(r for r in catalog2.all_routes() if r.route_id == routes[0].route_id)
-    assert user_route.display_name == "User Custom Name"
+    user_route = next(r for r in catalog2.all_routes() if r.route_id == original.route_id)
+    assert user_route.display_name == original.display_name
     assert user_route.rank == 999
     assert user_route.enabled is False
+    assert user_route.tags == original.tags
 
     # And defaults should have been merged back
     assert len(catalog2.all_routes()) > 1
@@ -128,7 +155,7 @@ def test_get_model_score_gpt_oss_high():
     """GPT-OSS should score very high (benchmark leader)."""
     route = ModelRoute(
         route_id="test", provider_name="groq", model_id="openai/gpt-oss-120b",
-        display_name="GPT OSS 120B", rank=1, tags=["chat", "reasoning"],
+        display_name="GPT OSS 120B", rank=1, tags=["reasoning"],
     )
     assert _get_model_score(route) > 90000
 
