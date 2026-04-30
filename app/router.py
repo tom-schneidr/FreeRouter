@@ -302,6 +302,8 @@ class WaterfallRouter:
                     route.route_id,
                     provider.name,
                     route.model_id,
+                    usage=usage if isinstance(usage, dict) else None,
+                    status_code=response.status_code,
                 )
                 await self.state.record_success(
                     provider.name,

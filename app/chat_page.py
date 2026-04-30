@@ -1,7 +1,6 @@
 """Chat page HTML served at /chat."""
 
-CHAT_HTML = """\
-<!doctype html>
+CHAT_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -52,6 +51,16 @@ CHAT_HTML = """\
     .msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
     .msg.assistant { align-self: flex-start; background: var(--bg-tertiary); border: 1px solid var(--border);
       border-bottom-left-radius: 4px; }
+    .msg.assistant .content-text { white-space: normal; }
+    .msg.assistant .content-text > * + * { margin-top: 0.7rem; }
+    .msg.assistant p { margin: 0; }
+    .msg.assistant ul, .msg.assistant ol { padding-left: 1.25rem; }
+    .msg.assistant li + li { margin-top: 0.25rem; }
+    .msg.assistant pre { overflow-x: auto; padding: 0.75rem; border-radius: 8px; background: var(--bg-primary); border: 1px solid var(--border); }
+    .msg.assistant code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.85em; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 0.35rem; padding: 0.1rem 0.3rem; }
+    .msg.assistant pre code { background: transparent; border: none; padding: 0; }
+    .msg.assistant blockquote { border-left: 3px solid var(--accent); padding-left: 0.75rem; color: var(--text-muted); }
+    .msg.assistant a { color: #93c5fd; }
     .msg-meta { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.4rem; }
     .msg.assistant .msg-meta { color: var(--purple); }
     .msg.system-error { align-self: center; background: rgba(239,68,68,0.1); border: 1px solid var(--red);
@@ -108,6 +117,8 @@ CHAT_HTML = """\
     .route-disable { border: 1px solid rgba(239,68,68,0.35); border-radius: 999px; background: rgba(239,68,68,0.1);
       color: #fecaca; padding: 0.2rem 0.45rem; font: inherit; font-size: 0.68rem; cursor: pointer; flex-shrink: 0; }
     .route-disable:hover { background: rgba(239,68,68,0.18); }
+    .route-disable.enable { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.12); color: #bbf7d0; }
+    .route-disable.enable:hover { background: rgba(34,197,94,0.2); }
 
     .empty-state { text-align: center; color: var(--text-muted); padding: 3rem 1rem; font-size: 0.85rem; }
     .empty-state .icon-lg { font-size: 2.5rem; margin-bottom: 0.5rem; display: block; }
@@ -128,9 +139,10 @@ CHAT_HTML = """\
     <span class="model-badge" id="active-model">Ready</span>
     <span class="nav-spacer"></span>
     <a href="/">Home</a>
+    <a href="/chat">Chat</a>
     <a href="/models">Models</a>
     <a href="/health">Health</a>
-    <a href="/v1/providers/status">Status</a>
+    <a href="/status">Provider Usage</a>
   </nav>
 
   <div class="app">
@@ -175,6 +187,59 @@ function esc(s) {
   const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
 }
 
+function renderInlineMarkdown(text) {
+  return esc(text)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+}
+
+function renderMarkdown(markdown) {
+  const blocks = [];
+  const codeBlocks = [];
+  const protectedText = String(markdown || '').replace(/```(\w+)?\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const token = `\u0000CODE${codeBlocks.length}\u0000`;
+    codeBlocks.push(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`);
+    return token;
+  });
+
+  for (const chunk of protectedText.split(/\n{2,}/)) {
+    const trimmed = chunk.trim();
+    if (!trimmed) continue;
+    const codeMatch = trimmed.match(/^\u0000CODE(\d+)\u0000$/);
+    if (codeMatch) {
+      blocks.push(codeBlocks[Number(codeMatch[1])]);
+      continue;
+    }
+
+    const lines = trimmed.split('\n');
+    if (lines.every((line) => /^\s*[-*]\s+/.test(line))) {
+      blocks.push(`<ul>${lines.map((line) => `<li>${renderInlineMarkdown(line.replace(/^\s*[-*]\s+/, ''))}</li>`).join('')}</ul>`);
+      continue;
+    }
+    if (lines.every((line) => /^\s*\d+\.\s+/.test(line))) {
+      blocks.push(`<ol>${lines.map((line) => `<li>${renderInlineMarkdown(line.replace(/^\s*\d+\.\s+/, ''))}</li>`).join('')}</ol>`);
+      continue;
+    }
+    if (lines.every((line) => /^\s*>\s?/.test(line))) {
+      blocks.push(`<blockquote>${lines.map((line) => renderInlineMarkdown(line.replace(/^\s*>\s?/, ''))).join('<br>')}</blockquote>`);
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length + 2;
+      blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    blocks.push(`<p>${lines.map(renderInlineMarkdown).join('<br>')}</p>`);
+  }
+
+  return blocks.join('');
+}
+
 function autoResize() {
   inputEl.style.height = 'auto';
   inputEl.style.height = Math.min(inputEl.scrollHeight, 150) + 'px';
@@ -187,7 +252,12 @@ function addMessage(role, content, meta) {
   div.className = `msg ${role}`;
   const span = document.createElement('span');
   span.className = 'content-text';
-  span.textContent = content;
+  if (role === 'assistant') {
+    div.dataset.markdown = content || '';
+    span.innerHTML = renderMarkdown(content || '');
+  } else {
+    span.textContent = content;
+  }
   div.appendChild(span);
   if (meta) {
     const m = document.createElement('div');
@@ -246,8 +316,8 @@ function addRouteEvent(group, status, providerName, modelId, reason, durationMs,
     ${durationMs != null ? `<span class="duration">${durationMs}ms</span>` : ''}
     ${showDisable ? `<button class="route-disable" data-route-id="${esc(routeId)}">Disable</button>` : ''}
   `;
-  const disableBtn = ev.querySelector('.route-disable');
-  if (disableBtn) disableBtn.addEventListener('click', () => disableRoute(disableBtn.dataset.routeId, disableBtn));
+  const toggleBtn = ev.querySelector('.route-disable');
+  if (toggleBtn) toggleBtn.addEventListener('click', () => toggleRouteEnabled(toggleBtn.dataset.routeId, toggleBtn));
   group.appendChild(ev);
   routeLog.scrollTop = 0;
   return ev;
@@ -257,12 +327,27 @@ function isFlaggedSkip(reason) {
   return ['potentially_outdated', 'route_rate_limited', 'route_too_slow'].includes(reason);
 }
 
-async function disableRoute(routeId, button) {
-  if (!routeId || !confirm('Disable this model route?')) return;
+async function toggleRouteEnabled(routeId, button) {
+  if (!routeId) return;
+  const currentEnabled = button.dataset.enabled !== 'false';
+  const nextEnabled = !currentEnabled;
+  if (!nextEnabled && !confirm('Disable this model route?')) return;
   button.disabled = true;
-  button.textContent = 'Disabling...';
-  const response = await fetch(`/v1/gateway/models/${encodeURIComponent(routeId)}/disable`, { method: 'POST' });
-  button.textContent = response.ok ? 'Disabled' : 'Failed';
+  button.textContent = nextEnabled ? 'Enabling...' : 'Disabling...';
+  const action = nextEnabled ? 'enable' : 'disable';
+  const response = await fetch(`/v1/gateway/models/${encodeURIComponent(routeId)}/${action}`, { method: 'POST' });
+  button.disabled = false;
+  if (!response.ok) {
+    button.textContent = 'Failed';
+    setTimeout(() => {
+      button.textContent = currentEnabled ? 'Disable' : 'Enable';
+      button.classList.toggle('enable', !currentEnabled);
+    }, 1500);
+    return;
+  }
+  button.dataset.enabled = String(nextEnabled);
+  button.textContent = nextEnabled ? 'Disable' : 'Enable';
+  button.classList.toggle('enable', !nextEnabled);
 }
 
 function updateTryingEvent(ev, status, reason, durationMs) {
@@ -353,7 +438,8 @@ async function sendMessage() {
           typingEl.style.display = 'none';
           if (!assistantDiv) assistantDiv = addMessage('assistant', '');
           const ct = assistantDiv.querySelector('.content-text');
-          if (ct) ct.textContent += evt.text;
+          assistantDiv.dataset.markdown = (assistantDiv.dataset.markdown || '') + evt.text;
+          if (ct) ct.innerHTML = renderMarkdown(assistantDiv.dataset.markdown || '');
           messagesEl.scrollTop = messagesEl.scrollHeight;
         } else if (evt.type === 'done') {
           const totalMs = Math.round(performance.now() - t0);

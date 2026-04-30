@@ -55,6 +55,23 @@ class RouteState:
     updated_at: int
 
 
+def _empty_route_usage(route_id: str) -> dict[str, int | str | None]:
+    return {
+        "route_id": route_id,
+        "total_events": 0,
+        "successes": 0,
+        "failures": 0,
+        "rate_limits": 0,
+        "timeouts": 0,
+        "not_found": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "last_used_at": None,
+        "last_status_code": None,
+    }
+
+
 class StateManager:
     """SQLite-backed local quota tracker.
 
@@ -112,6 +129,22 @@ class StateManager:
                     rate_limited_until INTEGER NOT NULL DEFAULT 0,
                     next_probe_at INTEGER NOT NULL DEFAULT 0,
                     updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS route_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    route_id TEXT NOT NULL,
+                    provider_name TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    status_code INTEGER,
+                    created_at INTEGER NOT NULL
                 )
                 """
             )
@@ -233,7 +266,13 @@ class StateManager:
         route_id: str,
         provider_name: str,
         model_id: str,
+        usage: Mapping[str, int] | None = None,
+        status_code: int | None = None,
     ) -> None:
+        usage = usage or {}
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+        total_tokens = int(usage.get("total_tokens") or prompt_tokens + completion_tokens)
         async with self._lock:
             async with aiosqlite.connect(self.database_path) as db:
                 await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
@@ -250,7 +289,85 @@ class StateManager:
                     """,
                     (self._now(), route_id),
                 )
+                await self._insert_route_event_on_connection(
+                    db,
+                    route_id,
+                    provider_name,
+                    model_id,
+                    "success",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    status_code=status_code,
+                )
                 await db.commit()
+
+    async def get_route_usage_stats(
+        self,
+        route_ids: list[str],
+    ) -> dict[str, dict[str, int | str | None]]:
+        stats = {route_id: _empty_route_usage(route_id) for route_id in route_ids}
+        if not route_ids:
+            return stats
+
+        placeholders = ",".join("?" for _ in route_ids)
+        async with aiosqlite.connect(self.database_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"""
+                SELECT route_id,
+                       COUNT(*) AS total_events,
+                       SUM(CASE WHEN event_type = 'success' THEN 1 ELSE 0 END) AS successes,
+                       SUM(CASE WHEN event_type != 'success' THEN 1 ELSE 0 END) AS failures,
+                       SUM(CASE WHEN event_type = 'rate_limited' THEN 1 ELSE 0 END) AS rate_limits,
+                       SUM(CASE WHEN event_type = 'request_timeout' THEN 1 ELSE 0 END) AS timeouts,
+                       SUM(CASE WHEN event_type = 'model_not_found' THEN 1 ELSE 0 END) AS not_found,
+                       SUM(prompt_tokens) AS prompt_tokens,
+                       SUM(completion_tokens) AS completion_tokens,
+                       SUM(total_tokens) AS total_tokens,
+                       MAX(created_at) AS last_used_at
+                FROM route_events
+                WHERE route_id IN ({placeholders})
+                GROUP BY route_id
+                """,
+                route_ids,
+            )
+            rows = await cursor.fetchall()
+
+            cursor = await db.execute(
+                f"""
+                SELECT route_id, status_code
+                FROM route_events
+                WHERE route_id IN ({placeholders})
+                ORDER BY created_at DESC, id DESC
+                """,
+                route_ids,
+            )
+            latest_rows = await cursor.fetchall()
+
+        for row in rows:
+            route_id = row["route_id"]
+            stats[route_id] = {
+                "route_id": route_id,
+                "total_events": row["total_events"] or 0,
+                "successes": row["successes"] or 0,
+                "failures": row["failures"] or 0,
+                "rate_limits": row["rate_limits"] or 0,
+                "timeouts": row["timeouts"] or 0,
+                "not_found": row["not_found"] or 0,
+                "prompt_tokens": row["prompt_tokens"] or 0,
+                "completion_tokens": row["completion_tokens"] or 0,
+                "total_tokens": row["total_tokens"] or 0,
+                "last_used_at": row["last_used_at"],
+                "last_status_code": None,
+            }
+
+        for row in latest_rows:
+            route_id = row["route_id"]
+            if stats[route_id]["last_status_code"] is None:
+                stats[route_id]["last_status_code"] = row["status_code"]
+
+        return stats
 
     async def clear_route_health(
         self,
@@ -316,6 +433,14 @@ class StateManager:
                         route_id,
                     ),
                 )
+                await self._insert_route_event_on_connection(
+                    db,
+                    route_id,
+                    provider_name,
+                    model_id,
+                    "rate_limited",
+                    status_code=status_code,
+                )
                 await db.commit()
                 row = await self._fetch_route_state(db, route_id)
         return self._row_to_route_state(row)
@@ -354,6 +479,14 @@ class StateManager:
                         self._now(),
                         route_id,
                     ),
+                )
+                await self._insert_route_event_on_connection(
+                    db,
+                    route_id,
+                    provider_name,
+                    model_id,
+                    "model_not_found",
+                    status_code=status_code,
                 )
                 await db.commit()
                 row = await self._fetch_route_state(db, route_id)
@@ -395,6 +528,13 @@ class StateManager:
                         self._now(),
                         route_id,
                     ),
+                )
+                await self._insert_route_event_on_connection(
+                    db,
+                    route_id,
+                    provider_name,
+                    model_id,
+                    "request_timeout",
                 )
                 await db.commit()
                 row = await self._fetch_route_state(db, route_id)
@@ -647,6 +787,46 @@ class StateManager:
         if row is None:
             raise KeyError(f"Unknown route: {route_id}")
         return row
+
+    async def _insert_route_event_on_connection(
+        self,
+        db: aiosqlite.Connection,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+        event_type: str,
+        *,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int = 0,
+        status_code: int | None = None,
+    ) -> None:
+        await db.execute(
+            """
+            INSERT INTO route_events (
+                route_id,
+                provider_name,
+                model_id,
+                event_type,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                status_code,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                route_id,
+                provider_name,
+                model_id,
+                event_type,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                status_code,
+                self._now(),
+            ),
+        )
 
     @staticmethod
     def _row_to_state(row: aiosqlite.Row) -> ProviderState:

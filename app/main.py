@@ -95,6 +95,7 @@ async def index() -> str:
           <a href="/chat">Chat</a>
           <a href="/models">Models</a>
           <a href="/health">Health</a>
+          <a href="/status">Provider Usage</a>
         </nav>
         <main>
           <h2>Welcome to FreeRouter</h2>
@@ -105,7 +106,7 @@ async def index() -> str:
             <a href="/models" class="link-card"><span class="link-icon">📊</span> Model Catalog & Ranking</a>
             <a href="/health" class="link-card"><span class="link-icon">🩺</span> Route Health</a>
             <a href="/docs" class="link-card"><span class="link-icon">📖</span> API Documentation</a>
-            <a href="/v1/providers/status" class="link-card"><span class="link-icon">📈</span> Provider Quota Status</a>
+            <a href="/status" class="link-card"><span class="link-icon">📈</span> Provider Usage</a>
           </div>
         </main>
       </body>
@@ -202,6 +203,18 @@ async def disable_gateway_model(route_id: str, request: Request) -> dict[str, An
     return {"data": {**asdict(route), "health": asdict(route_state)}}
 
 
+@app.post("/v1/gateway/models/{route_id}/enable")
+async def enable_gateway_model(route_id: str, request: Request) -> dict[str, Any]:
+    catalog: ModelCatalog = request.app.state.model_catalog
+    state: StateManager = request.app.state.gateway_state
+    try:
+        route = catalog.set_route_enabled(route_id, True)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    route_state = await state.get_route_state(route.route_id, route.provider_name, route.model_id)
+    return {"data": {**asdict(route), "health": asdict(route_state)}}
+
+
 @app.post("/v1/gateway/models/{route_id}/health/reset")
 async def reset_gateway_model_health(route_id: str, request: Request) -> dict[str, Any]:
     catalog: ModelCatalog = request.app.state.model_catalog
@@ -225,23 +238,281 @@ async def _catalog_payload_with_health(catalog: ModelCatalog, state: StateManage
     return payload
 
 
+@app.get("/status", response_class=HTMLResponse)
+async def provider_status_page() -> HTMLResponse:
+    return HTMLResponse(r"""
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Usage Stats - FreeRouter</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      :root { --bg-primary: #0a0e1a; --bg-secondary: #111827; --bg-tertiary: #1e293b; --border: #2d3a4f; --text: #e2e8f0; --text-muted: #94a3b8; --accent: #3b82f6; --accent-glow: rgba(59,130,246,0.15); --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --font: 'Inter', system-ui, sans-serif; }
+      body { font-family: var(--font); background: var(--bg-primary); color: var(--text); }
+      nav { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
+      nav h1 { font-size: 1rem; font-weight: 700; background: linear-gradient(135deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+      nav a { color: var(--text-muted); text-decoration: none; font-size: 0.85rem; }
+      nav a:hover { color: var(--text); }
+      .nav-spacer { flex: 1; }
+      main { max-width: 1280px; margin: auto; padding: 2rem; }
+      h2 { margin-bottom: 0.5rem; }
+      .muted { color: var(--text-muted); }
+      .toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; margin: 1.5rem 0; }
+      input, select, button { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text); padding: 0.55rem 0.75rem; font: inherit; font-size: 0.9rem; }
+      button { border: none; background: var(--accent); color: white; cursor: pointer; font-weight: 600; }
+      button:hover { background: #2563eb; }
+      .filters { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+      .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin: 1.5rem 0; }
+      .summary-card { padding: 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
+      .summary-card .label { color: var(--text-muted); font-size: 0.74rem; margin-bottom: 0.35rem; text-transform: uppercase; letter-spacing: 0.04em; }
+      .summary-card .value { font-size: 1.45rem; font-weight: 700; }
+      .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-secondary); }
+      table { width: 100%; border-collapse: collapse; min-width: 980px; }
+      th, td { padding: 0.75rem 0.85rem; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.86rem; vertical-align: middle; }
+      th { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; background: rgba(15, 23, 42, 0.75); position: sticky; top: 0; z-index: 1; }
+      tbody tr:hover { background: rgba(59,130,246,0.08); }
+      .model { font-weight: 700; color: #fff; }
+      .route { margin-top: 0.2rem; color: var(--text-muted); font-size: 0.76rem; }
+      .provider { color: var(--green); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.72rem; font-weight: 700; }
+      .pill { display: inline-flex; align-items: center; padding: 0.22rem 0.5rem; border-radius: 999px; border: 1px solid rgba(34,197,94,0.45); color: #bbf7d0; background: rgba(34,197,94,0.12); font-size: 0.75rem; white-space: nowrap; }
+      .pill.warning { border-color: rgba(245,158,11,0.5); color: #fcd34d; background: rgba(245,158,11,0.12); }
+      .pill.error { border-color: rgba(239,68,68,0.5); color: #fecaca; background: rgba(239,68,68,0.12); }
+      .pill.neutral { border-color: var(--border); color: var(--text-muted); background: var(--bg-tertiary); }
+      .details-row td { background: var(--bg-primary); padding: 0; }
+      .details { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 0.7rem; padding: 1rem; }
+      .stat { padding: 0.75rem; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-secondary); }
+      .stat .label { color: var(--text-muted); font-size: 0.72rem; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.04em; }
+      .stat .value { font-size: 0.95rem; font-weight: 650; word-break: break-word; }
+      .expand { background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); padding: 0.35rem 0.6rem; }
+      .expand:hover { background: var(--border); }
+      .empty { padding: 2rem; text-align: center; color: var(--text-muted); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
+      .right { text-align: right; }
+      @media (max-width: 720px) { main { padding: 1rem; } nav { flex-wrap: wrap; } .filters { width: 100%; } input, select { flex: 1; min-width: 12rem; } }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <h1>FreeRouter</h1><span class="nav-spacer"></span>
+      <a href="/">Home</a><a href="/chat">Chat</a><a href="/models">Models</a><a href="/health">Health</a><a href="/status">Provider Usage</a>
+    </nav>
+    <main>
+      <h2>Usage Stats</h2>
+      <p class="muted">Provider quotas, health state, and per-model usage tracked locally by FreeRouter.</p>
+      <section id="summaryCards" class="summary-grid"></section>
+      <div class="toolbar">
+        <div class="filters">
+          <input id="search" type="search" placeholder="Search models or providers">
+          <select id="providerFilter"><option value="">All providers</option></select>
+          <select id="healthFilter">
+            <option value="">All health states</option>
+            <option value="active">Active</option>
+            <option value="rate_limited">Rate limited</option>
+            <option value="too_slow">Too slow</option>
+            <option value="potentially_outdated">Potentially outdated</option>
+          </select>
+        </div>
+        <span id="summary" class="muted">Loading...</span>
+        <button id="reload">Reload</button>
+      </div>
+      <div id="tableRoot"></div>
+    </main>
+    <script>
+      const tableRoot = document.getElementById('tableRoot');
+      const cardsEl = document.getElementById('summaryCards');
+      const summaryEl = document.getElementById('summary');
+      const searchEl = document.getElementById('search');
+      const providerFilterEl = document.getElementById('providerFilter');
+      const healthFilterEl = document.getElementById('healthFilter');
+      let allModels = [];
+      let providers = [];
+      let expanded = new Set();
+      const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      const fmt = (value) => value == null ? 'Unknown' : Number(value).toLocaleString();
+      const fmtDate = (value) => value ? new Date(Number(value) * 1000).toLocaleString() : 'Never';
+      const healthLabel = (value) => String(value || 'active').replace(/_/g, ' ');
+      function healthPill(status) {
+        if (status === 'active') return '<span class="pill">Active</span>';
+        if (status === 'rate_limited') return '<span class="pill warning">Rate limited</span>';
+        return `<span class="pill error">${escapeHtml(healthLabel(status))}</span>`;
+      }
+      function providerStatus(provider) {
+        if (!provider?.configured) return 'Not configured';
+        if (!provider.available) return provider.unavailable_reason || 'Limited';
+        return 'Available';
+      }
+      function stat(label, value) {
+        return `<div class="stat"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div></div>`;
+      }
+      function renderCards(models) {
+        const totalTokens = models.reduce((sum, model) => sum + Number(model.usage?.total_tokens || 0), 0);
+        const totalSuccesses = models.reduce((sum, model) => sum + Number(model.usage?.successes || 0), 0);
+        const totalFailures = models.reduce((sum, model) => sum + Number(model.usage?.failures || 0), 0);
+        const limitedRoutes = models.filter((model) => model.health?.status && model.health.status !== 'active').length;
+        const providerRequests = providers.reduce((sum, provider) => sum + Number(provider.requests_today || 0), 0);
+        const providerTokens = providers.reduce((sum, provider) => sum + Number(provider.tokens_used_today || 0), 0);
+        cardsEl.innerHTML = `
+          <div class="summary-card"><div class="label">Requests today</div><div class="value">${fmt(providerRequests)}</div></div>
+          <div class="summary-card"><div class="label">Provider tokens today</div><div class="value">${fmt(providerTokens)}</div></div>
+          <div class="summary-card"><div class="label">Model successes</div><div class="value">${fmt(totalSuccesses)}</div></div>
+          <div class="summary-card"><div class="label">Model failures</div><div class="value">${fmt(totalFailures)}</div></div>
+          <div class="summary-card"><div class="label">Route tokens recorded</div><div class="value">${fmt(totalTokens)}</div></div>
+          <div class="summary-card"><div class="label">Automatically limited</div><div class="value">${fmt(limitedRoutes)}</div></div>
+        `;
+      }
+      function filteredModels() {
+        const query = searchEl.value.trim().toLowerCase();
+        const provider = providerFilterEl.value;
+        const health = healthFilterEl.value;
+        return allModels.filter((model) => {
+          const haystack = `${model.display_name} ${model.model_id} ${model.provider_name}`.toLowerCase();
+          return (!query || haystack.includes(query))
+            && (!provider || model.provider_name === provider)
+            && (!health || (model.health?.status || 'active') === health);
+        });
+      }
+      function detailRow(model) {
+        const usage = model.usage || {};
+        const health = model.health || {};
+        const provider = providers.find((item) => item.name === model.provider_name);
+        return `
+          <tr class="details-row">
+            <td colspan="10">
+              <div class="details">
+                ${stat('Route ID', model.route_id)}
+                ${stat('Enabled', model.enabled ? 'Yes' : 'No')}
+                ${stat('Context window', model.context_window ? fmt(model.context_window) : 'Unknown')}
+                ${stat('Prompt tokens', fmt(usage.prompt_tokens || 0))}
+                ${stat('Completion tokens', fmt(usage.completion_tokens || 0))}
+                ${stat('Rate limits', fmt(usage.rate_limits || 0))}
+                ${stat('Timeouts', fmt(usage.timeouts || 0))}
+                ${stat('Not found errors', fmt(usage.not_found || 0))}
+                ${stat('Consecutive failures', fmt(health.consecutive_failures || 0))}
+                ${stat('Last event', fmtDate(usage.last_used_at))}
+                ${stat('Last status code', usage.last_status_code ?? 'None')}
+                ${stat('Provider state', providerStatus(provider))}
+                ${stat('Provider requests today', fmt(provider?.requests_today || 0))}
+                ${stat('Provider cooldown until', fmtDate(provider?.cooldown_until))}
+              </div>
+            </td>
+          </tr>
+        `;
+      }
+      function modelRow(model) {
+        const usage = model.usage || {};
+        const health = model.health || {};
+        const isExpanded = expanded.has(model.route_id);
+        return `
+          <tr>
+            <td>
+              <div class="model">${escapeHtml(model.display_name || model.model_id)}</div>
+              <div class="route">${escapeHtml(model.model_id)}</div>
+            </td>
+            <td><span class="provider">${escapeHtml(model.provider_name)}</span></td>
+            <td>${healthPill(health.status || 'active')}</td>
+            <td class="right">${fmt(usage.successes || 0)}</td>
+            <td class="right">${fmt(usage.failures || 0)}</td>
+            <td class="right">${fmt(usage.total_tokens || 0)}</td>
+            <td class="right">${fmt(usage.prompt_tokens || 0)}</td>
+            <td class="right">${fmt(usage.completion_tokens || 0)}</td>
+            <td>${fmtDate(usage.last_used_at)}</td>
+            <td><button class="expand" data-route-id="${escapeHtml(model.route_id)}">${isExpanded ? 'Hide' : 'View'} stats</button></td>
+          </tr>
+          ${isExpanded ? detailRow(model) : ''}
+        `;
+      }
+      function render() {
+        const models = filteredModels();
+        renderCards(allModels);
+        summaryEl.textContent = `${models.length} of ${allModels.length} model route${allModels.length === 1 ? '' : 's'} shown`;
+        if (!models.length) {
+          tableRoot.innerHTML = '<div class="empty">No model usage matches the current filters.</div>';
+          return;
+        }
+        tableRoot.innerHTML = `
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Provider</th>
+                  <th>Health</th>
+                  <th class="right">Successes</th>
+                  <th class="right">Failures</th>
+                  <th class="right">Tokens</th>
+                  <th class="right">Prompt</th>
+                  <th class="right">Completion</th>
+                  <th>Last Used</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>${models.map(modelRow).join('')}</tbody>
+            </table>
+          </div>
+        `;
+        tableRoot.querySelectorAll('.expand').forEach((button) => {
+          button.addEventListener('click', () => {
+            const routeId = button.dataset.routeId;
+            if (expanded.has(routeId)) expanded.delete(routeId);
+            else expanded.add(routeId);
+            render();
+          });
+        });
+      }
+      async function load() {
+        summaryEl.textContent = 'Loading...';
+        tableRoot.innerHTML = '';
+        const response = await fetch('/v1/providers/status');
+        if (!response.ok) {
+          tableRoot.innerHTML = '<div class="empty">Could not load usage stats.</div>';
+          summaryEl.textContent = 'Load failed';
+          return;
+        }
+        const payload = await response.json();
+        providers = payload.data || [];
+        allModels = providers.flatMap((provider) => provider.models || []).sort((a, b) => {
+          const tokenDelta = Number(b.usage?.total_tokens || 0) - Number(a.usage?.total_tokens || 0);
+          return tokenDelta || Number(a.rank || 9999) - Number(b.rank || 9999);
+        });
+        providerFilterEl.innerHTML = '<option value="">All providers</option>' + providers
+          .map((provider) => `<option value="${escapeHtml(provider.name)}">${escapeHtml(provider.name)}</option>`)
+          .join('');
+        render();
+      }
+      document.getElementById('reload').addEventListener('click', load);
+      searchEl.addEventListener('input', render);
+      providerFilterEl.addEventListener('change', render);
+      healthFilterEl.addEventListener('change', render);
+      load();
+    </script>
+  </body>
+</html>
+""")
+
+
 @app.get("/v1/providers/status")
 async def provider_status(request: Request) -> dict[str, Any]:
     router: WaterfallRouter = request.app.state.waterfall_router
     state: StateManager = request.app.state.gateway_state
     catalog: ModelCatalog = request.app.state.model_catalog
 
+    all_routes = catalog.all_routes()
+    route_usage = await state.get_route_usage_stats([route.route_id for route in all_routes])
     providers = []
     for provider in router.providers:
         provider_state = await state.get_state(provider.name)
         availability = await state.check_available(provider.name)
         models = []
-        for route in catalog.all_routes():
+        for route in all_routes:
             if route.provider_name != provider.name:
                 continue
             route_state = await state.get_route_state(route.route_id, route.provider_name, route.model_id)
             route_payload = asdict(route)
             route_payload["health"] = asdict(route_state)
+            route_payload["usage"] = route_usage[route.route_id]
             models.append(route_payload)
         providers.append(
             {
@@ -405,7 +676,13 @@ async def _sse_route_chat(
 
             # Success
             usage = response.body.get("usage")
-            await router.state.record_route_success(route.route_id, route.provider_name, route.model_id)
+            await router.state.record_route_success(
+                route.route_id,
+                route.provider_name,
+                route.model_id,
+                usage=usage if isinstance(usage, dict) else None,
+                status_code=response.status_code,
+            )
             await router.state.record_success(
                 route.provider_name,
                 usage=usage if isinstance(usage, dict) else None,
@@ -478,7 +755,7 @@ ROUTE_HEALTH_HTML = """
   <body>
     <nav>
       <h1>FreeRouter</h1><span class="nav-spacer"></span>
-      <a href="/">Home</a><a href="/chat">Chat</a><a href="/models">Models</a><a href="/health">Health</a>
+      <a href="/">Home</a><a href="/chat">Chat</a><a href="/models">Models</a><a href="/health">Health</a><a href="/status">Provider Usage</a>
     </nav>
     <main>
       <h2>Route Health</h2>
@@ -604,7 +881,8 @@ MODEL_CATALOG_HTML = """
       }
       textarea { min-height: 5rem; resize: vertical; }
       .status { min-height: 1.5rem; color: var(--green); font-size: 0.85rem; margin-bottom: 1rem; }
-      .disabled { opacity: 0.6; filter: grayscale(1); }
+      details.disabled { border-color: rgba(148, 163, 184, 0.25); }
+      details.disabled summary > span:not(.summary-actions), details.disabled .body { opacity: 0.6; }
       code { background: var(--bg-tertiary); border: 1px solid var(--border); padding: 0.1rem 0.35rem; border-radius: 0.35rem; color: #93c5fd; }
       details.dragging { opacity: 0.4; transform: scale(0.98); }
       details.drag-over { border-top: 2px solid var(--accent); }
@@ -620,7 +898,7 @@ MODEL_CATALOG_HTML = """
       <a href="/chat">Chat</a>
       <a href="/models">Models</a>
       <a href="/health">Health</a>
-      <a href="/v1/providers/status">Quota Status</a>
+      <a href="/status">Provider Usage</a>
     </nav>
     <main>
       <div class="toolbar">
