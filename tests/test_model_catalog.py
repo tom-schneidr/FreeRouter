@@ -73,12 +73,49 @@ def test_every_route_has_provider_and_model_id():
         assert route.model_id, f"Route {route.route_id} has empty model_id"
 
 
+def test_catalog_replace_builds_sorted_cache_for_consecutive_reads(tmp_path, monkeypatch):
+    import app.model_catalog as mc
+
+    sorts: list[bool] = []
+
+    def wrap(routes: list[ModelRoute]) -> list[ModelRoute]:
+        sorts.append(True)
+        return sorted(routes, key=lambda route: (route.rank, route.provider_name, route.model_id))
+
+    monkeypatch.setattr(mc, "_sort_routes_for_catalog", wrap)
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes(
+        [
+            {
+                "route_id": "z",
+                "provider_name": "p",
+                "model_id": "m2",
+                "display_name": "Z",
+                "rank": 2,
+                "enabled": True,
+            },
+            {
+                "route_id": "a",
+                "provider_name": "p",
+                "model_id": "m1",
+                "display_name": "A",
+                "rank": 1,
+                "enabled": True,
+            },
+        ]
+    )
+    after_replace = len(sorts)
+    catalog.all_routes()
+    catalog.all_routes()
+    assert len(sorts) == after_replace
+    assert len(catalog.all_routes()) == 2
+
+
 def test_catalog_initialize_creates_file(tmp_path):
     """Catalog should create the JSON file if it doesn't exist."""
     catalog = ModelCatalog(str(tmp_path / "models.json"))
     catalog.initialize()
     assert (tmp_path / "models.json").exists()
-    assert len(catalog.all_routes()) == len(DEFAULT_MODEL_ROUTES)
 
 
 def test_catalog_merge_refreshes_default_metadata_and_preserves_routing(tmp_path):

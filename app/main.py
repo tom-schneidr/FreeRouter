@@ -6,6 +6,7 @@ from dataclasses import asdict
 from time import time
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
@@ -30,6 +31,7 @@ from app.stream_route import stream_route_chat
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    gateway_http_client: httpx.AsyncClient | None = None
     state = StateManager(
         settings.database_path,
         PROVIDER_QUOTAS,
@@ -45,12 +47,24 @@ async def lifespan(app: FastAPI):
     app.state.request_limiter = GatewayRequestLimiter(
         settings.max_concurrent_requests,
         settings.request_queue_timeout_seconds,
+        settings.request_queue_max_waiting_requests,
     )
+    limits = httpx.Limits(
+        max_connections=settings.http_max_connections,
+        max_keepalive_connections=settings.http_max_keepalive_connections,
+        keepalive_expiry=settings.http_keepalive_expiry_seconds,
+    )
+    gateway_http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(settings.request_timeout_seconds),
+        limits=limits,
+    )
+    app.state.http_client = gateway_http_client
     app.state.waterfall_router = WaterfallRouter(
         providers,
         model_catalog,
         state,
         request_timeout_seconds=settings.request_timeout_seconds,
+        http_client=gateway_http_client,
     )
     app.state.endpoint_diagnosis = EndpointDiagnosisService(
         providers,
@@ -81,6 +95,8 @@ async def lifespan(app: FastAPI):
         background = app.state.background_endpoint_diagnosis
         if background is not None:
             await background.stop()
+        if gateway_http_client is not None:
+            await gateway_http_client.aclose()
 
 
 app = FastAPI(
@@ -317,12 +333,17 @@ async def _catalog_payload_with_health(
     catalog: ModelCatalog, state: StateManager
 ) -> dict[str, Any]:
     payload = catalog.to_payload()
-    for route_payload in payload["data"]:
-        route_state = await state.get_route_state(
+    route_rows = [
+        (
             route_payload["route_id"],
             route_payload["provider_name"],
             route_payload["model_id"],
         )
+        for route_payload in payload["data"]
+    ]
+    health_map = await state.get_route_states_batch(route_rows)
+    for route_payload in payload["data"]:
+        route_state = health_map[route_payload["route_id"]]
         route_payload["health"] = asdict(route_state)
     return payload
 
@@ -590,17 +611,25 @@ async def provider_status(request: Request) -> dict[str, Any]:
 
     all_routes = catalog.all_routes()
     route_usage = await state.get_route_usage_stats([route.route_id for route in all_routes])
+    health_map = await state.get_route_states_batch(
+        [(r.route_id, r.provider_name, r.model_id) for r in all_routes]
+    )
+    providers_snap = await state.snapshot_providers_usage(
+        [provider.name for provider in router.providers]
+    )
     providers = []
     for provider in router.providers:
-        provider_state = await state.get_state(provider.name)
-        availability = await state.check_available(provider.name)
+        pair = providers_snap.get(provider.name)
+        if pair is None:
+            provider_state = await state.get_state(provider.name)
+            availability = await state.check_available(provider.name)
+        else:
+            provider_state, availability = pair
         models = []
         for route in all_routes:
             if route.provider_name != provider.name:
                 continue
-            route_state = await state.get_route_state(
-                route.route_id, route.provider_name, route.model_id
-            )
+            route_state = health_map[route.route_id]
             route_payload = asdict(route)
             route_payload["health"] = asdict(route_state)
             route_payload["usage"] = route_usage[route.route_id]
@@ -705,7 +734,11 @@ async def chat_completions_stream_route(request: Request) -> Response:
 
     async def limited_stream():
         try:
-            async for chunk in stream_route_chat(payload, router):
+            async for chunk in stream_route_chat(
+                payload,
+                router,
+                chunk_replay_sleep_seconds=get_settings().sse_chunk_replay_sleep_seconds,
+            ):
                 yield chunk
         finally:
             limiter.release()

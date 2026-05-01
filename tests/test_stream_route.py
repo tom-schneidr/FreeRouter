@@ -179,3 +179,25 @@ async def test_sse_route_uses_canonical_router_event_sequence(tmp_path):
 
     assert sse_core == routed_core
     assert any(event.get("type") == "done" for event in sse_events)
+
+
+async def test_stream_route_sse_does_not_call_sleep_between_chunks(monkeypatch, tmp_path):
+    """Chunk replay uses zero delay by default (no artificial throughput cap)."""
+    import app.stream_route as stream_mod
+
+    async def fail_sleep(_seconds: float) -> None:
+        raise AssertionError("unexpected asyncio.sleep during SSE replay")
+
+    monkeypatch.setattr(stream_mod.asyncio, "sleep", fail_sleep)
+
+    route_state = await _state(tmp_path / "sleep")
+    router = WaterfallRouter(
+        [FakeProvider("primary")],
+        _catalog(tmp_path / "sleep"),
+        route_state,
+        request_timeout_seconds=5,
+    )
+    chunks = [
+        c async for c in stream_route_chat(_payload(), router, chunk_replay_sleep_seconds=0.0)
+    ]
+    assert chunks

@@ -365,3 +365,73 @@ async def test_clear_route_health_resets_limited_route(tmp_path):
     assert cleared.status == "active"
     assert cleared.consecutive_failures == 0
     assert availability.available is True
+
+
+async def test_get_route_states_batch_matches_individual_reads(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
+    )
+    await state.initialize()
+    first = await state.get_route_state("route-a", "test", "m1")
+    second = await state.get_route_state("route-b", "test", "m2")
+
+    batch = await state.get_route_states_batch(
+        [("route-a", "test", "m1"), ("route-b", "test", "m2")]
+    )
+
+    assert batch["route-a"] == first
+    assert batch["route-b"] == second
+
+
+async def test_snapshot_providers_usage_and_availability_projection(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [
+            ProviderQuota(
+                "p1", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            ),
+            ProviderQuota(
+                "p2", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            ),
+        ],
+    )
+    await state.initialize()
+
+    snapshot = await state.snapshot_providers_usage(["p2", "p1"])
+    assert snapshot["p1"][1].available and snapshot["p2"][1].available
+    avail_only = await state.snapshot_providers_availability(["p1"], estimated_tokens=0)
+    assert avail_only["p1"].available is snapshot["p1"][1].available
+
+
+async def test_get_route_usage_stats_uses_latest_status_per_route(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [
+            ProviderQuota(
+                "groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
+    )
+    await state.initialize()
+    await state.record_route_success(
+        "r1",
+        "groq",
+        "gpt",
+        usage={"total_tokens": 2},
+        status_code=404,
+    )
+    await state.record_route_success(
+        "r1",
+        "groq",
+        "gpt",
+        usage={"total_tokens": 5},
+        status_code=200,
+    )
+
+    stats = await state.get_route_usage_stats(["r1"])
+    assert stats["r1"]["last_status_code"] == 200

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -92,7 +92,8 @@ class StateManager:
         self.database_path = database_path
         self.quotas = {quota.name: quota for quota in quotas}
         self.busy_timeout_ms = busy_timeout_ms
-        self._lock = asyncio.Lock()
+        self._provider_locks: dict[str, asyncio.Lock] = {}
+        self._route_locks: dict[str, asyncio.Lock] = {}
 
     async def initialize(self) -> None:
         directory = os.path.dirname(self.database_path)
@@ -159,6 +160,15 @@ class StateManager:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_route_events_route_created_id
+                ON route_events (route_id, created_at DESC, id DESC)
+                """
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_route_events_route_id ON route_events (route_id)"
+            )
             today = self._today()
             now = self._now()
             for quota in self.quotas.values():
@@ -204,7 +214,7 @@ class StateManager:
         This prevents concurrent requests from all observing the same available RPM slot before
         incrementing the local counter.
         """
-        async with self._lock:
+        async with self._provider_lock(provider_name):
             async with aiosqlite.connect(self.database_path) as db:
                 await self._configure_connection(db)
                 await db.execute("BEGIN IMMEDIATE")
@@ -239,6 +249,91 @@ class StateManager:
 
         return Availability(available=True)
 
+    async def snapshot_providers_usage(
+        self,
+        provider_names: Sequence[str],
+        *,
+        estimated_tokens: int = 0,
+    ) -> dict[str, tuple[ProviderState, Availability]]:
+        """Batch-read provider quota rows and availability after refreshing day/minute windows once.
+
+        Used by routing preflight and admin status endpoints to avoid one SQLite connection per provider.
+        """
+        unique = sorted({name for name in provider_names if name in self.quotas})
+        if not unique:
+            return {}
+
+        result: dict[str, tuple[ProviderState, Availability]] = {}
+        async with aiosqlite.connect(self.database_path) as db:
+            await self._configure_connection(db)
+            for name in unique:
+                await self._ensure_current_windows_on_connection(db, name, commit=False)
+            await db.commit()
+
+            for name in unique:
+                row = await self._fetch_state(db, name)
+                state = self._row_to_state(row)
+                availability = self._availability_for_state(
+                    self.quotas[name],
+                    state,
+                    estimated_tokens,
+                )
+                result[name] = (state, availability)
+
+        return result
+
+    async def snapshot_providers_availability(
+        self,
+        provider_names: Sequence[str],
+        *,
+        estimated_tokens: int = 0,
+    ) -> dict[str, Availability]:
+        """Availability-only view of :meth:`snapshot_providers_usage`."""
+        snap = await self.snapshot_providers_usage(
+            provider_names, estimated_tokens=estimated_tokens
+        )
+        return {name: pair[1] for name, pair in snap.items()}
+
+    async def get_route_states_batch(
+        self,
+        routes: Sequence[tuple[str, str, str]],
+    ) -> dict[str, RouteState]:
+        """Ensure and return health rows for many routes using a single SQLite transaction."""
+        if not routes:
+            return {}
+
+        unique_routes: dict[str, tuple[str, str]] = {}
+        for route_id, provider_name, model_id in routes:
+            unique_routes[route_id] = (provider_name, model_id)
+
+        async with aiosqlite.connect(self.database_path) as db:
+            await self._configure_connection(db)
+            for route_id, (provider_name, model_id) in unique_routes.items():
+                await self._upsert_route_state_row(db, route_id, provider_name, model_id)
+            await db.commit()
+
+            placeholders = ",".join("?" for _ in unique_routes)
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"""
+                SELECT route_id,
+                       provider_name,
+                       model_id,
+                       status,
+                       status_reason,
+                       consecutive_failures,
+                       rate_limited_until,
+                       next_probe_at,
+                       updated_at
+                FROM route_state
+                WHERE route_id IN ({placeholders})
+                """,
+                list(unique_routes.keys()),
+            )
+            rows = await cursor.fetchall()
+
+        return {row["route_id"]: self._row_to_route_state(row) for row in rows}
+
     async def check_route_available(
         self,
         route_id: str,
@@ -251,23 +346,39 @@ class StateManager:
             await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
             row = await self._fetch_route_state(db, route_id)
         state = self._row_to_route_state(row)
-        now = self._now()
+        return self.route_availability_from_state(
+            state,
+            allow_rate_limit_probe=allow_rate_limit_probe,
+        )
 
-        if state.status == "potentially_outdated":
+    def route_availability_from_state(
+        self,
+        route_state: RouteState,
+        *,
+        allow_rate_limit_probe: bool = False,
+    ) -> Availability:
+        now = self._now()
+        if route_state.status == "potentially_outdated":
             return Availability(available=False, reason="potentially_outdated")
 
-        if state.status in {"rate_limited", "too_slow"}:
-            retry_after = max(1, max(state.rate_limited_until, state.next_probe_at) - now)
-            if not allow_rate_limit_probe or state.next_probe_at > now:
+        if route_state.status in {"rate_limited", "too_slow"}:
+            retry_after = max(
+                1, max(route_state.rate_limited_until, route_state.next_probe_at) - now
+            )
+            if not allow_rate_limit_probe or route_state.next_probe_at > now:
                 reason = (
-                    "route_rate_limited" if state.status == "rate_limited" else "route_too_slow"
+                    "route_rate_limited"
+                    if route_state.status == "rate_limited"
+                    else "route_too_slow"
                 )
                 return Availability(
                     available=False,
                     reason=reason,
                     retry_after_seconds=retry_after,
                 )
-            reason = "rate_limit_probe" if state.status == "rate_limited" else "too_slow_probe"
+            reason = (
+                "rate_limit_probe" if route_state.status == "rate_limited" else "too_slow_probe"
+            )
             return Availability(available=True, reason=reason)
 
         return Availability(available=True)
@@ -295,7 +406,7 @@ class StateManager:
         prompt_tokens = int(usage.get("prompt_tokens") or 0)
         completion_tokens = int(usage.get("completion_tokens") or 0)
         total_tokens = int(usage.get("total_tokens") or prompt_tokens + completion_tokens)
-        async with self._lock:
+        async with self._route_lock(route_id):
             async with aiosqlite.connect(self.database_path) as db:
                 await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
                 await db.execute(
@@ -358,10 +469,16 @@ class StateManager:
 
             cursor = await db.execute(
                 f"""
-                SELECT route_id, status_code
-                FROM route_events
-                WHERE route_id IN ({placeholders})
-                ORDER BY created_at DESC, id DESC
+                WITH latest AS (
+                    SELECT route_id,
+                           status_code,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY route_id ORDER BY created_at DESC, id DESC
+                           ) AS rn
+                    FROM route_events
+                    WHERE route_id IN ({placeholders})
+                )
+                SELECT route_id, status_code FROM latest WHERE rn = 1
                 """,
                 route_ids,
             )
@@ -386,8 +503,7 @@ class StateManager:
 
         for row in latest_rows:
             route_id = row["route_id"]
-            if stats[route_id]["last_status_code"] is None:
-                stats[route_id]["last_status_code"] = row["status_code"]
+            stats[route_id]["last_status_code"] = row["status_code"]
 
         return stats
 
@@ -397,7 +513,7 @@ class StateManager:
         provider_name: str,
         model_id: str,
     ) -> RouteState:
-        async with self._lock:
+        async with self._route_lock(route_id):
             async with aiosqlite.connect(self.database_path) as db:
                 await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
                 await db.execute(
@@ -426,7 +542,7 @@ class StateManager:
         status_code: int | None = None,
     ) -> RouteState:
         headers = headers or {}
-        async with self._lock:
+        async with self._route_lock(route_id):
             async with aiosqlite.connect(self.database_path) as db:
                 await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
                 row = await self._fetch_route_state(db, route_id)
@@ -478,7 +594,7 @@ class StateManager:
         status_code: int | None = None,
         threshold: int = 2,
     ) -> RouteState:
-        async with self._lock:
+        async with self._route_lock(route_id):
             async with aiosqlite.connect(self.database_path) as db:
                 await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
                 row = await self._fetch_route_state(db, route_id)
@@ -528,7 +644,7 @@ class StateManager:
         *,
         threshold: int = 2,
     ) -> RouteState:
-        async with self._lock:
+        async with self._route_lock(route_id):
             async with aiosqlite.connect(self.database_path) as db:
                 await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
                 row = await self._fetch_route_state(db, route_id)
@@ -619,7 +735,7 @@ class StateManager:
         completion_tokens = int(usage.get("completion_tokens") or 0)
         total_tokens = int(usage.get("total_tokens") or prompt_tokens + completion_tokens)
 
-        async with self._lock:
+        async with self._provider_lock(provider_name):
             async with aiosqlite.connect(self.database_path) as db:
                 await self._ensure_current_windows_on_connection(db, provider_name)
                 await db.execute(
@@ -681,7 +797,7 @@ class StateManager:
     ) -> None:
         headers = headers or {}
         cooldown_until = self._cooldown_from_headers(headers) or self._now() + cooldown_seconds
-        async with self._lock:
+        async with self._provider_lock(provider_name):
             async with aiosqlite.connect(self.database_path) as db:
                 await self._ensure_current_windows_on_connection(db, provider_name)
                 await db.execute(
@@ -749,6 +865,9 @@ class StateManager:
             await db.commit()
 
     async def _configure_connection(self, db: aiosqlite.Connection) -> None:
+        await db.execute("PRAGMA journal_mode = WAL")
+        await db.execute("PRAGMA synchronous = NORMAL")
+        await db.execute("PRAGMA temp_store = MEMORY")
         await db.execute(f"PRAGMA busy_timeout = {max(0, int(self.busy_timeout_ms))}")
 
     async def _fetch_state(self, db: aiosqlite.Connection, provider_name: str) -> aiosqlite.Row:
@@ -772,13 +891,14 @@ class StateManager:
             raise KeyError(f"Unknown provider: {provider_name}")
         return row
 
-    async def _ensure_route_state_on_connection(
+    async def _upsert_route_state_row(
         self,
         db: aiosqlite.Connection,
         route_id: str,
         provider_name: str,
         model_id: str,
     ) -> None:
+        now = self._now()
         await db.execute(
             """
             INSERT OR IGNORE INTO route_state (
@@ -788,18 +908,35 @@ class StateManager:
                 updated_at
             ) VALUES (?, ?, ?, ?)
             """,
-            (route_id, provider_name, model_id, self._now()),
+            (route_id, provider_name, model_id, now),
         )
-        await db.execute(
-            """
-            UPDATE route_state
-            SET provider_name = ?,
-                model_id = ?
-            WHERE route_id = ?
-            """,
-            (provider_name, model_id, route_id),
-        )
-        await db.commit()
+
+    async def _ensure_route_state_on_connection(
+        self,
+        db: aiosqlite.Connection,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+        *,
+        commit: bool = True,
+    ) -> None:
+        await self._upsert_route_state_row(db, route_id, provider_name, model_id)
+        if commit:
+            await db.commit()
+
+    def _provider_lock(self, provider_name: str) -> asyncio.Lock:
+        lock = self._provider_locks.get(provider_name)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._provider_locks[provider_name] = lock
+        return lock
+
+    def _route_lock(self, route_id: str) -> asyncio.Lock:
+        lock = self._route_locks.get(route_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._route_locks[route_id] = lock
+        return lock
 
     async def _fetch_route_state(self, db: aiosqlite.Connection, route_id: str) -> aiosqlite.Row:
         db.row_factory = aiosqlite.Row

@@ -455,3 +455,26 @@ async def test_router_event_stream_classifies_missing_model_bodies(tmp_path):
     assert failed[0].reason == "model_not_found"
     assert selected
     assert selected[0].provider_name == "fallback"
+
+
+async def test_router_prefetches_provider_availability(tmp_path):
+    """One batch availability read per request instead of per-route check_available calls."""
+    state = await _state(tmp_path)
+    check_calls: list[str] = []
+    orig = StateManager.check_available
+
+    async def traced(provider_name: str, estimated_tokens: int = 0):
+        check_calls.append(provider_name)
+        return await orig(state, provider_name, estimated_tokens)
+
+    state.check_available = traced
+
+    primary = FakeProvider("primary")
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
+    await router.route_chat_completion(_payload())
+
+    assert check_calls == []

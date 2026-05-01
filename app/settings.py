@@ -17,7 +17,13 @@ class Settings(BaseSettings):
     request_timeout_seconds: float = 90
     max_concurrent_requests: int = 20
     request_queue_timeout_seconds: float = 30
+    request_queue_max_waiting_requests: int | None = 200
     sqlite_busy_timeout_ms: int = 5000
+    http_max_connections: int = 400
+    http_max_keepalive_connections: int = 200
+    http_keepalive_expiry_seconds: float = 30
+    #: Delay between SSE content chunks when replaying a full completion (0 = no delay).
+    sse_chunk_replay_sleep_seconds: float = 0.0
     gateway_model_name: str = "auto"
     auto_endpoint_diagnosis_enabled: bool = True
     auto_endpoint_maintenance_enabled: bool = True

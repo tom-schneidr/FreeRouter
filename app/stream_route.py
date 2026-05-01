@@ -10,7 +10,10 @@ from app.router import NoProviderAvailable, WaterfallRouter
 
 
 async def stream_route_chat(
-    payload: dict[str, Any], router: WaterfallRouter
+    payload: dict[str, Any],
+    router: WaterfallRouter,
+    *,
+    chunk_replay_sleep_seconds: float = 0.0,
 ) -> AsyncGenerator[str, None]:
     """Emit SSE route progress events using canonical waterfall router events."""
 
@@ -40,7 +43,6 @@ async def stream_route_chat(
                         "route_id": event.route_id,
                     }
                 )
-                await asyncio.sleep(0)
                 continue
 
             if event.event_type == "route_failed":
@@ -92,7 +94,8 @@ async def stream_route_chat(
                 chunk_size = 12
                 for index in range(0, len(content), chunk_size):
                     yield evt({"type": "content", "text": content[index : index + chunk_size]})
-                    await asyncio.sleep(0.015)
+                    if chunk_replay_sleep_seconds > 0:
+                        await asyncio.sleep(chunk_replay_sleep_seconds)
 
                 yield evt(
                     {

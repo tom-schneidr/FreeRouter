@@ -84,6 +84,32 @@ def test_auto_rank_endpoint_returns_catalog_payload(tmp_path, monkeypatch):
     assert "rank_score" in payload["data"][0]
 
 
+def test_gateway_models_get_includes_health_blob(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.get("/v1/gateway/models")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["object"] == "list"
+    assert payload["data"]
+    assert "health" in payload["data"][0]
+    assert "status" in payload["data"][0]["health"]
+
+
+def test_providers_status_returns_models_with_health_and_usage(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.get("/v1/providers/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["object"] == "list"
+    assert payload["data"]
+    first = payload["data"][0]
+    assert "available" in first
+    assert "models" in first
+    if first["models"]:
+        assert "health" in first["models"][0]
+        assert "usage" in first["models"][0]
+
+
 async def test_request_limiter_times_out_when_full():
     limiter = GatewayRequestLimiter(max_concurrent_requests=1, queue_timeout_seconds=0.01)
     assert await limiter.acquire() is True
@@ -104,3 +130,21 @@ async def test_request_limiter_allows_waiting_request_after_release():
 
     assert await waiter is True
     limiter.release()
+
+
+async def test_request_limiter_rejects_when_waiting_queue_is_full():
+    limiter = GatewayRequestLimiter(
+        max_concurrent_requests=1,
+        queue_timeout_seconds=1,
+        max_waiting_requests=1,
+    )
+    assert await limiter.acquire() is True
+
+    first_waiter = asyncio.create_task(limiter.acquire())
+    await asyncio.sleep(0)
+    second_waiter = await limiter.acquire()
+
+    limiter.release()
+    assert await first_waiter is True
+    limiter.release()
+    assert second_waiter is False

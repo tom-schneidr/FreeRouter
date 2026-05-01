@@ -844,12 +844,20 @@ def _assign_default_ranks() -> None:
 _assign_default_ranks()
 
 
+def _sort_routes_for_catalog(routes: list[ModelRoute]) -> list[ModelRoute]:
+    return sorted(routes, key=lambda route: (route.rank, route.provider_name, route.model_id))
+
+
 class ModelCatalog:
     """JSON-backed model catalog that persists user ranking customizations."""
 
     def __init__(self, path: str) -> None:
         self.path = path
         self._routes: list[ModelRoute] = []
+        self._sorted_routes_cache: list[ModelRoute] | None = None
+
+    def _invalidate_sorted_cache(self) -> None:
+        self._sorted_routes_cache = None
 
     def initialize(self) -> None:
         directory = os.path.dirname(self.path)
@@ -858,17 +866,19 @@ class ModelCatalog:
 
         if not os.path.exists(self.path):
             self._routes = DEFAULT_MODEL_ROUTES.copy()
+            self._invalidate_sorted_cache()
             self.save()
             return
 
         self._routes = [route for route in self._load_routes() if is_text_chat_route(route)]
         self._merge_new_defaults()
+        self._invalidate_sorted_cache()
         self.save()
 
     def all_routes(self) -> list[ModelRoute]:
-        return sorted(
-            self._routes, key=lambda route: (route.rank, route.provider_name, route.model_id)
-        )
+        if self._sorted_routes_cache is None:
+            self._sorted_routes_cache = _sort_routes_for_catalog(self._routes)
+        return list(self._sorted_routes_cache)
 
     def enabled_routes(self, requested_model: str | None = None) -> list[ModelRoute]:
         routes = [route for route in self.all_routes() if route.enabled]
@@ -896,6 +906,7 @@ class ModelCatalog:
                 raise ValueError(f"Duplicate route_id: {route.route_id}")
             seen.add(route.route_id)
         self._routes = routes
+        self._invalidate_sorted_cache()
         self.save()
         return self.all_routes()
 
@@ -922,6 +933,7 @@ class ModelCatalog:
                 rank_source=route.rank_source,
             )
             self._routes[index] = updated
+            self._invalidate_sorted_cache()
             self.save()
             return updated
         raise KeyError(f"Unknown route_id: {route_id}")
@@ -981,11 +993,13 @@ class ModelCatalog:
             return []
 
         self._routes = [route for route in self._routes if route.route_id not in route_ids]
+        self._invalidate_sorted_cache()
         self.save()
         return removed
 
     def reset_to_defaults(self) -> list[ModelRoute]:
         self._routes = DEFAULT_MODEL_ROUTES.copy()
+        self._invalidate_sorted_cache()
         self.save()
         return self.all_routes()
 
@@ -1019,6 +1033,7 @@ class ModelCatalog:
                 )
             )
         self._routes = rebuilt
+        self._invalidate_sorted_cache()
         return self.all_routes()
 
     def to_payload(self) -> dict[str, Any]:
@@ -1093,6 +1108,7 @@ class ModelCatalog:
         existing = {route.route_id for route in refreshed}
         refreshed.extend(route for route in DEFAULT_MODEL_ROUTES if route.route_id not in existing)
         self._routes = [route for route in refreshed if is_text_chat_route(route)]
+        self._invalidate_sorted_cache()
 
     @staticmethod
     def _route_from_dict(raw: dict[str, Any]) -> ModelRoute:
