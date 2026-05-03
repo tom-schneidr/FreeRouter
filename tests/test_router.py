@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -7,7 +8,12 @@ import pytest
 
 from app.model_catalog import ModelCatalog
 from app.providers.base import ProviderError, ProviderRateLimited, ProviderResponse
-from app.router import NoProviderAvailable, WaterfallRouter
+from app.router import (
+    NoProviderAvailable,
+    RouteStreamDiag,
+    WaterfallRouter,
+    _payload_commits_openai_stream,
+)
 from app.state import ProviderQuota, StateManager
 
 
@@ -27,11 +33,12 @@ class FakeProvider:
         self.response = response or {
             "id": f"chatcmpl-{name}",
             "object": "chat.completion",
-            "choices": [],
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
             "usage": {"total_tokens": 2},
         }
         self.error = error
         self.calls = 0
+        self.stream_calls = 0
         self._configured = configured
 
     @property
@@ -49,6 +56,32 @@ class FakeProvider:
         if self.error:
             raise self.error
         return ProviderResponse(self.name, 200, {}, dict(self.response))
+
+    async def chat_completion_stream(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        target_model: str | None = None,
+    ) -> Any:
+        self.stream_calls += 1
+        self.target_model = target_model
+        if self.error:
+            raise self.error
+        body = dict(self.response)
+        content = ""
+        try:
+            content = body["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            pass
+        chunk = json.dumps(
+            {
+                "id": body.get("id", f"chatcmpl-{self.name}"),
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": content}}],
+            }
+        )
+        yield f"data: {chunk}\n\n"
+        yield "data: [DONE]\n\n"
 
 
 def _payload() -> dict[str, Any]:
@@ -491,10 +524,46 @@ async def test_router_rejects_streaming(tmp_path):
         [FakeProvider("primary")], _catalog(tmp_path), state, request_timeout_seconds=5
     )
 
-    with pytest.raises(ValueError, match="[Ss]treaming"):
+    with pytest.raises(ValueError, match="iter_route_events"):
         await router.route_chat_completion(
             {"model": "auto", "messages": [{"role": "user", "content": "hi"}], "stream": True}
         )
+
+
+async def test_iter_route_events_rejects_stream_payload(tmp_path):
+    state = await _state(tmp_path)
+    router = WaterfallRouter(
+        [FakeProvider("primary")], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+    payload = {"model": "auto", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+    with pytest.raises(ValueError, match="iter_route_events"):
+        async for _ in router.iter_route_events(payload):
+            pass
+
+
+async def test_openai_stream_falls_back_on_stream_429_before_commit(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider(
+        "primary",
+        error=ProviderRateLimited("rl", status_code=429, headers={"retry-after": "1"}, body=""),
+    )
+    fallback = FakeProvider(
+        "fallback",
+        response={
+            "id": "chatcmpl-fb",
+            "object": "chat.completion",
+            "choices": [{"message": {"role": "assistant", "content": "from-fallback"}}],
+            "usage": {"total_tokens": 3},
+        },
+    )
+    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    parts: list[Any] = [p async for p in router.iter_chat_completion_openai_stream(_payload())]
+
+    assert primary.stream_calls == 1
+    assert fallback.stream_calls == 1
+    sse = "".join(p for p in parts if isinstance(p, str))
+    assert "from-fallback" in sse
+    assert any(isinstance(p, RouteStreamDiag) and p.event_type == "route_selected" for p in parts)
 
 
 async def test_router_event_stream_classifies_missing_model_bodies(tmp_path):
@@ -544,3 +613,19 @@ async def test_router_prefetches_provider_availability(tmp_path):
     await router.route_chat_completion(_payload())
 
     assert check_calls == []
+
+
+def test_stream_commit_substantive_skips_whitespace_only():
+    chunk = {"choices": [{"index": 0, "delta": {"content": "  \n\t"}}]}
+    assert not _payload_commits_openai_stream(chunk, require_substantive_assistant=True)
+    assert _payload_commits_openai_stream(chunk, require_substantive_assistant=False)
+
+
+def test_stream_commit_reasoning_counts_for_substantive():
+    chunk = {"choices": [{"index": 0, "delta": {"reasoning": "think"}}]}
+    assert _payload_commits_openai_stream(chunk, require_substantive_assistant=True)
+
+
+def test_stream_commit_tool_calls_without_text():
+    chunk = {"choices": [{"index": 0, "delta": {"tool_calls": [{"id": "x", "type": "function"}]}}]}
+    assert _payload_commits_openai_stream(chunk, require_substantive_assistant=True)

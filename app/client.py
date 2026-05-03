@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS, build_provider_adapters
-from app.router import RouteResult, WaterfallRouter
+from app.router import ChatStreamPart, RouteResult, WaterfallRouter
 from app.settings import get_settings
 from app.state import StateManager
 
@@ -68,11 +69,39 @@ class UnifiedAIClient:
             A RouteResult object containing the raw response body and metadata
             about the provider, model, and attempts.
         """
+        if kwargs.get("stream"):
+            raise ValueError(
+                "UnifiedAIClient.chat() does not support streaming; use chat_stream() instead "
+                "or call POST /v1/chat/completions with stream:true."
+            )
+
         if not self.router:
             await self.initialize()
 
         payload = {"messages": messages, "model": kwargs.pop("model", "auto"), **kwargs}
         return await self.router.route_chat_completion(payload)
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        required_tag: str | None = None,
+        require_assistant_content: bool = False,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatStreamPart]:
+        """Stream OpenAI-compatible SSE fragments and routing diagnostics from the gateway router."""
+        if not self.router:
+            await self.initialize()
+
+        kwargs.pop("stream", None)
+        payload = {"messages": messages, "model": kwargs.pop("model", "auto"), **kwargs}
+        payload["stream"] = True
+        async for part in self.router.iter_chat_completion_openai_stream(
+            payload,
+            required_tag=required_tag,
+            require_assistant_content=require_assistant_content,
+        ):
+            yield part
 
 
 _default_client: UnifiedAIClient | None = None

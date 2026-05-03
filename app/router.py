@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
@@ -55,6 +56,139 @@ class RouteEvent:
     status_code: int | None = None
     attempts: list[ProviderAttempt] | None = None
     response: ProviderResponse | None = None
+
+
+@dataclass(frozen=True)
+class RouteStreamDiag:
+    """Structured routing progress for :meth:`WaterfallRouter.iter_chat_completion_openai_stream`."""
+
+    event_type: str
+    provider_name: str | None = None
+    route_id: str | None = None
+    model_id: str | None = None
+    reason: str | None = None
+    status_code: int | None = None
+
+
+ChatStreamPart = RouteStreamDiag | str
+
+
+class _SseDoneSentinel:
+    __slots__ = ()
+
+
+_SSE_DONE = _SseDoneSentinel()
+
+
+def _split_sse_event_blocks(carry: str) -> tuple[list[str], str]:
+    """Split a buffer on blank-line SSE delimiters. Blocks do not include the trailing ``\\n\\n``."""
+    normalized = carry.replace("\r\n", "\n")
+    blocks: list[str] = []
+    rest = normalized
+    while True:
+        idx = rest.find("\n\n")
+        if idx == -1:
+            break
+        blocks.append(rest[:idx])
+        rest = rest[idx + 2 :]
+    return blocks, rest
+
+
+def _event_block_data_payload(event_block: str) -> Any:
+    for raw_line in event_block.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(":"):
+            continue
+        if line.startswith("data: "):
+            inner = line[6:].strip()
+            if inner == "[DONE]":
+                return _SSE_DONE
+            try:
+                return json.loads(inner)
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def _delta_has_tool_calls(payload_obj: dict[str, Any]) -> bool:
+    choices = payload_obj.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    choice0 = choices[0]
+    if not isinstance(choice0, dict):
+        return False
+    delta = choice0.get("delta")
+    if not isinstance(delta, dict):
+        return False
+    tc = delta.get("tool_calls")
+    return isinstance(tc, list) and len(tc) > 0
+
+
+def _delta_visible_text_from_chunk(payload_obj: dict[str, Any]) -> str:
+    """Assistant-visible text in one SSE JSON chunk: message delta content, reasoning, legacy text."""
+    choices = payload_obj.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    choice0 = choices[0]
+    if not isinstance(choice0, dict):
+        return ""
+    parts: list[str] = []
+    delta = choice0.get("delta")
+    if isinstance(delta, dict):
+        content = delta.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        for key in ("reasoning", "reasoning_content"):
+            piece = delta.get(key)
+            if isinstance(piece, str):
+                parts.append(piece)
+    text = choice0.get("text")
+    if isinstance(text, str):
+        parts.append(text)
+    return "".join(parts)
+
+
+def _payload_commits_openai_stream(
+    payload_obj: Any,
+    *,
+    require_substantive_assistant: bool = False,
+) -> bool:
+    """Commit after the first meaningful chunk (optionally require non-whitespace text)."""
+    if payload_obj is None or isinstance(payload_obj, _SseDoneSentinel):
+        return False
+    if not isinstance(payload_obj, dict):
+        return False
+    if "error" in payload_obj:
+        return False
+    choices = payload_obj.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return False
+    if _delta_has_tool_calls(payload_obj):
+        return True
+    visible = _delta_visible_text_from_chunk(payload_obj)
+    if require_substantive_assistant:
+        return bool(visible.strip())
+    return bool(visible)
+
+
+def _usage_from_openai_chunk(payload_obj: dict[str, Any]) -> dict[str, Any] | None:
+    usage = payload_obj.get("usage")
+    return usage if isinstance(usage, dict) else None
+
+
+def _delta_content_from_openai_chunk(payload_obj: dict[str, Any]) -> str:
+    """Backward-compatible: delta ``content`` only (no reasoning)."""
+    choices = payload_obj.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    choice0 = choices[0]
+    if not isinstance(choice0, dict):
+        return ""
+    delta = choice0.get("delta")
+    if not isinstance(delta, dict):
+        return ""
+    content = delta.get("content")
+    return content if isinstance(content, str) else ""
 
 
 class WaterfallRouter:
@@ -117,7 +251,7 @@ class WaterfallRouter:
         validate_chat_completion_payload(payload)
         if payload.get("stream"):
             raise ValueError(
-                "Streaming is not supported yet because transparent fallback needs a full response"
+                "iter_route_events does not accept stream:true; use iter_chat_completion_openai_stream instead"
             )
 
         if self._http_client is not None:
@@ -139,6 +273,44 @@ class WaterfallRouter:
                 require_assistant_content=require_assistant_content,
             ):
                 yield event
+
+    async def iter_chat_completion_openai_stream(
+        self,
+        payload: dict[str, Any],
+        *,
+        required_tag: str | None = None,
+        require_assistant_content: bool = False,
+    ) -> AsyncGenerator[ChatStreamPart, None]:
+        """Stream OpenAI-compatible SSE; routing diagnostics as :class:`RouteStreamDiag`."""
+        from app.openai_stream_routing import waterfall_openai_stream
+
+        outbound = dict(payload)
+        outbound["stream"] = True
+        if self._http_client is not None:
+            async for part in waterfall_openai_stream(
+                providers_by_name=self.provider_by_name,
+                model_catalog=self.model_catalog,
+                state=self.state,
+                client=self._http_client,
+                payload=outbound,
+                required_tag=required_tag,
+                require_assistant_content=require_assistant_content,
+            ):
+                yield part
+            return
+
+        timeout = httpx.Timeout(self.request_timeout_seconds)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async for part in waterfall_openai_stream(
+                providers_by_name=self.provider_by_name,
+                model_catalog=self.model_catalog,
+                state=self.state,
+                client=client,
+                payload=outbound,
+                required_tag=required_tag,
+                require_assistant_content=require_assistant_content,
+            ):
+                yield part
 
     async def _iter_route_events_with_client(
         self,

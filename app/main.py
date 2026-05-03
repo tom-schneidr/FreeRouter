@@ -24,12 +24,13 @@ from app.providers import PROVIDER_QUOTAS, ProviderError, build_provider_adapter
 from app.request_limiter import GatewayRequestLimiter
 from app.router import (
     NoProviderAvailable,
+    RouteStreamDiag,
     WaterfallRouter,
+    validate_chat_completion_payload,
 )
 from app.settings import get_settings
 from app.state import StateManager
 from app.stream_route import stream_route_chat
-
 
 WEB_SEARCH_TOOL = {"type": "web_search_preview"}
 
@@ -795,6 +796,214 @@ def _has_web_search_tool(tools: list[Any]) -> bool:
     )
 
 
+async def _publish_route_stream_diag(
+    monitor: APILiveMonitor,
+    request_id: str,
+    diag: RouteStreamDiag,
+) -> None:
+    if diag.event_type == "route_trying":
+        await monitor.publish(
+            event_type="route_attempt",
+            request_id=request_id,
+            payload={
+                "route_event": {
+                    "type": "route_trying",
+                    "provider_name": diag.provider_name,
+                    "route_id": diag.route_id,
+                    "model_id": diag.model_id,
+                }
+            },
+        )
+        return
+    if diag.event_type == "route_skipped":
+        await monitor.publish(
+            event_type="route_attempt",
+            request_id=request_id,
+            payload={
+                "route_event": {
+                    "type": "route_skip",
+                    "provider_name": diag.provider_name,
+                    "route_id": diag.route_id,
+                    "model_id": diag.model_id,
+                    "reason": diag.reason,
+                }
+            },
+        )
+        return
+    if diag.event_type == "route_failed":
+        await monitor.publish(
+            event_type="route_attempt",
+            request_id=request_id,
+            payload={
+                "route_event": {
+                    "type": "route_fail",
+                    "provider_name": diag.provider_name,
+                    "route_id": diag.route_id,
+                    "model_id": diag.model_id,
+                    "reason": diag.reason,
+                }
+            },
+        )
+        return
+    if diag.event_type == "route_flagged":
+        await monitor.publish(
+            event_type="route_attempt",
+            request_id=request_id,
+            payload={
+                "route_event": {
+                    "type": "route_flagged",
+                    "provider_name": diag.provider_name,
+                    "route_id": diag.route_id,
+                    "model_id": diag.model_id,
+                    "reason": diag.reason,
+                }
+            },
+        )
+        return
+    if diag.event_type == "route_selected":
+        await monitor.publish(
+            event_type="route_selected",
+            request_id=request_id,
+            payload={
+                "provider_name": diag.provider_name,
+                "route_id": diag.route_id,
+                "model_id": diag.model_id,
+            },
+        )
+        return
+
+
+async def _route_chat_completion_stream_request(
+    request: Request,
+    *,
+    payload: dict[str, Any],
+    path: str,
+    required_tag: str | None = None,
+) -> Response:
+    router: WaterfallRouter = request.app.state.waterfall_router
+    limiter: GatewayRequestLimiter = request.app.state.request_limiter
+    monitor: APILiveMonitor = request.app.state.live_monitor
+    request_id = uuid.uuid4().hex[:12]
+    started_at = perf_counter()
+    client_ip = request.client.host if request.client else None
+
+    try:
+        validate_chat_completion_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await monitor.publish(
+        event_type="request_started",
+        request_id=request_id,
+        payload={
+            "path": path,
+            "stream": True,
+            "model": payload.get("model"),
+            "client_ip": client_ip,
+            "request_payload": _monitor_trim(payload),
+        },
+    )
+
+    if not await limiter.acquire():
+        await monitor.publish(
+            event_type="request_rejected",
+            request_id=request_id,
+            payload={"status_code": 429, "reason": "request_queue_timeout"},
+        )
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "message": "Gateway is busy; retry shortly",
+                    "type": "gateway_overloaded",
+                    "code": "request_queue_timeout",
+                }
+            },
+            headers={"Retry-After": "1"},
+        )
+
+    selected_provider = ""
+    selected_route = ""
+    selected_model = ""
+
+    async def openai_sse_stream():
+        nonlocal selected_provider, selected_route, selected_model
+        completed = False
+        try:
+            async for part in router.iter_chat_completion_openai_stream(
+                payload,
+                required_tag=required_tag,
+                require_assistant_content=required_tag == "web-search",
+            ):
+                if isinstance(part, RouteStreamDiag):
+                    await _publish_route_stream_diag(monitor, request_id, part)
+                    if part.event_type == "route_selected":
+                        selected_provider = part.provider_name or ""
+                        selected_route = part.route_id or ""
+                        selected_model = part.model_id or ""
+                else:
+                    yield part
+            completed = True
+        except NoProviderAvailable as exc:
+            await monitor.publish(
+                event_type="request_failed",
+                request_id=request_id,
+                payload={
+                    "status_code": 503,
+                    "reason": "waterfall_exhausted",
+                    "attempts": len(exc.attempts),
+                    "attempts_detail": [asdict(attempt) for attempt in exc.attempts],
+                    "latency_ms": round((perf_counter() - started_at) * 1000),
+                },
+            )
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "error": {
+                            "message": "No configured provider is currently available",
+                            "type": "provider_unavailable",
+                            "code": "waterfall_exhausted",
+                            "attempts": [asdict(attempt) for attempt in exc.attempts],
+                        }
+                    }
+                )
+                + "\n\n"
+            )
+        except ValueError as exc:
+            await monitor.publish(
+                event_type="request_failed",
+                request_id=request_id,
+                payload={
+                    "status_code": 400,
+                    "reason": "validation_error",
+                    "message": str(exc),
+                    "latency_ms": round((perf_counter() - started_at) * 1000),
+                },
+            )
+            yield "data: " + json.dumps({"error": {"message": str(exc), "type": "invalid_request"}}) + "\n\n"
+        finally:
+            limiter.release()
+            if completed:
+                await monitor.publish(
+                    event_type="request_completed",
+                    request_id=request_id,
+                    payload={
+                        "status_code": 200,
+                        "provider_name": selected_provider,
+                        "route_id": selected_route,
+                        "model_id": selected_model,
+                        "latency_ms": round((perf_counter() - started_at) * 1000),
+                    },
+                )
+
+    return StreamingResponse(
+        openai_sse_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 async def _route_chat_completion_request(
     request: Request,
     *,
@@ -946,8 +1155,14 @@ async def _route_chat_completion_request(
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: Request) -> JSONResponse:
+async def chat_completions(request: Request) -> Response:
     payload: dict[str, Any] = await request.json()
+    if payload.get("stream"):
+        return await _route_chat_completion_stream_request(
+            request,
+            payload=payload,
+            path="/v1/chat/completions",
+        )
     return await _route_chat_completion_request(
         request,
         payload=payload,
@@ -956,12 +1171,19 @@ async def chat_completions(request: Request) -> JSONResponse:
 
 
 @app.post("/v1/chat/completions/web-search")
-async def chat_completions_web_search(request: Request) -> JSONResponse:
+async def chat_completions_web_search(request: Request) -> Response:
     payload: Any = await request.json()
     try:
         prepared_payload = _payload_with_required_web_search(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if prepared_payload.get("stream"):
+        return await _route_chat_completion_stream_request(
+            request,
+            payload=prepared_payload,
+            path="/v1/chat/completions/web-search",
+            required_tag="web-search",
+        )
     return await _route_chat_completion_request(
         request,
         payload=prepared_payload,

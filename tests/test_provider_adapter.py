@@ -189,3 +189,48 @@ async def test_chat_completion_raises_provider_error_for_http_failure():
                 {"model": "friendly-model", "messages": [{"role": "user", "content": "hello"}]},
             )
     assert exc.value.status_code == 502
+
+
+async def test_chat_completion_strips_stream_flag_for_non_streaming_requests():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        assert "stream" not in body
+        return httpx.Response(200, json={"id": "chat", "choices": [], "usage": {"total_tokens": 1}})
+
+    adapter = _adapter()
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        await adapter.chat_completion(
+            client,
+            {
+                "model": "friendly-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+
+
+async def test_chat_completion_stream_yields_lines_and_sets_stream_true():
+    sse_body = (
+        'data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        assert body["stream"] is True
+        assert body["model"] == "provider-model"
+        return httpx.Response(200, text=sse_body)
+
+    adapter = _adapter()
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        lines = [
+            line async for line in adapter.chat_completion_stream(
+                client,
+                {"model": "friendly-model", "messages": [{"role": "user", "content": "hello"}]},
+            )
+        ]
+    joined = "".join(lines)
+    assert "delta" in joined
+    assert "[DONE]" in joined

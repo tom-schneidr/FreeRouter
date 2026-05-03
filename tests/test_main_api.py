@@ -67,6 +67,21 @@ def test_chat_completions_returns_503_when_all_providers_unconfigured(tmp_path, 
     assert payload["error"]["attempts"]
 
 
+def test_chat_completions_stream_returns_sse_when_exhausted(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    assert "waterfall_exhausted" in response.text
+
+
 def test_web_search_payload_requires_web_search_tool():
     payload = _payload_with_required_web_search(
         {

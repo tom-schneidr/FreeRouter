@@ -47,6 +47,30 @@ class FakeProvider:
             raise self.error
         return ProviderResponse(self.name, 200, {}, dict(self.response))
 
+    async def chat_completion_stream(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        target_model: str | None = None,
+    ) -> Any:
+        if self.error:
+            raise self.error
+        body = dict(self.response)
+        content = ""
+        try:
+            content = body["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            pass
+        chunk = json.dumps(
+            {
+                "id": body.get("id", f"chatcmpl-{self.name}"),
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": content}}],
+            }
+        )
+        yield f"data: {chunk}\n\n"
+        yield "data: [DONE]\n\n"
+
 
 def _payload() -> dict[str, Any]:
     return {"model": "auto", "messages": [{"role": "user", "content": "hello"}]}

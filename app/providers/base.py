@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -103,27 +103,43 @@ class ProviderAdapter:
             )
         return body
 
+    def _outbound_chat_json(
+        self,
+        payload: dict[str, Any],
+        target_model: str | None,
+        *,
+        stream: bool | None = None,
+    ) -> dict[str, Any]:
+        if not self.api_key:
+            raise ProviderError(f"{self.name} is missing an API key")
+
+        outbound: dict[str, Any] = dict(payload)
+        outbound["model"] = target_model or self._provider_model(payload.get("model"))
+        if self.name == "groq" and _has_web_search_preview_tool(outbound):
+            outbound = _prepare_groq_web_search_payload(outbound)
+        elif self.name == "openrouter" and _has_web_search_preview_tool(outbound):
+            outbound = _prepare_openrouter_web_search_payload(outbound)
+        if stream is not None:
+            outbound["stream"] = stream
+        else:
+            outbound.pop("stream", None)
+        return outbound
+
+    def _chat_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            **(self.extra_headers or {}),
+        }
+
     async def chat_completion(
         self,
         client: httpx.AsyncClient,
         payload: dict[str, Any],
         target_model: str | None = None,
     ) -> ProviderResponse:
-        if not self.api_key:
-            raise ProviderError(f"{self.name} is missing an API key")
-
-        outbound = dict(payload)
-        outbound["model"] = target_model or self._provider_model(payload.get("model"))
-        if self.name == "groq" and _has_web_search_preview_tool(outbound):
-            outbound = _prepare_groq_web_search_payload(outbound)
-        elif self.name == "openrouter" and _has_web_search_preview_tool(outbound):
-            outbound = _prepare_openrouter_web_search_payload(outbound)
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            **(self.extra_headers or {}),
-        }
+        outbound = self._outbound_chat_json(payload, target_model, stream=None)
+        headers = self._chat_headers()
         response = await client.post(
             f"{self.base_url.rstrip('/')}/chat/completions",
             headers=headers,
@@ -162,6 +178,52 @@ class ProviderAdapter:
             headers=response.headers,
             body=body,
         )
+
+    async def chat_completion_stream(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        target_model: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """POST chat/completions with ``stream: true`` and yield newline-terminated SSE lines."""
+        outbound = self._outbound_chat_json(payload, target_model, stream=True)
+        headers = self._chat_headers()
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
+        try:
+            async with client.stream("POST", url, headers=headers, json=outbound) as response:
+                if response.status_code == 429:
+                    body = (await response.aread()).decode("utf-8", errors="replace")
+                    raise ProviderRateLimited(
+                        f"{self.name} returned 429",
+                        status_code=response.status_code,
+                        headers=response.headers,
+                        body=body,
+                    )
+                if response.status_code >= 400:
+                    body = (await response.aread()).decode("utf-8", errors="replace")
+                    raise ProviderError(
+                        f"{self.name} returned HTTP {response.status_code}",
+                        status_code=response.status_code,
+                        headers=response.headers,
+                        body=body,
+                    )
+                async for line in response.aiter_lines():
+                    yield line + "\n"
+        except ProviderError:
+            raise
+        except ProviderRateLimited:
+            raise
+        except httpx.TimeoutException as exc:
+            raise ProviderError(
+                f"{self.name} streaming request timed out",
+                status_code=504,
+                body=str(exc),
+            ) from exc
+        except httpx.RequestError as exc:
+            raise ProviderError(
+                f"{self.name} streaming request failed: {exc.__class__.__name__}",
+                body=str(exc),
+            ) from exc
 
     def _provider_model(self, requested_model: Any) -> str:
         if not isinstance(requested_model, str) or requested_model in {"", "auto"}:
