@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     model_catalog_path: str = "./data/model_catalog.json"
     request_timeout_seconds: float = 90
     max_concurrent_requests: int = 20
+    #: When True, SSE chat completions release the concurrency slot once a route is committed
+    #: (first streamed chunk). Long-running streams then no longer block other requests from
+    #: acquiring MAX_CONCURRENT_REQUESTS. Set False to bound simultaneous open streams strictly.
+    streaming_release_slot_after_route_selected: bool = True
     request_queue_timeout_seconds: float = 30
     request_queue_max_waiting_requests: int | None = 200
     sqlite_busy_timeout_ms: int = 5000

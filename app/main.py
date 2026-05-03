@@ -922,12 +922,14 @@ async def _route_chat_completion_stream_request(
             headers={"Retry-After": "1"},
         )
 
+    settings = get_settings()
+    limiter_slot_held = True
     selected_provider = ""
     selected_route = ""
     selected_model = ""
 
     async def openai_sse_stream():
-        nonlocal selected_provider, selected_route, selected_model
+        nonlocal selected_provider, selected_route, selected_model, limiter_slot_held
         completed = False
         try:
             async for part in router.iter_chat_completion_openai_stream(
@@ -941,6 +943,12 @@ async def _route_chat_completion_stream_request(
                         selected_provider = part.provider_name or ""
                         selected_route = part.route_id or ""
                         selected_model = part.model_id or ""
+                        if (
+                            settings.streaming_release_slot_after_route_selected
+                            and limiter_slot_held
+                        ):
+                            limiter.release()
+                            limiter_slot_held = False
                 else:
                     yield part
             completed = True
@@ -983,7 +991,9 @@ async def _route_chat_completion_stream_request(
             )
             yield "data: " + json.dumps({"error": {"message": str(exc), "type": "invalid_request"}}) + "\n\n"
         finally:
-            limiter.release()
+            if limiter_slot_held:
+                limiter.release()
+                limiter_slot_held = False
             if completed:
                 await monitor.publish(
                     event_type="request_completed",
@@ -1231,8 +1241,11 @@ async def chat_completions_stream_route(request: Request) -> Response:
             headers={"Retry-After": "1"},
         )
 
+    stream_settings = get_settings()
+    limiter_slot_held = True
+
     async def on_stream_event(event_payload: dict[str, Any]) -> None:
-        nonlocal done_published
+        nonlocal done_published, limiter_slot_held
         event_type = event_payload.get("type")
         if event_type == "route_selected":
             await monitor.publish(
@@ -1245,6 +1258,12 @@ async def chat_completions_stream_route(request: Request) -> Response:
                     "stream_event": _monitor_trim(event_payload),
                 },
             )
+            if (
+                stream_settings.streaming_release_slot_after_route_selected
+                and limiter_slot_held
+            ):
+                limiter.release()
+                limiter_slot_held = False
             return
         if event_type in {"route_trying", "route_skip", "route_fail", "route_flagged"}:
             await monitor.publish(
@@ -1311,7 +1330,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
             done_published = True
 
     async def limited_stream():
-        nonlocal done_published
+        nonlocal done_published, limiter_slot_held
         try:
             async for chunk in stream_route_chat(
                 payload,
@@ -1321,7 +1340,9 @@ async def chat_completions_stream_route(request: Request) -> Response:
             ):
                 yield chunk
         finally:
-            limiter.release()
+            if limiter_slot_held:
+                limiter.release()
+                limiter_slot_held = False
             if not done_published:
                 await monitor.publish(
                     event_type="request_closed",

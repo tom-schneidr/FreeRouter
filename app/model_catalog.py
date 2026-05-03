@@ -135,6 +135,12 @@ def promote_routes_to_default_catalog(routes: list[ModelRoute]) -> list[ModelRou
             or (route.provider_name, route.model_id) in existing_targets
         ):
             continue
+        promoted_tags = _canonical_tags(route.tags)
+        if route.provider_name == "openrouter" and "text" in promoted_tags:
+            for extra in ("tool-use", "web-search"):
+                if extra not in promoted_tags:
+                    promoted_tags.append(extra)
+
         default_route = ModelRoute(
             route_id=route.route_id,
             provider_name=route.provider_name,
@@ -146,7 +152,7 @@ def promote_routes_to_default_catalog(routes: list[ModelRoute]) -> list[ModelRou
             quality=route.quality,
             speed=route.speed,
             cost=route.cost,
-            tags=_canonical_tags(route.tags),
+            tags=promoted_tags,
             notes=route.notes,
             source_url=route.source_url,
             rank_score=route.rank_score,
