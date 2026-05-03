@@ -98,6 +98,10 @@ async def stream_route_chat(
                         }
                     )
                     continue
+                if part.event_type == "usage_summary":
+                    if part.usage:
+                        yield await emit({"type": "usage", "usage": part.usage})
+                    continue
                 continue
 
             carry += part

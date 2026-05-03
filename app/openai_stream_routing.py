@@ -27,6 +27,14 @@ if TYPE_CHECKING:
     from app.providers.base import ProviderAdapter
 
 
+def _usage_summary_diag(usage: dict[str, Any] | None) -> RouteStreamDiag | None:
+    """Emit once per completed stream so dashboards can show upstream usage totals."""
+
+    if not usage:
+        return None
+    return RouteStreamDiag(event_type="usage_summary", usage=dict(usage))
+
+
 async def waterfall_openai_stream(
     *,
     providers_by_name: dict[str, ProviderAdapter],
@@ -308,6 +316,9 @@ async def waterfall_openai_stream(
                                 headers={},
                                 status_code=last_status,
                             )
+                            summary = _usage_summary_diag(usage)
+                            if summary is not None:
+                                yield summary
                             yield text
                             return
                         yield text
@@ -328,6 +339,9 @@ async def waterfall_openai_stream(
                     headers={},
                     status_code=last_status,
                 )
+                summary = _usage_summary_diag(usage)
+                if summary is not None:
+                    yield summary
                 yield "data: [DONE]\n\n"
                 return
         except ProviderRateLimited as exc:
@@ -345,6 +359,9 @@ async def waterfall_openai_stream(
                     headers={},
                     status_code=last_status,
                 )
+                summary = _usage_summary_diag(usage)
+                if summary is not None:
+                    yield summary
                 yield "data: [DONE]\n\n"
                 return
             flagged_state = await state.mark_route_rate_limited(
@@ -399,6 +416,9 @@ async def waterfall_openai_stream(
                     headers={},
                     status_code=last_status,
                 )
+                summary = _usage_summary_diag(usage)
+                if summary is not None:
+                    yield summary
                 yield "data: [DONE]\n\n"
                 return
             timeout_state = await state.mark_route_timeout(
@@ -453,6 +473,9 @@ async def waterfall_openai_stream(
                     headers={},
                     status_code=last_status,
                 )
+                summary = _usage_summary_diag(usage)
+                if summary is not None:
+                    yield summary
                 yield "data: [DONE]\n\n"
                 return
             attempt = ProviderAttempt(
@@ -486,6 +509,9 @@ async def waterfall_openai_stream(
                     headers={},
                     status_code=last_status,
                 )
+                summary = _usage_summary_diag(usage)
+                if summary is not None:
+                    yield summary
                 yield "data: [DONE]\n\n"
                 return
             if exc.status_code is not None and 500 <= exc.status_code < 600:

@@ -61,6 +61,11 @@ CHAT_HTML = r"""<!doctype html>
     .msg.assistant pre code { background: transparent; border: none; padding: 0; }
     .msg.assistant blockquote { border-left: 3px solid var(--accent); padding-left: 0.75rem; color: var(--text-muted); }
     .msg.assistant a { color: #93c5fd; }
+    .msg.assistant .md-table-wrap { overflow-x: auto; max-width: 100%; margin: 0.5rem 0; -webkit-overflow-scrolling: touch; }
+    .msg.assistant table.md-table { border-collapse: collapse; font-size: 0.9em; width: max-content; max-width: 100%; }
+    .msg.assistant table.md-table th,
+    .msg.assistant table.md-table td { border: 1px solid var(--border); padding: 0.4rem 0.55rem; vertical-align: top; }
+    .msg.assistant table.md-table th { background: rgba(30, 41, 59, 0.65); font-weight: 600; color: var(--text); }
     .msg-meta { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.4rem; }
     .msg.assistant .msg-meta { color: var(--purple); }
     .msg.system-error { align-self: center; background: rgba(239,68,68,0.1); border: 1px solid var(--red);
@@ -204,6 +209,63 @@ function renderInlineMarkdown(text) {
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
 }
 
+function parseTableRow(line) {
+  const t = line.trim();
+  if (!t.includes('|')) return null;
+  const parts = t.split('|');
+  if (parts.length < 3) return null;
+  return parts.slice(1, -1).map((c) => c.trim());
+}
+
+function isSeparatorRow(cells) {
+  return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c.trim()));
+}
+
+function cellAlign(cell) {
+  const c = cell.trim();
+  if (/^:-+$/.test(c)) return 'left';
+  if (/^-+:$/.test(c)) return 'right';
+  if (/^:-+:$/.test(c)) return 'center';
+  return 'left';
+}
+
+function renderTableHtml(header, align, bodyRows) {
+  const ths = header.map((h, idx) => {
+    const a = align[idx] || 'left';
+    return `<th style="text-align:${a}">${renderInlineMarkdown(h)}</th>`;
+  });
+  const trs = bodyRows.map((row) =>
+    `<tr>${row.map((cell, idx) => {
+      const a = align[idx] || 'left';
+      return `<td style="text-align:${a}">${renderInlineMarkdown(cell)}</td>`;
+    }).join('')}</tr>`
+  );
+  return `<div class="md-table-wrap"><table class="md-table"><thead><tr>${ths.join('')}</tr></thead><tbody>${trs.join('')}</tbody></table></div>`;
+}
+
+function detectGFMTable(lines, start) {
+  if (start + 1 >= lines.length) return null;
+  const row0 = lines[start].trim();
+  const row1 = lines[start + 1].trim();
+  if (!row0 || !row1) return null;
+  const header = parseTableRow(row0);
+  const sepCells = parseTableRow(row1);
+  if (!header || !sepCells || header.length !== sepCells.length) return null;
+  if (!isSeparatorRow(sepCells)) return null;
+  const align = sepCells.map(cellAlign);
+  const body = [];
+  let j = start + 2;
+  while (j < lines.length) {
+    const tr = lines[j].trim();
+    if (!tr) break;
+    const row = parseTableRow(tr);
+    if (!row || row.length !== header.length) break;
+    body.push(row);
+    j++;
+  }
+  return { html: renderTableHtml(header, align, body), nextIndex: j };
+}
+
 function renderMarkdown(markdown) {
   const codeBlocks = [];
   const protectedText = String(markdown || '').replace(/```(\w+)?\n?([\s\S]*?)```/g, (_, lang, code) => {
@@ -211,6 +273,7 @@ function renderMarkdown(markdown) {
     codeBlocks.push(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`);
     return token;
   });
+  const lines = protectedText.split('\n');
   const blocks = [];
   let paragraph = [];
   let listItems = [];
@@ -236,25 +299,38 @@ function renderMarkdown(markdown) {
     flushLists();
   }
 
-  for (const rawLine of protectedText.split('\n')) {
+  let i = 0;
+  while (i < lines.length) {
+    const rawLine = lines[i];
     const line = rawLine.trimEnd();
     const trimmed = line.trim();
     const codeMatch = trimmed.match(/^\u0000CODE(\d+)\u0000$/);
     if (codeMatch) {
       flushAll();
       blocks.push(codeBlocks[Number(codeMatch[1])]);
+      i++;
       continue;
     }
     if (!trimmed) {
       flushAll();
+      i++;
+      continue;
+    }
+
+    const tbl = detectGFMTable(lines, i);
+    if (tbl) {
+      flushAll();
+      blocks.push(tbl.html);
+      i = tbl.nextIndex;
       continue;
     }
 
     const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
       flushAll();
-      const level = Math.min(6, heading[1].length + 2);
+      const level = Math.min(6, heading[1].length);
       blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      i++;
       continue;
     }
 
@@ -263,6 +339,7 @@ function renderMarkdown(markdown) {
       flushParagraph();
       orderedItems = [];
       listItems.push(bullet[1]);
+      i++;
       continue;
     }
     const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
@@ -270,10 +347,12 @@ function renderMarkdown(markdown) {
       flushParagraph();
       listItems = [];
       orderedItems.push(ordered[1]);
+      i++;
       continue;
     }
     flushLists();
     paragraph.push(trimmed);
+    i++;
   }
 
   flushAll();

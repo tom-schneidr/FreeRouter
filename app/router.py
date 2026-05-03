@@ -68,6 +68,7 @@ class RouteStreamDiag:
     model_id: str | None = None
     reason: str | None = None
     status_code: int | None = None
+    usage: dict[str, Any] | None = None
 
 
 ChatStreamPart = RouteStreamDiag | str

@@ -801,6 +801,14 @@ async def _publish_route_stream_diag(
     request_id: str,
     diag: RouteStreamDiag,
 ) -> None:
+    if diag.event_type == "usage_summary":
+        if diag.usage:
+            await monitor.publish(
+                event_type="usage_update",
+                request_id=request_id,
+                payload={"usage": _monitor_trim(dict(diag.usage))},
+            )
+        return
     if diag.event_type == "route_trying":
         await monitor.publish(
             event_type="route_attempt",
@@ -1247,6 +1255,15 @@ async def chat_completions_stream_route(request: Request) -> Response:
     async def on_stream_event(event_payload: dict[str, Any]) -> None:
         nonlocal done_published, limiter_slot_held
         event_type = event_payload.get("type")
+        if event_type == "usage":
+            usage = event_payload.get("usage")
+            if isinstance(usage, dict) and usage:
+                await monitor.publish(
+                    event_type="usage_update",
+                    request_id=request_id,
+                    payload={"usage": _monitor_trim(usage)},
+                )
+            return
         if event_type == "route_selected":
             await monitor.publish(
                 event_type="route_selected",
@@ -1447,7 +1464,7 @@ ROUTE_HEALTH_HTML = """
 """
 
 
-LIVE_API_HTML = """
+LIVE_API_HTML = r"""
 <!doctype html>
 <html lang="en">
   <head>
@@ -1481,6 +1498,29 @@ LIVE_API_HTML = """
       .expand-btn:hover { background: var(--border); }
       .details-row td { background: var(--bg-primary); }
       .details-wrap { display: grid; gap: 0.75rem; }
+      .details-wrap .md-body {
+        border: 1px solid var(--border); background: var(--bg-secondary); border-radius: 8px; padding: 0.65rem 0.85rem;
+        font-size: 0.8rem; line-height: 1.45; color: var(--text); max-height: min(28rem, 70vh); overflow: auto;
+      }
+      .details-wrap .md-body p { margin: 0.35rem 0; }
+      .details-wrap .md-body p:first-child { margin-top: 0; }
+      .details-wrap .md-body p:last-child { margin-bottom: 0; }
+      .details-wrap .md-body h1, .details-wrap .md-body h2, .details-wrap .md-body h3,
+      .details-wrap .md-body h4, .details-wrap .md-body h5, .details-wrap .md-body h6 {
+        margin: 0.6rem 0 0.35rem; font-weight: 600; color: #f8fafc;
+      }
+      .details-wrap .md-body h1 { font-size: 1.05rem; }
+      .details-wrap .md-body h2 { font-size: 0.98rem; }
+      .details-wrap .md-body h3 { font-size: 0.92rem; }
+      .details-wrap .md-body ul, .details-wrap .md-body ol { margin: 0.35rem 0 0.35rem 1.15rem; padding: 0; }
+      .details-wrap .md-body li { margin: 0.15rem 0; }
+      .details-wrap .md-body a { color: #93c5fd; text-decoration: underline; text-underline-offset: 2px; }
+      .details-wrap .md-body pre { margin: 0.45rem 0; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border); background: var(--bg-primary); border-radius: 6px; padding: 0.55rem 0.65rem; font-size: 0.74rem; color: var(--text-muted); }
+      .details-wrap .md-body .md-table-wrap { overflow-x: auto; max-width: 100%; margin: 0.35rem 0; }
+      .details-wrap .md-body table.md-table { border-collapse: collapse; font-size: 0.85em; width: max-content; max-width: 100%; }
+      .details-wrap .md-body table.md-table th,
+      .details-wrap .md-body table.md-table td { border: 1px solid var(--border); padding: 0.3rem 0.45rem; vertical-align: top; }
+      .details-wrap .md-body table.md-table th { background: rgba(30, 41, 59, 0.65); font-weight: 600; color: var(--text); }
       .details-wrap pre { margin: 0; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border); background: var(--bg-secondary); border-radius: 8px; padding: 0.65rem; font-size: 0.75rem; color: var(--text-muted); }
       .attempts { display: grid; gap: 0.45rem; position: relative; }
       .attempt { position: relative; display: grid; grid-template-columns: 1.9rem 1fr auto; gap: 0.68rem; align-items: center; border: 1px solid rgba(148,163,184,0.16); background: linear-gradient(180deg, rgba(30,41,59,0.5), rgba(15,23,42,0.55)); border-radius: 10px; padding: 0.58rem 0.7rem; }
@@ -1522,7 +1562,7 @@ LIVE_API_HTML = """
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Time</th><th>Phase</th><th>Request</th><th>Tokens</th><th>Model</th><th>Status</th><th>Provider/Route</th><th>Latency</th><th>Details</th><th>Expand</th></tr>
+            <tr><th>Time</th><th>Phase</th><th>Request</th><th title="Usage fields from upstream JSON when provided (stream often sends only at end of SSE)">Upstream usage</th><th>Model</th><th>Status</th><th>Provider/Route</th><th>Latency</th><th>Details</th><th>Expand</th></tr>
           </thead>
           <tbody id="rows"></tbody>
         </table>
@@ -1536,7 +1576,169 @@ LIVE_API_HTML = """
       const requests = new Map();
       const seenEventIds = new Set();
       const expanded = new Set();
+      function formatProviderUsage(u) {
+        if (!u || typeof u !== 'object') return '';
+        const num = (x) => (x == null || x === '') ? NaN : Number(x);
+        const total = num(u.total_tokens);
+        if (!Number.isNaN(total)) return String(total);
+        const prompt = num(u.prompt_tokens);
+        const completion = num(u.completion_tokens);
+        const parts = [];
+        if (!Number.isNaN(prompt)) parts.push(prompt);
+        if (!Number.isNaN(completion)) parts.push(completion);
+        return parts.length ? parts.join(' + ') : '';
+      }
       const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+      function escapeHtmlDom(s) {
+        const d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+      }
+      function renderInlineMarkdown(text) {
+        return escapeHtmlDom(text)
+          .replace(/`([^`]+)`/g, '<code>$1</code>')
+          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+          .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+          .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+      }
+      function parseTableRow(line) {
+        const t = line.trim();
+        if (!t.includes('|')) return null;
+        const parts = t.split('|');
+        if (parts.length < 3) return null;
+        return parts.slice(1, -1).map((c) => c.trim());
+      }
+      function isSeparatorRow(cells) {
+        return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c.trim()));
+      }
+      function cellAlign(cell) {
+        const c = cell.trim();
+        if (/^:-+$/.test(c)) return 'left';
+        if (/^-+:$/.test(c)) return 'right';
+        if (/^:-+:$/.test(c)) return 'center';
+        return 'left';
+      }
+      function renderTableHtml(header, align, bodyRows) {
+        const ths = header.map((h, idx) => {
+          const a = align[idx] || 'left';
+          return `<th style="text-align:${a}">${renderInlineMarkdown(h)}</th>`;
+        });
+        const trs = bodyRows.map((row) =>
+          `<tr>${row.map((cell, idx) => {
+            const a = align[idx] || 'left';
+            return `<td style="text-align:${a}">${renderInlineMarkdown(cell)}</td>`;
+          }).join('')}</tr>`
+        );
+        return `<div class="md-table-wrap"><table class="md-table"><thead><tr>${ths.join('')}</tr></thead><tbody>${trs.join('')}</tbody></table></div>`;
+      }
+      function detectGFMTable(lines, start) {
+        if (start + 1 >= lines.length) return null;
+        const row0 = lines[start].trim();
+        const row1 = lines[start + 1].trim();
+        if (!row0 || !row1) return null;
+        const header = parseTableRow(row0);
+        const sepCells = parseTableRow(row1);
+        if (!header || !sepCells || header.length !== sepCells.length) return null;
+        if (!isSeparatorRow(sepCells)) return null;
+        const align = sepCells.map(cellAlign);
+        const body = [];
+        let j = start + 2;
+        while (j < lines.length) {
+          const tr = lines[j].trim();
+          if (!tr) break;
+          const row = parseTableRow(tr);
+          if (!row || row.length !== header.length) break;
+          body.push(row);
+          j++;
+        }
+        return { html: renderTableHtml(header, align, body), nextIndex: j };
+      }
+      function renderMarkdown(markdown) {
+        const codeBlocks = [];
+        const protectedText = String(markdown || '').replace(/```(\w+)?\n?([\s\S]*?)```/g, (_, lang, code) => {
+          const token = `\u0000CODE${codeBlocks.length}\u0000`;
+          codeBlocks.push(`<pre><code>${escapeHtmlDom(code.replace(/\n$/, ''))}</code></pre>`);
+          return token;
+        });
+        const lines = protectedText.split('\n');
+        const blocks = [];
+        let paragraph = [];
+        let listItems = [];
+        let orderedItems = [];
+        function flushParagraph() {
+          if (!paragraph.length) return;
+          blocks.push(`<p>${paragraph.map(renderInlineMarkdown).join('<br>')}</p>`);
+          paragraph = [];
+        }
+        function flushLists() {
+          if (listItems.length) {
+            blocks.push(`<ul>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ul>`);
+            listItems = [];
+          }
+          if (orderedItems.length) {
+            blocks.push(`<ol>${orderedItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ol>`);
+            orderedItems = [];
+          }
+        }
+        function flushAll() {
+          flushParagraph();
+          flushLists();
+        }
+        let i = 0;
+        while (i < lines.length) {
+          const rawLine = lines[i];
+          const line = rawLine.trimEnd();
+          const trimmed = line.trim();
+          const codeMatch = trimmed.match(/^\u0000CODE(\d+)\u0000$/);
+          if (codeMatch) {
+            flushAll();
+            blocks.push(codeBlocks[Number(codeMatch[1])]);
+            i++;
+            continue;
+          }
+          if (!trimmed) {
+            flushAll();
+            i++;
+            continue;
+          }
+          const tbl = detectGFMTable(lines, i);
+          if (tbl) {
+            flushAll();
+            blocks.push(tbl.html);
+            i = tbl.nextIndex;
+            continue;
+          }
+          const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+          if (heading) {
+            flushAll();
+            const level = Math.min(6, heading[1].length);
+            blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+            i++;
+            continue;
+          }
+          const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+          if (bullet) {
+            flushParagraph();
+            orderedItems = [];
+            listItems.push(bullet[1]);
+            i++;
+            continue;
+          }
+          const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
+          if (ordered) {
+            flushParagraph();
+            listItems = [];
+            orderedItems.push(ordered[1]);
+            i++;
+            continue;
+          }
+          flushLists();
+          paragraph.push(trimmed);
+          i++;
+        }
+        flushAll();
+        return blocks.join('');
+      }
       const when = (ts) => ts ? new Date(Number(ts) * 1000).toLocaleTimeString() : '';
       const isUsefulText = (value) => typeof value === 'string' && value.trim() && value.trim() !== '<truncated-depth>';
       function statusClass(status) {
@@ -1575,12 +1777,8 @@ LIVE_API_HTML = """
         current.path = payload.path || current.path;
         current.model = payload.model || payload.model_id || current.model;
         if (payload.usage && typeof payload.usage === 'object') {
-          const total = payload.usage.total_tokens ?? null;
-          const prompt = payload.usage.prompt_tokens ?? null;
-          const completion = payload.usage.completion_tokens ?? null;
-          const fromUsage =
-            total != null ? String(total) : [prompt, completion].filter((v) => v != null).join(' + ');
-          current.tokens = fromUsage || 'Unknown';
+          const formatted = formatProviderUsage(payload.usage);
+          current.tokens = formatted || 'Unknown';
         } else if (payload.request_payload?.max_tokens || payload.request_payload?.max_completion_tokens) {
           current.tokens = 'Unknown';
         }
@@ -1787,10 +1985,14 @@ LIVE_API_HTML = """
           const assistantText = isUsefulText(row.assistant_text)
             ? row.assistant_text
             : aiResponse(row.response_body || row.stream_event);
+          const userPlain = userMessage(row.request_payload);
+          const userHtml = userPlain.trim() ? renderMarkdown(userPlain) : '<p class="muted">(empty)</p>';
+          const aiPlain = (assistantText || '').trim();
+          const aiHtml = aiPlain ? renderMarkdown(assistantText) : '<p class="muted">(empty)</p>';
           const rawBody = pretty(row.response_body || row.stream_event || {});
           const details = `<tr class="details-row"><td colspan="10"><div class="details-wrap">
-            <div><strong>User message</strong><pre>${esc(userMessage(row.request_payload) || '(empty)')}</pre></div>
-            <div><strong>AI response</strong><pre>${esc(assistantText || '(empty)')}</pre></div>
+            <div><strong>User message</strong><div class="md-body">${userHtml}</div></div>
+            <div><strong>AI response</strong><div class="md-body">${aiHtml}</div></div>
             <details><summary>Raw response payload</summary><pre>${esc(rawBody)}</pre></details>
             <div><strong>Route attempts</strong>${renderAttempts(row.route_attempts || [])}</div>
           </div></td></tr>`;
