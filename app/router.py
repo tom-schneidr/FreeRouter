@@ -74,14 +74,24 @@ class WaterfallRouter:
         self.request_timeout_seconds = request_timeout_seconds
         self._http_client = http_client
 
-    async def route_chat_completion(self, payload: dict[str, Any]) -> RouteResult:
+    async def route_chat_completion(
+        self,
+        payload: dict[str, Any],
+        *,
+        required_tag: str | None = None,
+        require_assistant_content: bool = False,
+    ) -> RouteResult:
         """Walk enabled routes in rank order, attempting each until one succeeds.
 
         Skips routes for missing API keys, context window violations, and quota exhaustion.
         Automatically handles rate-limit responses, timeouts, and server errors by falling
         through to the next route. Raises NoProviderAvailable if all routes are exhausted.
         """
-        async for event in self.iter_route_events(payload):
+        async for event in self.iter_route_events(
+            payload,
+            required_tag=required_tag,
+            require_assistant_content=require_assistant_content,
+        ):
             if event.event_type != "route_selected":
                 continue
             if event.response is None or event.attempts is None:
@@ -96,7 +106,13 @@ class WaterfallRouter:
 
         raise RuntimeError("Router event stream ended unexpectedly")
 
-    async def iter_route_events(self, payload: dict[str, Any]) -> AsyncGenerator[RouteEvent, None]:
+    async def iter_route_events(
+        self,
+        payload: dict[str, Any],
+        *,
+        required_tag: str | None = None,
+        require_assistant_content: bool = False,
+    ) -> AsyncGenerator[RouteEvent, None]:
         """Yield structured route events while executing waterfall routing."""
         validate_chat_completion_payload(payload)
         if payload.get("stream"):
@@ -105,17 +121,32 @@ class WaterfallRouter:
             )
 
         if self._http_client is not None:
-            async for event in self._iter_route_events_with_client(payload, self._http_client):
+            async for event in self._iter_route_events_with_client(
+                payload,
+                self._http_client,
+                required_tag=required_tag,
+                require_assistant_content=require_assistant_content,
+            ):
                 yield event
             return
 
         timeout = httpx.Timeout(self.request_timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            async for event in self._iter_route_events_with_client(payload, client):
+            async for event in self._iter_route_events_with_client(
+                payload,
+                client,
+                required_tag=required_tag,
+                require_assistant_content=require_assistant_content,
+            ):
                 yield event
 
     async def _iter_route_events_with_client(
-        self, payload: dict[str, Any], client: httpx.AsyncClient
+        self,
+        payload: dict[str, Any],
+        client: httpx.AsyncClient,
+        *,
+        required_tag: str | None = None,
+        require_assistant_content: bool = False,
     ) -> AsyncGenerator[RouteEvent, None]:
         estimated_prompt_tokens = estimate_prompt_tokens(payload)
         estimated_total_tokens = estimated_prompt_tokens + int(
@@ -124,7 +155,11 @@ class WaterfallRouter:
         attempts: list[ProviderAttempt] = []
         rate_limit_probe_providers: set[str] = set()
 
-        routes_list = list(self.model_catalog.enabled_routes(payload.get("model")))
+        routes_list = [
+            route
+            for route in self.model_catalog.enabled_routes(payload.get("model"))
+            if required_tag is None or required_tag in route.tags
+        ]
         prefetch_provider_names = sorted(
             {
                 route.provider_name
@@ -405,6 +440,25 @@ class WaterfallRouter:
                         status_code=exc.status_code,
                     )
                     continue
+                if exc.status_code == 413:
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "failed",
+                        "request_too_large",
+                        exc.status_code,
+                        route.route_id,
+                        route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_failed",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                        status_code=exc.status_code,
+                    )
+                    continue
                 if exc.status_code in {401, 403}:
                     attempt = ProviderAttempt(
                         provider.name,
@@ -466,6 +520,26 @@ class WaterfallRouter:
                         )
                     continue
                 raise
+
+            if require_assistant_content and not response_has_assistant_content(response.body):
+                attempt = ProviderAttempt(
+                    provider.name,
+                    "failed",
+                    "empty_assistant_response",
+                    response.status_code,
+                    route.route_id,
+                    route.model_id,
+                )
+                attempts.append(attempt)
+                yield RouteEvent(
+                    event_type="route_failed",
+                    provider_name=provider.name,
+                    route_id=route.route_id,
+                    model_id=route.model_id,
+                    reason=attempt.reason,
+                    status_code=response.status_code,
+                )
+                continue
 
             usage = response.body.get("usage")
             await self.state.record_route_success(
@@ -535,6 +609,40 @@ def _content_to_text(content: Any) -> str:
         if "content" in content:
             return _content_to_text(content["content"])
     return str(content)
+
+
+def response_has_assistant_content(body: dict[str, Any]) -> bool:
+    return bool(_assistant_content_text(body).strip())
+
+
+def _assistant_content_text(body: Any) -> str:
+    if not isinstance(body, dict):
+        return ""
+    direct_content = body.get("content")
+    if isinstance(direct_content, str):
+        return direct_content
+    message = body.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return _content_to_text(content)
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0]
+        if isinstance(choice, dict):
+            message = choice.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    return _content_to_text(content)
+            text = choice.get("text")
+            if isinstance(text, str):
+                return text
+    return ""
 
 
 def validate_chat_completion_payload(payload: dict[str, Any]) -> None:

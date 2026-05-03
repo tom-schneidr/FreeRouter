@@ -121,6 +121,7 @@ def route_model_id_from_catalog_id(model_id: str) -> str:
 
 def tags_for_model(item: dict[str, Any]) -> list[str]:
     text = _model_search_text(item)
+    capability_text = _capability_search_text(item)
 
     tags = ["text"] if is_chat_model(item) else []
     if any(term in text for term in ("vision", "image", "vl", "pixtral", "gemma-3")):
@@ -131,6 +132,10 @@ def tags_for_model(item: dict[str, Any]) -> list[str]:
         tags.append("reasoning")
     if any(term in text for term in ("coder", "code")):
         tags.append("coding")
+    if _supports_tool_use(capability_text):
+        tags.append("tool-use")
+    if _supports_web_search(capability_text):
+        tags.append("web-search")
     return list(dict.fromkeys(tags))
 
 
@@ -230,6 +235,69 @@ def _model_search_text(item: dict[str, Any]) -> str:
             *architecture_values,
         )
     ).lower()
+
+
+def _capability_search_text(item: dict[str, Any]) -> str:
+    values: list[str] = []
+    for key in (
+        "supported_parameters",
+        "supported_features",
+        "capabilities",
+        "features",
+        "tools",
+        "tool_types",
+    ):
+        values.extend(_flatten_text_values(item.get(key)))
+    return " ".join(values).lower()
+
+
+def _flatten_text_values(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (int, float, bool)):
+        return [str(value)]
+    if isinstance(value, list):
+        values: list[str] = []
+        for item in value:
+            values.extend(_flatten_text_values(item))
+        return values
+    if isinstance(value, dict):
+        values = []
+        for key, item in value.items():
+            values.append(str(key))
+            values.extend(_flatten_text_values(item))
+        return values
+    return [str(value)]
+
+
+def _supports_tool_use(capability_text: str) -> bool:
+    return any(
+        term in capability_text
+        for term in (
+            "tools",
+            "tool_choice",
+            "function_call",
+            "function calling",
+            "function_calling",
+        )
+    )
+
+
+def _supports_web_search(capability_text: str) -> bool:
+    normalized = capability_text.replace("-", "_").replace(" ", "_")
+    return any(
+        term in normalized
+        for term in (
+            "web_search",
+            "web_search_options",
+            "web_search_preview",
+            "browser_search",
+            "internet_search",
+            "grounding_with_google_search",
+        )
+    )
 
 
 def _string_list(value: Any) -> list[str]:

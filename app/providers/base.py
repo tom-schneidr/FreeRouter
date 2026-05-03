@@ -114,6 +114,10 @@ class ProviderAdapter:
 
         outbound = dict(payload)
         outbound["model"] = target_model or self._provider_model(payload.get("model"))
+        if self.name == "groq" and _has_web_search_preview_tool(outbound):
+            outbound = _prepare_groq_web_search_payload(outbound)
+        elif self.name == "openrouter" and _has_web_search_preview_tool(outbound):
+            outbound = _prepare_openrouter_web_search_payload(outbound)
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -165,3 +169,52 @@ class ProviderAdapter:
         if self.model_aliases and requested_model in self.model_aliases:
             return self.model_aliases[requested_model]
         return self.default_model
+
+
+def _has_web_search_preview_tool(payload: dict[str, Any]) -> bool:
+    tools = payload.get("tools")
+    if not isinstance(tools, list):
+        return False
+    return any(isinstance(tool, dict) and tool.get("type") == "web_search_preview" for tool in tools)
+
+
+def _prepare_groq_web_search_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    outbound = dict(payload)
+    outbound.pop("tool_choice", None)
+    outbound.pop("max_tokens", None)
+    outbound.pop("max_completion_tokens", None)
+    outbound["tools"] = [
+        tool
+        for tool in outbound.get("tools", [])
+        if not (isinstance(tool, dict) and tool.get("type") == "web_search_preview")
+    ]
+    if not outbound["tools"]:
+        outbound.pop("tools")
+
+    raw_compound_custom = outbound.get("compound_custom")
+    compound_custom = dict(raw_compound_custom) if isinstance(raw_compound_custom, dict) else {}
+    raw_compound_tools = compound_custom.get("tools")
+    compound_tools = dict(raw_compound_tools) if isinstance(raw_compound_tools, dict) else {}
+    enabled_tools = compound_tools.get("enabled_tools")
+    if not isinstance(enabled_tools, list):
+        enabled_tools = []
+    if "web_search" not in enabled_tools:
+        enabled_tools = [*enabled_tools, "web_search"]
+    compound_tools["enabled_tools"] = enabled_tools
+    compound_custom["tools"] = compound_tools
+    outbound["compound_custom"] = compound_custom
+    return outbound
+
+
+def _prepare_openrouter_web_search_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    outbound = dict(payload)
+    outbound.pop("tool_choice", None)
+    tools = [
+        tool
+        for tool in outbound.get("tools", [])
+        if not (isinstance(tool, dict) and tool.get("type") == "web_search_preview")
+    ]
+    if not any(isinstance(tool, dict) and tool.get("type") == "openrouter:web_search" for tool in tools):
+        tools.append({"type": "openrouter:web_search"})
+    outbound["tools"] = tools
+    return outbound

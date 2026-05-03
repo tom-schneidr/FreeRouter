@@ -80,6 +80,9 @@ CHAT_HTML = r"""<!doctype html>
       background: var(--bg-primary); color: var(--text); padding: 0.75rem 1rem; font: inherit;
       font-size: 0.92rem; line-height: 1.5; max-height: 150px; outline: none; transition: border-color 0.2s; }
     .input-bar textarea:focus { border-color: var(--accent); }
+    .input-options { display: flex; align-items: center; gap: 0.45rem; color: var(--text-muted);
+      font-size: 0.82rem; white-space: nowrap; user-select: none; padding-bottom: 0.65rem; }
+    .input-options input { accent-color: var(--accent); }
     .send-btn { width: 44px; height: 44px; border-radius: 50%; border: none; background: var(--accent);
       color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center;
       transition: transform 0.15s, background 0.2s; flex-shrink: 0; }
@@ -143,6 +146,7 @@ CHAT_HTML = r"""<!doctype html>
     <a href="/models">Models</a>
     <a href="/health">Health</a>
     <a href="/status">Provider Usage</a>
+    <a href="/live">Live Traffic</a>
   </nav>
 
   <div class="app">
@@ -157,6 +161,10 @@ CHAT_HTML = r"""<!doctype html>
       <div class="typing" id="typing"><span></span><span></span><span></span></div>
       <div class="input-bar">
         <textarea id="input" rows="1" placeholder="Type a message..." autofocus></textarea>
+        <label class="input-options" title="Route this message through /v1/chat/completions/web-search">
+          <input type="checkbox" id="web-search-toggle">
+          Web search
+        </label>
         <button class="send-btn" id="send-btn" title="Send">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
         </button>
@@ -178,6 +186,7 @@ const sendBtn = document.getElementById('send-btn');
 const typingEl = document.getElementById('typing');
 const routeLog = document.getElementById('route-log');
 const activeBadge = document.getElementById('active-model');
+const webSearchToggle = document.getElementById('web-search-toggle');
 
 let chatHistory = [];
 let msgCounter = 0;
@@ -196,48 +205,97 @@ function renderInlineMarkdown(text) {
 }
 
 function renderMarkdown(markdown) {
-  const blocks = [];
   const codeBlocks = [];
   const protectedText = String(markdown || '').replace(/```(\w+)?\n?([\s\S]*?)```/g, (_, lang, code) => {
     const token = `\u0000CODE${codeBlocks.length}\u0000`;
     codeBlocks.push(`<pre><code>${esc(code.replace(/\n$/, ''))}</code></pre>`);
     return token;
   });
+  const blocks = [];
+  let paragraph = [];
+  let listItems = [];
+  let orderedItems = [];
 
-  for (const chunk of protectedText.split(/\n{2,}/)) {
-    const trimmed = chunk.trim();
-    if (!trimmed) continue;
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    blocks.push(`<p>${paragraph.map(renderInlineMarkdown).join('<br>')}</p>`);
+    paragraph = [];
+  }
+  function flushLists() {
+    if (listItems.length) {
+      blocks.push(`<ul>${listItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ul>`);
+      listItems = [];
+    }
+    if (orderedItems.length) {
+      blocks.push(`<ol>${orderedItems.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ol>`);
+      orderedItems = [];
+    }
+  }
+  function flushAll() {
+    flushParagraph();
+    flushLists();
+  }
+
+  for (const rawLine of protectedText.split('\n')) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
     const codeMatch = trimmed.match(/^\u0000CODE(\d+)\u0000$/);
     if (codeMatch) {
+      flushAll();
       blocks.push(codeBlocks[Number(codeMatch[1])]);
       continue;
     }
-
-    const lines = trimmed.split('\n');
-    if (lines.every((line) => /^\s*[-*]\s+/.test(line))) {
-      blocks.push(`<ul>${lines.map((line) => `<li>${renderInlineMarkdown(line.replace(/^\s*[-*]\s+/, ''))}</li>`).join('')}</ul>`);
-      continue;
-    }
-    if (lines.every((line) => /^\s*\d+\.\s+/.test(line))) {
-      blocks.push(`<ol>${lines.map((line) => `<li>${renderInlineMarkdown(line.replace(/^\s*\d+\.\s+/, ''))}</li>`).join('')}</ol>`);
-      continue;
-    }
-    if (lines.every((line) => /^\s*>\s?/.test(line))) {
-      blocks.push(`<blockquote>${lines.map((line) => renderInlineMarkdown(line.replace(/^\s*>\s?/, ''))).join('<br>')}</blockquote>`);
+    if (!trimmed) {
+      flushAll();
       continue;
     }
 
-    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (heading) {
-      const level = heading[1].length + 2;
+      flushAll();
+      const level = Math.min(6, heading[1].length + 2);
       blocks.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
       continue;
     }
 
-    blocks.push(`<p>${lines.map(renderInlineMarkdown).join('<br>')}</p>`);
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      flushParagraph();
+      orderedItems = [];
+      listItems.push(bullet[1]);
+      continue;
+    }
+    const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (ordered) {
+      flushParagraph();
+      listItems = [];
+      orderedItems.push(ordered[1]);
+      continue;
+    }
+    flushLists();
+    paragraph.push(trimmed);
   }
 
+  flushAll();
   return blocks.join('');
+}
+
+function extractAssistantText(body) {
+  if (!body) return '';
+  if (typeof body.content === 'string') return body.content;
+  if (typeof body.text === 'string') return body.text;
+  if (typeof body.message?.content === 'string') return body.message.content;
+  const message = body.choices?.[0]?.message?.content;
+  if (typeof message === 'string') return message;
+  if (Array.isArray(message)) {
+    return message
+      .map((item) => typeof item === 'string' ? item : (item?.text || item?.content || ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+  const choiceText = body.choices?.[0]?.text;
+  if (typeof choiceText === 'string') return choiceText;
+  return '';
 }
 
 function autoResize() {
@@ -388,6 +446,11 @@ async function sendMessage() {
   const t0 = performance.now();
 
   try {
+    if (webSearchToggle.checked) {
+      await sendWebSearchMessage(group, statusEl, t0);
+      return;
+    }
+
     const resp = await fetch('/v1/chat/completions/stream-route', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -470,6 +533,42 @@ async function sendMessage() {
     sendBtn.disabled = false;
     inputEl.focus();
   }
+}
+
+async function sendWebSearchMessage(group, statusEl, t0) {
+  statusEl.textContent = 'searching web...';
+  const resp = await fetch('/v1/chat/completions/web-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: chatHistory, max_tokens: 4096 })
+  });
+  const totalMs = Math.round(performance.now() - t0);
+  const provider = resp.headers.get('X-Gateway-Provider') || '';
+  const model = resp.headers.get('X-Gateway-Model') || '';
+  const route = resp.headers.get('X-Gateway-Route') || '';
+  let payload = {};
+  try { payload = await resp.json(); } catch {}
+
+  if (!resp.ok) {
+    const message = payload?.error?.message || `Web search failed with HTTP ${resp.status}`;
+    addErrorMessage(message);
+    statusEl.textContent = '✗ failed';
+    statusEl.style.color = '#ef4444';
+    return;
+  }
+
+  addRouteEvent(group, 'selected', provider || 'web-search', model || 'web-search model', null, totalMs, route);
+  activeBadge.textContent = provider && model ? `${provider} / ${model}` : 'Web search';
+
+  const content = extractAssistantText(payload);
+  if (content) {
+    addMessage('assistant', content, `${provider} · ${model} · web search · ${totalMs}ms`);
+    chatHistory.push({ role: 'assistant', content });
+  } else {
+    addErrorMessage('Web search returned successfully, but the provider sent an empty final assistant message.');
+  }
+  statusEl.textContent = `✓ ${totalMs}ms`;
+  statusEl.style.color = '#22c55e';
 }
 
 sendBtn.addEventListener('click', sendMessage);

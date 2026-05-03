@@ -14,16 +14,21 @@ async def stream_route_chat(
     router: WaterfallRouter,
     *,
     chunk_replay_sleep_seconds: float = 0.0,
+    on_emit: Any | None = None,
 ) -> AsyncGenerator[str, None]:
     """Emit SSE route progress events using canonical waterfall router events."""
 
-    def evt(data: dict[str, Any]) -> str:
+    async def emit(data: dict[str, Any]) -> str:
+        if on_emit is not None:
+            maybe = on_emit(data)
+            if asyncio.iscoroutine(maybe):
+                await maybe
         return f"data: {json.dumps(data)}\n\n"
 
     try:
         async for event in router.iter_route_events(payload):
             if event.event_type == "route_skipped":
-                yield evt(
+                yield await emit(
                     {
                         "type": "route_skip",
                         "provider": event.provider_name,
@@ -35,7 +40,7 @@ async def stream_route_chat(
                 continue
 
             if event.event_type == "route_trying":
-                yield evt(
+                yield await emit(
                     {
                         "type": "route_trying",
                         "provider": event.provider_name,
@@ -46,7 +51,7 @@ async def stream_route_chat(
                 continue
 
             if event.event_type == "route_failed":
-                yield evt(
+                yield await emit(
                     {
                         "type": "route_fail",
                         "provider": event.provider_name,
@@ -58,7 +63,7 @@ async def stream_route_chat(
                 continue
 
             if event.event_type == "route_flagged":
-                yield evt(
+                yield await emit(
                     {
                         "type": "route_flagged",
                         "provider": event.provider_name,
@@ -70,7 +75,7 @@ async def stream_route_chat(
                 continue
 
             if event.event_type == "route_selected":
-                yield evt(
+                yield await emit(
                     {
                         "type": "route_selected",
                         "provider": event.provider_name,
@@ -80,7 +85,7 @@ async def stream_route_chat(
                 )
                 response = event.response
                 if response is None:
-                    yield evt(
+                    yield await emit(
                         {"type": "error", "message": "Selected route missing response payload."}
                     )
                     return
@@ -93,11 +98,13 @@ async def stream_route_chat(
 
                 chunk_size = 12
                 for index in range(0, len(content), chunk_size):
-                    yield evt({"type": "content", "text": content[index : index + chunk_size]})
+                    yield await emit(
+                        {"type": "content", "text": content[index : index + chunk_size]}
+                    )
                     if chunk_replay_sleep_seconds > 0:
                         await asyncio.sleep(chunk_replay_sleep_seconds)
 
-                yield evt(
+                yield await emit(
                     {
                         "type": "done",
                         "content": content,
@@ -109,7 +116,7 @@ async def stream_route_chat(
                 return
 
             if event.event_type == "routing_exhausted":
-                yield evt(
+                yield await emit(
                     {
                         "type": "error",
                         "message": "All providers exhausted. No model could serve this request.",
@@ -117,11 +124,11 @@ async def stream_route_chat(
                 )
                 return
     except ValueError as exc:
-        yield evt({"type": "error", "message": str(exc)})
+        yield await emit({"type": "error", "message": str(exc)})
     except ProviderError as exc:
-        yield evt({"type": "error", "message": str(exc)})
+        yield await emit({"type": "error", "message": str(exc)})
     except NoProviderAvailable:
-        yield evt(
+        yield await emit(
             {
                 "type": "error",
                 "message": "All providers exhausted. No model could serve this request.",

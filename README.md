@@ -80,6 +80,67 @@ response.raise_for_status()
 print(response.json()["choices"][0]["message"]["content"])
 ```
 
+For requests that must use web search, call the dedicated web-search endpoint:
+
+```text
+POST /v1/chat/completions/web-search
+```
+
+This endpoint accepts the same chat-completion payload shape, but FreeRouter prepares it for a
+web-enabled model before routing:
+
+- It adds the web search tool if the caller did not include one.
+- It forces `tool_choice` to the web search tool so the upstream model must call web search.
+- It routes only through enabled catalog routes tagged `web-search`.
+- It translates that intent for provider-specific APIs. For Groq Compound routes, FreeRouter sends
+  `compound_custom.tools.enabled_tools = ["web_search"]` instead of OpenAI's
+  `web_search_preview` tool object.
+
+Example request:
+
+```json
+{
+  "model": "auto",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search the web and summarize the latest release notes for Python."
+    }
+  ]
+}
+```
+
+The upstream request sent by FreeRouter includes:
+
+```json
+{
+  "tools": [{ "type": "web_search_preview" }],
+  "tool_choice": { "type": "web_search_preview" }
+}
+```
+
+Example Python web-search integration:
+
+```python
+import httpx
+
+response = httpx.post(
+    "http://localhost:8000/v1/chat/completions/web-search",
+    json={
+        "model": "auto",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Use web search to find the latest LTS Node.js version.",
+            }
+        ],
+    },
+    timeout=120,
+)
+response.raise_for_status()
+print(response.json()["choices"][0]["message"]["content"])
+```
+
 Most OpenAI-compatible SDKs can also use FreeRouter by setting:
 
 ```text
@@ -108,6 +169,8 @@ If another coding agent is integrating with this repository, give it these rules
 - Treat FreeRouter as the AI gateway. Do not call provider APIs directly unless explicitly asked.
 - Use `http://localhost:8000/v1` as the base URL and `auto` as the model.
 - Send normal chat-completion payloads with `messages`.
+- Use `/v1/chat/completions/web-search` when the task requires current web information. Do not rely
+  on the normal chat route to enable web search.
 - Let FreeRouter choose models, handle fallback, track quotas, and manage route health.
 - Expect `429` with `code=request_queue_timeout` when the local gateway is overloaded; retry with
   backoff instead of spawning more parallel calls.
@@ -269,12 +332,17 @@ POST /v1/gateway/endpoint-diagnosis/refresh
 POST /v1/gateway/endpoint-diagnosis/apply
 GET  /v1/providers/status
 POST /v1/chat/completions
+POST /v1/chat/completions/web-search
 POST /v1/chat/completions/stream-route
 ```
 
 `/v1/chat/completions` returns the upstream provider JSON unchanged. Gateway diagnostics are
 returned as `X-Gateway-Provider`, `X-Gateway-Route`, `X-Gateway-Model`, and
 `X-Gateway-Attempts` headers.
+
+`/v1/chat/completions/web-search` is the same gateway response surface, but it always injects and
+requires web-search intent and only considers routes tagged `web-search`. Provider adapters may
+translate that intent to the provider's native web-search request format.
 
 ## Validate
 

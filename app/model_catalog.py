@@ -737,8 +737,11 @@ DEFAULT_MODEL_ROUTES = [
         "Free Models Router",
         200000,
         speed="variable",
-        tags=[],
-        notes="OpenRouter's free router automatically selects from available zero-cost models.",
+        tags=["tool-use", "web-search"],
+        notes=(
+            "OpenRouter's free router automatically selects from available zero-cost models. "
+            "Web search is available through OpenRouter's server-side web_search tool."
+        ),
         source_url="https://openrouter.ai/openrouter/free",
     ),
 ]
@@ -801,6 +804,8 @@ def _openrouter_tags(
         tags.append("reasoning")
     if any(term in text for term in ("coder", "code")):
         tags.append("coding")
+    if modality in {"text", "vision"}:
+        tags.extend(["tool-use", "web-search"])
     if "ocr" in text:
         tags.append("classification")
 

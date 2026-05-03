@@ -134,6 +134,47 @@ def test_openrouter_catalog_payload_allows_multimodal_text_models():
     assert "vision" in routes[0].tags
 
 
+def test_catalog_payload_tags_explicit_web_search_capability():
+    provider = FakeProvider("openrouter")
+    routes = routes_from_payload(
+        provider,
+        {
+            "data": [
+                {
+                    "id": "search/model:free",
+                    "name": "Search Model",
+                    "architecture": {"modality": "text->text"},
+                    "pricing": {"prompt": "0", "completion": "0"},
+                    "supported_parameters": ["tools", "tool_choice", "web_search_options"],
+                }
+            ]
+        },
+    )
+
+    assert routes[0].tags == ["text", "tool-use", "web-search"]
+
+
+def test_catalog_payload_does_not_treat_generic_tools_as_web_search():
+    provider = FakeProvider("openrouter")
+    routes = routes_from_payload(
+        provider,
+        {
+            "data": [
+                {
+                    "id": "tool/model:free",
+                    "name": "Tool Model",
+                    "architecture": {"modality": "text->text"},
+                    "pricing": {"prompt": "0", "completion": "0"},
+                    "supported_parameters": ["tools", "tool_choice"],
+                }
+            ]
+        },
+    )
+
+    assert "tool-use" in routes[0].tags
+    assert "web-search" not in routes[0].tags
+
+
 def test_catalog_payload_allows_multimodal_text_exchange_models():
     provider = FakeProvider("openrouter")
     routes = routes_from_payload(

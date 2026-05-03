@@ -90,6 +90,7 @@ def _catalog(tmp_path) -> ModelCatalog:
                 "rank": 2,
                 "enabled": True,
                 "context_window": 8192,
+                "tags": ["text", "web-search"],
             },
         ]
     )
@@ -147,6 +148,71 @@ async def test_router_falls_back_on_429_and_marks_cooldown(tmp_path):
     assert fallback.calls == 1
     assert primary_state.cooldown_until > 0
     assert [attempt.status for attempt in result.attempts] == ["rate_limited", "selected"]
+
+
+async def test_router_falls_back_on_request_too_large(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary", error=ProviderError("too large", status_code=413))
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
+    result = await router.route_chat_completion(_payload())
+
+    assert primary.calls == 1
+    assert fallback.calls == 1
+    assert result.provider_name == "fallback"
+    assert [attempt.reason for attempt in result.attempts] == ["request_too_large", None]
+
+
+async def test_router_required_tag_only_tries_matching_routes(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary")
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
+    result = await router.route_chat_completion(_payload(), required_tag="web-search")
+
+    assert primary.calls == 0
+    assert fallback.calls == 1
+    assert result.provider_name == "fallback"
+    assert result.model_id == "fallback/model"
+
+
+async def test_router_can_require_non_empty_assistant_content(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider(
+        "primary",
+        response={
+            "id": "empty",
+            "object": "chat.completion",
+            "choices": [{"message": {"role": "assistant", "content": ""}}],
+        },
+    )
+    fallback = FakeProvider(
+        "fallback",
+        response={
+            "id": "ok",
+            "object": "chat.completion",
+            "choices": [{"message": {"role": "assistant", "content": "answer"}}],
+        },
+    )
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
+    result = await router.route_chat_completion(
+        _payload(),
+        require_assistant_content=True,
+    )
+
+    assert primary.calls == 1
+    assert fallback.calls == 1
+    assert result.provider_name == "fallback"
+    assert result.attempts[0].reason == "empty_assistant_response"
 
 
 async def test_router_marks_repeated_404_as_potentially_outdated(tmp_path):

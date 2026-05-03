@@ -59,6 +59,17 @@ def test_text_is_available_as_a_filterable_capability():
     assert any("text" in route.tags for route in DEFAULT_MODEL_ROUTES)
 
 
+def test_openrouter_text_routes_are_web_search_capable():
+    openrouter_text_routes = [
+        route
+        for route in DEFAULT_MODEL_ROUTES
+        if route.provider_name == "openrouter" and "text" in route.tags
+    ]
+
+    assert openrouter_text_routes
+    assert all("web-search" in route.tags for route in openrouter_text_routes)
+
+
 def test_default_routes_are_text_input_text_output_only():
     assert DEFAULT_MODEL_ROUTES
     assert all(is_text_chat_route(route) for route in DEFAULT_MODEL_ROUTES)
