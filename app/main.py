@@ -1670,6 +1670,10 @@ LIVE_API_HTML = r"""
       .details-wrap .md-body table.md-table td { border: 1px solid var(--border); padding: 0.3rem 0.45rem; vertical-align: top; }
       .details-wrap .md-body table.md-table th { background: rgba(30, 41, 59, 0.65); font-weight: 600; color: var(--text); }
       .details-wrap pre { margin: 0; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border); background: var(--bg-secondary); border-radius: 8px; padding: 0.65rem; font-size: 0.75rem; color: var(--text-muted); }
+      .details-wrap details { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.65rem; background: var(--bg-secondary); }
+      .details-wrap details summary { cursor: pointer; color: var(--text-muted); font-size: 0.8rem; font-weight: 600; user-select: none; }
+      .details-wrap details[open] summary { margin-bottom: 0.55rem; color: var(--text); }
+      .details-wrap details .md-body { margin-top: 0; }
       .attempts { display: grid; gap: 0.45rem; position: relative; }
       .attempt { position: relative; display: grid; grid-template-columns: 1.9rem 1fr auto; gap: 0.68rem; align-items: center; border: 1px solid rgba(148,163,184,0.16); background: linear-gradient(180deg, rgba(30,41,59,0.5), rgba(15,23,42,0.55)); border-radius: 10px; padding: 0.58rem 0.7rem; }
       .attempt::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 10px 0 0 10px; background: rgba(100,116,139,0.45); }
@@ -2011,16 +2015,38 @@ LIVE_API_HTML = r"""
       function pretty(value) {
         try { return JSON.stringify(value ?? {}, null, 2); } catch { return String(value); }
       }
-      function userMessage(payload) {
-        const messages = payload?.messages;
-        if (!Array.isArray(messages)) return '';
-        const lastUser = [...messages].reverse().find((message) => message?.role === 'user');
-        const content = lastUser?.content ?? '';
+      function messageContent(content) {
         if (typeof content === 'string') return content;
         if (Array.isArray(content)) {
           return content.map((item) => typeof item === 'string' ? item : (item?.text || item?.content || '')).filter(Boolean).join('\\n');
         }
         return String(content || '');
+      }
+      function userMessage(payload) {
+        const messages = payload?.messages;
+        if (!Array.isArray(messages)) return '';
+        const lastUser = [...messages].reverse().find((message) => message?.role === 'user');
+        return messageContent(lastUser?.content ?? '');
+      }
+      function systemMessage(payload) {
+        if (!payload || typeof payload !== 'object') return '';
+        const parts = [];
+        if (typeof payload.instructions === 'string' && payload.instructions.trim()) {
+          parts.push(payload.instructions.trim());
+        }
+        const messages = payload?.messages;
+        if (Array.isArray(messages)) {
+          for (const message of messages) {
+            if (message?.role !== 'system') continue;
+            const text = messageContent(message?.content ?? '').trim();
+            if (text) parts.push(text);
+          }
+        }
+        const unique = [];
+        for (const part of parts) {
+          if (!unique.includes(part)) unique.push(part);
+        }
+        return unique.join('\\n\\n');
       }
       function aiResponse(body) {
         if (!body) return '';
@@ -2135,10 +2161,16 @@ LIVE_API_HTML = r"""
             : aiResponse(row.response_body || row.stream_event);
           const userPlain = userMessage(row.request_payload);
           const userHtml = userPlain.trim() ? renderMarkdown(userPlain) : '<p class="muted">(empty)</p>';
+          const systemPlain = systemMessage(row.request_payload);
+          const systemHtml = systemPlain.trim() ? renderMarkdown(systemPlain) : '';
+          const systemSection = systemPlain.trim()
+            ? `<details><summary>System prompt</summary><div class="md-body">${systemHtml}</div></details>`
+            : '';
           const aiPlain = (assistantText || '').trim();
           const aiHtml = aiPlain ? renderMarkdown(assistantText) : '<p class="muted">(empty)</p>';
           const rawBody = pretty(row.response_body || row.stream_event || {});
           const details = `<tr class="details-row"><td colspan="10"><div class="details-wrap">
+            ${systemSection}
             <div><strong>User message</strong><div class="md-body">${userHtml}</div></div>
             <div><strong>AI response</strong><div class="md-body">${aiHtml}</div></div>
             <details><summary>Raw response payload</summary><pre>${esc(rawBody)}</pre></details>
