@@ -492,6 +492,11 @@ async def provider_status_page() -> HTMLResponse:
       .expand:hover { background: var(--border); }
       .empty { padding: 2rem; text-align: center; color: var(--text-muted); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
       .right { text-align: right; }
+      th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+      th.sortable:hover { color: var(--text); }
+      th.sortable .sort-ind { margin-left: 0.35rem; color: var(--accent); font-size: 0.68rem; }
+      th.sortable:not(.sorted) .sort-ind { color: var(--border); }
+      .priority { color: var(--accent); font-size: 0.76rem; font-weight: 700; }
       @media (max-width: 720px) { main { padding: 1rem; } nav { flex-wrap: wrap; } .filters { width: 100%; } input, select { flex: 1; min-width: 12rem; } }
     </style>
   </head>
@@ -502,7 +507,7 @@ async def provider_status_page() -> HTMLResponse:
     </nav>
     <main>
       <h2>Usage Stats</h2>
-      <p class="muted">Provider quotas, health state, and per-model usage tracked locally by FreeRouter.</p>
+      <p class="muted">Provider quotas, health state, and per-model usage tracked locally by FreeRouter. Click a column header to sort; Priority matches the waterfall order from the <a href="/models" style="color:#93c5fd">Models</a> page.</p>
       <section id="summaryCards" class="summary-grid"></section>
       <div class="toolbar">
         <div class="filters">
@@ -531,7 +536,93 @@ async def provider_status_page() -> HTMLResponse:
       let allModels = [];
       let providers = [];
       let expanded = new Set();
+      const SORT_STORAGE_KEY = 'freerouter.usage.sort';
+      const HEALTH_ORDER = { active: 0, rate_limited: 1, too_slow: 2, potentially_outdated: 3 };
+      let sortKey = 'rank';
+      let sortDir = 'asc';
       const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      function loadSortPreference() {
+        try {
+          const saved = JSON.parse(localStorage.getItem(SORT_STORAGE_KEY) || 'null');
+          if (saved && typeof saved.key === 'string' && (saved.dir === 'asc' || saved.dir === 'desc')) {
+            sortKey = saved.key;
+            sortDir = saved.dir;
+          }
+        } catch {}
+      }
+      function saveSortPreference() {
+        try {
+          localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify({ key: sortKey, dir: sortDir }));
+        } catch {}
+      }
+      function setSort(key) {
+        if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        else { sortKey = key; sortDir = key === 'rank' ? 'asc' : 'desc'; }
+        saveSortPreference();
+        render();
+      }
+      function sortIndicator(key) {
+        if (sortKey !== key) return '↕';
+        return sortDir === 'asc' ? '↑' : '↓';
+      }
+      function sortableHeader(key, label, extraClass = '') {
+        const sorted = sortKey === key ? ' sorted' : '';
+        return `<th class="sortable${sorted} ${extraClass}" data-sort="${escapeHtml(key)}">${escapeHtml(label)}<span class="sort-ind">${sortIndicator(key)}</span></th>`;
+      }
+      function compareText(a, b) {
+        return String(a || '').localeCompare(String(b || ''), undefined, { sensitivity: 'base' });
+      }
+      function compareNumber(a, b) {
+        return Number(a || 0) - Number(b || 0);
+      }
+      function compareModels(a, b) {
+        let cmp = 0;
+        const usageA = a.usage || {};
+        const usageB = b.usage || {};
+        const healthA = a.health?.status || 'active';
+        const healthB = b.health?.status || 'active';
+        switch (sortKey) {
+          case 'rank':
+            cmp = compareNumber(a.rank ?? 9999, b.rank ?? 9999);
+            break;
+          case 'model':
+            cmp = compareText(a.display_name || a.model_id, b.display_name || b.model_id);
+            break;
+          case 'provider':
+            cmp = compareText(a.provider_name, b.provider_name);
+            break;
+          case 'health':
+            cmp = compareNumber(HEALTH_ORDER[healthA] ?? 99, HEALTH_ORDER[healthB] ?? 99)
+              || compareText(healthA, healthB);
+            break;
+          case 'successes':
+            cmp = compareNumber(usageA.successes, usageB.successes);
+            break;
+          case 'failures':
+            cmp = compareNumber(usageA.failures, usageB.failures);
+            break;
+          case 'tokens':
+            cmp = compareNumber(usageA.total_tokens, usageB.total_tokens);
+            break;
+          case 'prompt':
+            cmp = compareNumber(usageA.prompt_tokens, usageB.prompt_tokens);
+            break;
+          case 'completion':
+            cmp = compareNumber(usageA.completion_tokens, usageB.completion_tokens);
+            break;
+          case 'last_used':
+            cmp = compareNumber(usageA.last_used_at, usageB.last_used_at);
+            break;
+          default:
+            cmp = compareNumber(a.rank ?? 9999, b.rank ?? 9999);
+        }
+        if (cmp === 0) cmp = compareNumber(a.rank ?? 9999, b.rank ?? 9999);
+        if (cmp === 0) cmp = compareText(a.route_id, b.route_id);
+        return sortDir === 'desc' ? -cmp : cmp;
+      }
+      function sortedModels(models) {
+        return [...models].sort(compareModels);
+      }
       const fmt = (value) => value == null ? 'Unknown' : Number(value).toLocaleString();
       const fmtDate = (value) => value ? new Date(Number(value) * 1000).toLocaleString() : 'Never';
       const healthLabel = (value) => String(value || 'active').replace(/_/g, ' ');
@@ -568,12 +659,13 @@ async def provider_status_page() -> HTMLResponse:
         const query = searchEl.value.trim().toLowerCase();
         const provider = providerFilterEl.value;
         const health = healthFilterEl.value;
-        return allModels.filter((model) => {
+        const filtered = allModels.filter((model) => {
           const haystack = `${model.display_name} ${model.model_id} ${model.provider_name}`.toLowerCase();
           return (!query || haystack.includes(query))
             && (!provider || model.provider_name === provider)
             && (!health || (model.health?.status || 'active') === health);
         });
+        return sortedModels(filtered);
       }
       function detailRow(model) {
         const usage = model.usage || {};
@@ -581,9 +673,10 @@ async def provider_status_page() -> HTMLResponse:
         const provider = providers.find((item) => item.name === model.provider_name);
         return `
           <tr class="details-row">
-            <td colspan="10">
+            <td colspan="11">
               <div class="details">
                 ${stat('Route ID', model.route_id)}
+                ${stat('Model priority (rank)', model.rank ?? 'Unknown')}
                 ${stat('Enabled', model.enabled ? 'Yes' : 'No')}
                 ${stat('Context window', model.context_window ? fmt(model.context_window) : 'Unknown')}
                 ${stat('Prompt tokens', fmt(usage.prompt_tokens || 0))}
@@ -608,6 +701,7 @@ async def provider_status_page() -> HTMLResponse:
         const isExpanded = expanded.has(model.route_id);
         return `
           <tr>
+            <td class="right"><span class="priority" title="Waterfall priority from Models page">#${escapeHtml(model.rank ?? '—')}</span></td>
             <td>
               <div class="model">${escapeHtml(model.display_name || model.model_id)}</div>
               <div class="route">${escapeHtml(model.model_id)}</div>
@@ -638,15 +732,16 @@ async def provider_status_page() -> HTMLResponse:
             <table>
               <thead>
                 <tr>
-                  <th>Model</th>
-                  <th>Provider</th>
-                  <th>Health</th>
-                  <th class="right">Successes</th>
-                  <th class="right">Failures</th>
-                  <th class="right">Tokens</th>
-                  <th class="right">Prompt</th>
-                  <th class="right">Completion</th>
-                  <th>Last Used</th>
+                  ${sortableHeader('rank', 'Priority', 'right')}
+                  ${sortableHeader('model', 'Model')}
+                  ${sortableHeader('provider', 'Provider')}
+                  ${sortableHeader('health', 'Health')}
+                  ${sortableHeader('successes', 'Successes', 'right')}
+                  ${sortableHeader('failures', 'Failures', 'right')}
+                  ${sortableHeader('tokens', 'Tokens', 'right')}
+                  ${sortableHeader('prompt', 'Prompt', 'right')}
+                  ${sortableHeader('completion', 'Completion', 'right')}
+                  ${sortableHeader('last_used', 'Last Used')}
                   <th>Details</th>
                 </tr>
               </thead>
@@ -654,6 +749,9 @@ async def provider_status_page() -> HTMLResponse:
             </table>
           </div>
         `;
+        tableRoot.querySelectorAll('th.sortable').forEach((header) => {
+          header.addEventListener('click', () => setSort(header.dataset.sort));
+        });
         tableRoot.querySelectorAll('.expand').forEach((button) => {
           button.addEventListener('click', () => {
             const routeId = button.dataset.routeId;
@@ -674,10 +772,7 @@ async def provider_status_page() -> HTMLResponse:
         }
         const payload = await response.json();
         providers = payload.data || [];
-        allModels = providers.flatMap((provider) => provider.models || []).sort((a, b) => {
-          const tokenDelta = Number(b.usage?.total_tokens || 0) - Number(a.usage?.total_tokens || 0);
-          return tokenDelta || Number(a.rank || 9999) - Number(b.rank || 9999);
-        });
+        allModels = providers.flatMap((provider) => provider.models || []);
         providerFilterEl.innerHTML = '<option value="">All providers</option>' + providers
           .map((provider) => `<option value="${escapeHtml(provider.name)}">${escapeHtml(provider.name)}</option>`)
           .join('');
@@ -687,6 +782,7 @@ async def provider_status_page() -> HTMLResponse:
       searchEl.addEventListener('input', render);
       providerFilterEl.addEventListener('change', render);
       healthFilterEl.addEventListener('change', render);
+      loadSortPreference();
       load();
     </script>
   </body>
