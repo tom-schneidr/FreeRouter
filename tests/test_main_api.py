@@ -67,6 +67,40 @@ def test_chat_completions_returns_503_when_all_providers_unconfigured(tmp_path, 
     assert payload["error"]["attempts"]
 
 
+def test_responses_accepts_string_input_and_returns_openai_error(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/v1/responses",
+            json={"model": "auto", "input": "hello"},
+        )
+
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["error"]["code"] == "waterfall_exhausted"
+
+
+def test_responses_rejects_missing_input(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post("/v1/responses", json={"model": "auto"})
+
+    assert response.status_code == 400
+    assert "input" in response.json()["detail"]
+
+
+def test_responses_stream_returns_responses_sse_when_exhausted(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/v1/responses",
+            json={"model": "auto", "input": "hello", "stream": True},
+        )
+
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    assert "event: response.created" in response.text
+    assert "event: response.failed" in response.text
+    assert "waterfall_exhausted" in response.text
+
+
 def test_chat_completions_stream_returns_sse_when_exhausted(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.post(

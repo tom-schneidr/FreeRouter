@@ -13,6 +13,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from app.chat_page import CHAT_HTML
+from app.codex_compat import (
+    ResponsesStreamMapper,
+    chat_body_to_response,
+    response_stream_event,
+    responses_payload_to_chat,
+    responses_stream_done,
+    responses_stream_start,
+)
 from app.endpoint_diagnosis import (
     BackgroundEndpointDiagnosis,
     EndpointDiagnosisService,
@@ -26,6 +34,7 @@ from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,
     WaterfallRouter,
+    _split_sse_event_blocks,
     validate_chat_completion_payload,
 )
 from app.settings import get_settings
@@ -1185,6 +1194,145 @@ async def chat_completions(request: Request) -> Response:
         request,
         payload=payload,
         path="/v1/chat/completions",
+    )
+
+
+@app.post("/v1/responses")
+async def responses(request: Request) -> Response:
+    responses_payload: dict[str, Any] = await request.json()
+    try:
+        chat_payload = responses_payload_to_chat(responses_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if chat_payload.get("stream"):
+        return await _route_responses_stream_request(
+            request,
+            payload=chat_payload,
+            requested_model=responses_payload.get("model"),
+        )
+
+    chat_response = await _route_chat_completion_request(
+        request,
+        payload=chat_payload,
+        path="/v1/responses",
+    )
+    chat_body = json.loads(chat_response.body.decode("utf-8"))
+    if chat_response.status_code >= 400:
+        return JSONResponse(status_code=chat_response.status_code, content=chat_body)
+    return JSONResponse(
+        content=chat_body_to_response(chat_body, requested_model=responses_payload.get("model")),
+        headers={
+            key: value
+            for key, value in chat_response.headers.items()
+            if key.lower().startswith("x-gateway-")
+        },
+    )
+
+
+async def _route_responses_stream_request(
+    request: Request,
+    *,
+    payload: dict[str, Any],
+    requested_model: Any,
+) -> Response:
+    router: WaterfallRouter = request.app.state.waterfall_router
+    limiter: GatewayRequestLimiter = request.app.state.request_limiter
+    response_id = f"resp_{uuid.uuid4().hex}"
+
+    try:
+        validate_chat_completion_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not await limiter.acquire():
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "message": "Gateway is busy; retry shortly",
+                    "type": "gateway_overloaded",
+                    "code": "request_queue_timeout",
+                }
+            },
+            headers={"Retry-After": "1"},
+        )
+
+    async def responses_sse_stream():
+        carry = ""
+        completed = False
+        mapper = ResponsesStreamMapper(response_id=response_id)
+        try:
+            yield responses_stream_start(response_id=response_id, model=requested_model)
+            async for part in router.iter_chat_completion_openai_stream(payload):
+                if isinstance(part, RouteStreamDiag):
+                    continue
+                carry += part
+                blocks, carry = _split_sse_event_blocks(carry)
+                for block in blocks:
+                    for event in mapper.events_from_openai_sse(block):
+                        yield event
+                        if "response.completed" in event:
+                            completed = True
+            if not completed:
+                yield response_stream_event(
+                    "response.completed",
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": response_id,
+                            "object": "response",
+                            "status": "completed",
+                        },
+                    },
+                )
+            yield responses_stream_done()
+        except NoProviderAvailable as exc:
+            yield response_stream_event(
+                "response.failed",
+                {
+                    "type": "response.failed",
+                    "sequence_number": mapper.sequence_number + 1,
+                    "response": {
+                        "id": response_id,
+                        "object": "response",
+                        "status": "failed",
+                        "error": {
+                            "message": "No configured provider is currently available",
+                            "type": "provider_unavailable",
+                            "code": "waterfall_exhausted",
+                            "attempts": [asdict(attempt) for attempt in exc.attempts],
+                        },
+                    },
+                },
+            )
+            yield responses_stream_done()
+        except (ProviderError, ValueError) as exc:
+            yield response_stream_event(
+                "response.failed",
+                {
+                    "type": "response.failed",
+                    "sequence_number": mapper.sequence_number + 1,
+                    "response": {
+                        "id": response_id,
+                        "object": "response",
+                        "status": "failed",
+                        "error": {
+                            "message": str(exc),
+                            "type": "provider_error",
+                            "code": getattr(exc, "status_code", None),
+                        },
+                    },
+                },
+            )
+            yield responses_stream_done()
+        finally:
+            limiter.release()
+
+    return StreamingResponse(
+        responses_sse_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

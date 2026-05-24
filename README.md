@@ -148,6 +148,39 @@ base_url = http://localhost:8000/v1
 model = auto
 ```
 
+### Codex CLI
+
+Codex's current custom-provider config expects the Responses wire API. FreeRouter supports that
+through `POST /v1/responses`, which adapts Codex's Responses payloads to the chat-completions router
+internally:
+
+```toml
+# ~/.codex/config.toml
+model = "auto"
+model_provider = "freerouter"
+
+[model_providers.freerouter]
+name = "FreeRouter"
+base_url = "http://127.0.0.1:8000/v1"
+env_key = "FREEROUTER_API_KEY"
+wire_api = "responses"
+```
+
+Then start Codex with any non-empty local key value:
+
+```powershell
+$env:FREEROUTER_API_KEY = "sk-local"
+codex
+```
+
+Do not reuse a built-in provider key such as `openai` or `ollama` for this block; use a distinct
+provider key like `freerouter` so Codex applies the custom `base_url`.
+
+The Responses adapter covers text output, function tools, function-call outputs, and streamed text
+or function-call items. FreeRouter still sends the actual model work through OpenAI-compatible
+`/v1/chat/completions` upstream providers, so provider quality depends on how well the selected
+free-tier route follows tool-calling instructions.
+
 For Python projects running in the same environment, there is also a small programmatic wrapper:
 
 ```python
@@ -320,6 +353,7 @@ GET  /health
 GET  /models
 GET  /status
 GET  /v1/models
+POST /v1/responses
 GET  /v1/gateway/models
 PUT  /v1/gateway/models
 POST /v1/gateway/models/reset
