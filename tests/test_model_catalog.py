@@ -300,8 +300,51 @@ def test_discovered_routes_are_inserted_by_auto_rank_and_enabled(tmp_path):
 
     assert len(added) == 1
     assert added[0].enabled is True
+    assert added[0].rank == 1
     assert all_routes[0].route_id == "new-high"
+    assert all_routes[0].rank == 1
     assert all_routes[0].rank_score is not None
+
+
+def test_add_discovered_inserts_by_score_without_reordering_existing(tmp_path):
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes(
+        [
+            {
+                "route_id": "manual-first",
+                "provider_name": "groq",
+                "model_id": "openai/gpt-oss-20b",
+                "display_name": "GPT OSS 20B",
+                "rank": 1,
+                "enabled": True,
+            },
+            {
+                "route_id": "manual-second",
+                "provider_name": "groq",
+                "model_id": "openai/gpt-oss-120b",
+                "display_name": "GPT OSS 120B",
+                "rank": 2,
+                "enabled": True,
+            },
+        ]
+    )
+    discovered = ModelRoute(
+        route_id="middle",
+        provider_name="gemini",
+        model_id="gemini-2.5-flash",
+        display_name="Gemini 2.5 Flash",
+        rank=0,
+        enabled=True,
+        tags=["text"],
+    )
+    catalog.add_discovered_routes([discovered])
+
+    assert [route.route_id for route in catalog.all_routes()] == [
+        "manual-first",
+        "middle",
+        "manual-second",
+    ]
+    assert catalog.all_routes()[1].rank == 2
 
 
 def test_auto_rank_keeps_multimodal_text_routes(tmp_path):

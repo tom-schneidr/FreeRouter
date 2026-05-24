@@ -950,15 +950,15 @@ class ModelCatalog:
         raise KeyError(f"Unknown route_id: {route_id}")
 
     def add_discovered_routes(self, routes: list[ModelRoute]) -> list[ModelRoute]:
-        """Merge newly discovered routes and re-rank the full catalog."""
+        """Merge newly discovered routes into the catalog at their priority score."""
         if not routes:
             return []
 
         existing_ids = {route.route_id for route in self._routes}
         existing_targets = {(route.provider_name, route.model_id) for route in self._routes}
-        added: list[ModelRoute] = []
+        pending: list[ModelRoute] = []
 
-        for route in sorted(routes, key=compute_rank_score, reverse=True):
+        for route in routes:
             if not is_text_chat_route(route):
                 continue
             if (
@@ -966,33 +966,87 @@ class ModelCatalog:
                 or (route.provider_name, route.model_id) in existing_targets
             ):
                 continue
-            updated = ModelRoute(
-                route_id=route.route_id,
-                provider_name=route.provider_name,
-                model_id=route.model_id,
-                display_name=route.display_name,
-                rank=0,
-                enabled=True,
-                context_window=route.context_window,
-                quality=route.quality,
-                speed=route.speed,
-                cost=route.cost,
-                tags=_canonical_tags(route.tags),
-                notes=route.notes,
-                source_url=route.source_url,
-                rank_score=compute_rank_score(route),
-                rank_reason=route.rank_reason,
-                rank_source=route.rank_source,
-            )
-            self._routes.append(updated)
-            added.append(updated)
-            existing_ids.add(updated.route_id)
-            existing_targets.add((updated.provider_name, updated.model_id))
+            pending.append(self._build_discovered_route(route))
+            existing_ids.add(route.route_id)
+            existing_targets.add((route.provider_name, route.model_id))
 
-        if added:
-            self.auto_rank_routes()
-            self.save()
-        return added
+        if not pending:
+            return []
+
+        ordered = sorted(
+            [route for route in self._routes if is_text_chat_route(route)],
+            key=lambda route: (route.rank, route.provider_name, route.model_id),
+        )
+        ordered = self._insert_routes_by_priority(ordered, pending)
+        self._routes = self._reindex_route_ranks(ordered)
+        self._invalidate_sorted_cache()
+        self.save()
+
+        added_ids = {route.route_id for route in pending}
+        return [route for route in self.all_routes() if route.route_id in added_ids]
+
+    @staticmethod
+    def _build_discovered_route(route: ModelRoute) -> ModelRoute:
+        score = compute_rank_score(route)
+        return ModelRoute(
+            route_id=route.route_id,
+            provider_name=route.provider_name,
+            model_id=route.model_id,
+            display_name=route.display_name,
+            rank=route.rank,
+            enabled=True,
+            context_window=route.context_window,
+            quality=route.quality,
+            speed=route.speed,
+            cost=route.cost,
+            tags=_canonical_tags(route.tags),
+            notes=route.notes,
+            source_url=route.source_url,
+            rank_score=score,
+            rank_reason=route.rank_reason or "deterministic_quality_score",
+            rank_source=route.rank_source or "heuristic",
+        )
+
+    @staticmethod
+    def _priority_insert_index(ordered: list[ModelRoute], route: ModelRoute) -> int:
+        route_key = rank_sort_key(route)
+        return sum(1 for current in ordered if rank_sort_key(current) > route_key)
+
+    @classmethod
+    def _insert_routes_by_priority(
+        cls, ordered: list[ModelRoute], new_routes: list[ModelRoute]
+    ) -> list[ModelRoute]:
+        merged = list(ordered)
+        for route in sorted(new_routes, key=rank_sort_key, reverse=True):
+            merged.insert(cls._priority_insert_index(merged, route), route)
+        return merged
+
+    @staticmethod
+    def _reindex_route_ranks(ordered: list[ModelRoute]) -> list[ModelRoute]:
+        rebuilt: list[ModelRoute] = []
+        for index, route in enumerate(ordered, start=1):
+            score = compute_rank_score(route)
+            rebuilt.append(
+                ModelRoute(
+                    route_id=route.route_id,
+                    provider_name=route.provider_name,
+                    model_id=route.model_id,
+                    display_name=route.display_name,
+                    rank=index,
+                    enabled=route.enabled,
+                    context_window=route.context_window,
+                    quality=route.quality,
+                    speed=route.speed,
+                    cost=route.cost,
+                    tags=_canonical_tags(route.tags),
+                    notes=route.notes,
+                    source_url=route.source_url,
+                    rank_score=score,
+                    rank_reason=route.rank_reason or "deterministic_quality_score",
+                    rank_source=route.rank_source or "heuristic",
+                )
+            )
+        return rebuilt
 
     def remove_routes(self, route_ids: set[str]) -> list[ModelRoute]:
         """Remove routes by id while preserving all unrelated catalog entries."""

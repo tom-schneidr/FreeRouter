@@ -381,7 +381,10 @@ class EndpointDiagnosisService:
                     model_id=route.model_id,
                     route_id=route.route_id,
                     title=f"Add {route.display_name}",
-                    details="New free route discovered in the provider model catalog.",
+                    details=(
+                        "New free route discovered in the provider model catalog. "
+                        "When applied, it is enabled and inserted into model priority by quality score."
+                    ),
                     route=asdict(route),
                 )
             )
