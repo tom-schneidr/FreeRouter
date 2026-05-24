@@ -42,22 +42,22 @@ def route_from_catalog_item(
     tags = tags_for_model(item)
 
     if provider.name == "openrouter":
-        enabled = False
+        enabled = True
         notes = (
             "Discovered automatically from OpenRouter /api/v1/models as a zero-cost or :free model. "
-            "Disabled by default until reviewed."
+            "Enabled when added to the routing catalog."
         )
     elif assume_free and not free_by_payload:
-        enabled = False
+        enabled = True
         notes = (
-            "Discovered automatically after free-tier verification. Disabled by default until "
-            "reviewed because provider free-tier limits can still vary by account."
+            "Discovered automatically after free-tier verification. Enabled when added to the "
+            "routing catalog; provider free-tier limits can still vary by account."
         )
     else:
-        enabled = False
+        enabled = True
         notes = (
             "Discovered automatically from structured zero pricing in the provider /models endpoint. "
-            "Disabled by default until reviewed because provider free-tier limits can still vary by account."
+            "Enabled when added to the routing catalog; provider free-tier limits can still vary by account."
         )
 
     if supervisor_note:

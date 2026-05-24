@@ -101,7 +101,7 @@ def route_from_discovered_model(
     tags: list[str] | None = None,
     source_url: str = "",
     notes: str = "Discovered automatically from provider model catalog.",
-    enabled: bool = False,
+    enabled: bool = True,
 ) -> ModelRoute:
     return _route(
         provider_name,
@@ -972,7 +972,7 @@ class ModelCatalog:
                 model_id=route.model_id,
                 display_name=route.display_name,
                 rank=0,
-                enabled=False,
+                enabled=True,
                 context_window=route.context_window,
                 quality=route.quality,
                 speed=route.speed,

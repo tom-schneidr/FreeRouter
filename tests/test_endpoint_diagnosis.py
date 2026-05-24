@@ -636,7 +636,10 @@ async def test_endpoint_diagnosis_applies_selected_suggestions_only(tmp_path):
     )
 
     assert [item.suggestion_id for item in applied] == [add_id]
-    assert any(route.model_id == "new/llama-chat:free" for route in catalog.all_routes())
+    added_route = next(
+        route for route in catalog.all_routes() if route.model_id == "new/llama-chat:free"
+    )
+    assert added_route.enabled is True
     assert stale_state.status == "active"
     assert service.last_report is not None
     assert {item.action for item in service.last_report.suggestions} == {"remove_route"}

@@ -272,7 +272,7 @@ def test_get_model_score_safety_very_low():
     assert _get_model_score(route) < 0
 
 
-def test_discovered_routes_are_inserted_by_auto_rank_and_disabled(tmp_path):
+def test_discovered_routes_are_inserted_by_auto_rank_and_enabled(tmp_path):
     catalog = ModelCatalog(str(tmp_path / "models.json"))
     catalog.replace_routes(
         [
@@ -299,7 +299,7 @@ def test_discovered_routes_are_inserted_by_auto_rank_and_disabled(tmp_path):
     all_routes = catalog.all_routes()
 
     assert len(added) == 1
-    assert added[0].enabled is False
+    assert added[0].enabled is True
     assert all_routes[0].route_id == "new-high"
     assert all_routes[0].rank_score is not None
 

@@ -39,7 +39,7 @@ def test_openrouter_catalog_payload_creates_free_routes_only():
     assert routes[0].display_name == "New Free Model"
     assert routes[0].context_window == 65536
     assert "text" in routes[0].tags
-    assert routes[0].enabled is False
+    assert routes[0].enabled is True
 
 
 def test_non_openrouter_catalog_payload_requires_structured_free_pricing():
@@ -91,8 +91,8 @@ def test_non_openrouter_catalog_payload_requires_structured_free_pricing():
 
     assert [route.model_id for route in routes] == ["llama-free-70b"]
     assert routes[0].provider_name == "groq"
-    assert routes[0].enabled is False
-    assert "free-tier limits can still vary" in routes[0].notes
+    assert routes[0].enabled is True
+    assert "Enabled when added" in routes[0].notes
 
 
 def test_openrouter_catalog_payload_allows_multimodal_text_models():
@@ -219,7 +219,7 @@ def test_malformed_or_missing_price_fields_do_not_count_as_free():
     assert [route.model_id for route in routes] == ["zero-price"]
 
 
-def test_supervisor_verified_missing_pricing_routes_remain_disabled_by_default():
+def test_supervisor_verified_missing_pricing_routes_are_enabled_for_catalog_add():
     provider = FakeProvider("gemini")
     route = route_from_catalog_item(
         provider,
@@ -230,7 +230,7 @@ def test_supervisor_verified_missing_pricing_routes_remain_disabled_by_default()
 
     assert route is not None
     assert route.model_id == "gemini-new-free"
-    assert route.enabled is False
+    assert route.enabled is True
     assert "free-tier verification" in route.notes
     assert "Supervisor found official free-tier evidence." in route.notes
 
