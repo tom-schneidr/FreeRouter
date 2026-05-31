@@ -208,6 +208,20 @@ def test_gateway_models_get_includes_health_blob(tmp_path, monkeypatch):
     assert "status" in payload["data"][0]["health"]
 
 
+def test_gateway_health_json_reports_local_runtime_state(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.get("/v1/gateway/health.json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["service"] == "freerouter"
+    assert payload["providers"]["total"] >= 1
+    assert payload["providers"]["configured"] == 0
+    assert payload["routes"]["enabled"] >= 1
+    assert payload["request_limits"]["max_concurrent_requests"] == 20
+
+
 def test_providers_status_returns_models_with_health_and_usage(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.get("/v1/providers/status")

@@ -11,6 +11,41 @@ $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvDir = Join-Path $ProjectRoot ".venv"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 
+function Resolve-TempDir {
+    $candidates = @()
+    if ($env:FREEROUTER_TEMP) {
+        $candidates += $env:FREEROUTER_TEMP
+    }
+    $candidates += @(
+        (Join-Path $ProjectRoot ".pip-temp"),
+        (Join-Path ([System.IO.Path]::GetTempPath()) "FreeRouter\pip-temp")
+    )
+
+    foreach ($candidate in $candidates) {
+        try {
+            New-Item -ItemType Directory -Force -Path $candidate | Out-Null
+            return $candidate
+        }
+        catch {
+            continue
+        }
+    }
+
+    throw "Could not create a temporary directory for Python package installation."
+}
+
+function Invoke-Checked {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments
+    )
+
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath $($Arguments -join ' ')"
+    }
+}
+
 function Resolve-Python {
     $candidates = @(
         @{ Command = "py"; Args = @("-3.13") },
@@ -82,20 +117,24 @@ function Sync-EnvTemplate {
 }
 
 Set-Location $ProjectRoot
+$TempDir = Resolve-TempDir
+$env:TEMP = $TempDir
+$env:TMP = $TempDir
+$env:PIP_CACHE_DIR = Join-Path $TempDir "pip-cache"
 
 if (-not (Test-Path $VenvPython)) {
     $python = Resolve-Python
     Write-Host "Creating local virtual environment at .venv..."
-    & $python.Command @($python.Args + @("-m", "venv", $VenvDir))
+    Invoke-Checked $python.Command @($python.Args + @("-m", "venv", $VenvDir))
 }
 
 Write-Host "Installing/updating gateway dependencies..."
-& $VenvPython -m pip install --upgrade pip
+Invoke-Checked $VenvPython @("-m", "pip", "install", "--upgrade", "pip")
 if ($RuntimeOnly) {
-    & $VenvPython -m pip install -e .
+    Invoke-Checked $VenvPython @("-m", "pip", "install", "-e", ".")
 }
 else {
-    & $VenvPython -m pip install -e ".[dev]"
+    Invoke-Checked $VenvPython @("-m", "pip", "install", "-e", ".[dev]")
 }
 
 $EnvPath = Join-Path $ProjectRoot ".env"

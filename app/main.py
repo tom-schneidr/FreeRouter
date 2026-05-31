@@ -280,6 +280,47 @@ async def route_health_page() -> str:
     return ROUTE_HEALTH_HTML
 
 
+@app.get("/v1/gateway/health.json")
+async def gateway_health(request: Request) -> dict[str, Any]:
+    settings = get_settings()
+    catalog: ModelCatalog = request.app.state.model_catalog
+    state: StateManager = request.app.state.gateway_state
+    router: WaterfallRouter = request.app.state.waterfall_router
+    background: BackgroundEndpointDiagnosis | None = request.app.state.background_endpoint_diagnosis
+
+    provider_names = [provider.name for provider in router.providers]
+    usage = await state.snapshot_providers_usage(provider_names)
+    configured_provider_count = sum(1 for provider in router.providers if provider.is_configured)
+    enabled_routes = catalog.enabled_routes()
+
+    return {
+        "status": "ok",
+        "service": "freerouter",
+        "version": app.version,
+        "database_path": settings.database_path,
+        "model_catalog_path": settings.model_catalog_path,
+        "providers": {
+            "total": len(router.providers),
+            "configured": configured_provider_count,
+            "available": sum(1 for _, availability in usage.values() if availability.available),
+        },
+        "routes": {
+            "total": len(catalog.all_routes()),
+            "enabled": len(enabled_routes),
+        },
+        "request_limits": {
+            "max_concurrent_requests": settings.max_concurrent_requests,
+            "queue_timeout_seconds": settings.request_queue_timeout_seconds,
+            "max_waiting_requests": settings.request_queue_max_waiting_requests,
+        },
+        "background_endpoint_diagnosis": {
+            "enabled": settings.auto_endpoint_diagnosis_enabled,
+            "running": background is not None,
+            "auto_maintenance_enabled": bool(background and background.apply_safe_suggestions),
+        },
+    }
+
+
 @app.get("/v1/models")
 async def models(request: Request) -> dict[str, Any]:
     settings = get_settings()

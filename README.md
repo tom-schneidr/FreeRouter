@@ -214,27 +214,32 @@ If another coding agent is integrating with this repository, give it these rules
 
 ```text
 .
-├── app/
-│   ├── chat_page.py            # Chat playground HTML template
-│   ├── client.py               # Programmatic client wrapper around router
-│   ├── endpoint_diagnosis.py   # Catalog diagnosis and reviewable update suggestions
-│   ├── main.py                 # FastAPI app and OpenAI-compatible endpoints
-│   ├── model_catalog.py        # Editable ranked model catalog defaults
-│   ├── model_discovery.py      # Structured /models payload discovery helpers
-│   ├── provider_errors.py      # Provider error classification helpers
-│   ├── router.py               # Ranked model waterfall routing engine
-│   ├── settings.py             # .env-backed configuration
-│   ├── state.py                # SQLite quota/cooldown/RPM tracker
-│   └── providers/
-│       ├── base.py             # OpenAI-compatible provider adapter
-│       └── registry.py         # Provider order, quotas, endpoints, models
-├── data/                       # Runtime SQLite DB and editable model catalog
-├── tests/                      # Router/state/catalog/discovery/provider tests
-├── .env.example                # API key template
-├── run.bat                     # Execution-policy-safe Windows launcher
-├── run.ps1                     # PowerShell bootstrap-and-run script
-├── run.sh                      # Linux/macOS bootstrap-and-run script
-└── pyproject.toml              # Python dependencies
+|-- app/
+|   |-- chat_page.py            # Chat playground HTML template
+|   |-- client.py               # Programmatic client wrapper around router
+|   |-- endpoint_diagnosis.py   # Catalog diagnosis and reviewable update suggestions
+|   |-- local_backup.py         # Local state export/import CLI
+|   |-- main.py                 # FastAPI app and OpenAI-compatible endpoints
+|   |-- model_catalog.py        # Editable ranked model catalog defaults
+|   |-- model_discovery.py      # Structured /models payload discovery helpers
+|   |-- provider_errors.py      # Provider error classification helpers
+|   |-- router.py               # Ranked model waterfall routing engine
+|   |-- settings.py             # .env-backed configuration
+|   |-- state.py                # SQLite quota/cooldown/RPM tracker
+|   |-- tray_launcher.py        # Local tray console
+|   `-- providers/
+|       |-- base.py             # OpenAI-compatible provider adapter
+|       `-- registry.py         # Provider order, quotas, endpoints, models
+|-- data/                       # Runtime SQLite DB and editable model catalog
+|-- tests/                      # Router/state/catalog/discovery/provider tests
+|-- .env.example                # API key template
+|-- backup-local-state.ps1      # Export local catalog/database backup
+|-- restore-local-state.ps1     # Restore local catalog/database backup
+|-- run.bat                     # Execution-policy-safe Windows launcher
+|-- run.ps1                     # PowerShell bootstrap-and-run script
+|-- run.sh                      # Linux/macOS bootstrap-and-run script
+|-- validate.ps1                # Run local tests and lint
+`-- pyproject.toml              # Python dependencies
 ```
 
 ## Run Locally
@@ -354,6 +359,7 @@ GET  /models
 GET  /status
 GET  /v1/models
 POST /v1/responses
+GET  /v1/gateway/health.json
 GET  /v1/gateway/models
 PUT  /v1/gateway/models
 POST /v1/gateway/models/reset
@@ -383,4 +389,37 @@ translate that intent to the provider's native web-search request format.
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m ruff check .
+```
+
+Or run both checks through the local validation wrapper:
+
+```powershell
+.\validate.ps1
+```
+
+Linux/macOS:
+
+```bash
+./validate.sh
+```
+
+## Local State Backup
+
+Export the editable model catalog, SQLite state, and non-secret local settings:
+
+```powershell
+.\backup-local-state.ps1
+```
+
+Restore a backup:
+
+```powershell
+.\restore-local-state.ps1 .\backups\freerouter-local-state-YYYYMMDD-HHMMSS.zip -Overwrite
+```
+
+Linux/macOS:
+
+```bash
+./backup-local-state.sh
+./restore-local-state.sh ./backups/freerouter-local-state-YYYYMMDD-HHMMSS.zip --overwrite
 ```

@@ -22,7 +22,9 @@ build/
 # Testing
 .pytest_cache/
 .pytest-temp/
+.pip-temp/
 data/pytest-temp/
+scratch-pytest/
 .coverage
 htmlcov/
 .tox/
@@ -44,3 +46,4 @@ Thumbs.db
 data/*.sqlite3
 data/*.sqlite3-*
 data/model_catalog.json
+backups/
