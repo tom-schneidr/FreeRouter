@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Activity,
   Bot,
@@ -10,6 +10,7 @@ import {
   MessageSquareText,
   RefreshCw,
   Route,
+  Save,
   Settings,
   ShieldCheck,
 } from "lucide-react";
@@ -69,10 +70,30 @@ type LiveEvent = {
   route_id?: string;
 };
 
+type DesktopField = {
+  key: string;
+  label: string;
+  group: string;
+  kind: string;
+  secret: boolean;
+  value: string;
+  configured: boolean | null;
+};
+
+type DesktopSettingsPayload = {
+  env_path: string;
+  groups: string[];
+  fields: DesktopField[];
+};
+
+type DesktopLogsPayload = {
+  lines: string[];
+};
+
 const queryClient = new QueryClient();
 
-async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(path, options);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = typeof payload?.detail === "string" ? payload.detail : response.statusText;
@@ -91,6 +112,7 @@ function App() {
 
 function FreeRouterShell() {
   const [activeSection, setActiveSection] = React.useState("dashboard");
+  const desktopToken = useDesktopToken();
   const health = useGatewayQuery<GatewayHealth>("gateway-health", "/v1/gateway/health.json", 5000);
   const models = useGatewayQuery<{ data: ModelRoute[] }>("gateway-models", "/v1/gateway/models", 10000);
   const providers = useGatewayQuery<{ data: ProviderStatus[] }>(
@@ -172,13 +194,25 @@ function FreeRouterShell() {
           {activeSection === "models" && <Models routes={routes} />}
           {activeSection === "providers" && <Providers providers={providerRows} />}
           {activeSection === "traffic" && <Traffic live={liveRows} />}
-          {activeSection === "settings" && <Placeholder title="Settings" />}
+          {activeSection === "settings" && <SettingsPanel desktopToken={desktopToken} />}
           {activeSection === "backups" && <Placeholder title="Backups" />}
           {activeSection === "chat" && <Placeholder title="Chat" />}
+          {activeSection === "logs" && <LogsPanel desktopToken={desktopToken} />}
         </section>
       </main>
     </div>
   );
+}
+
+function useDesktopToken() {
+  const [token] = React.useState(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get("desktop_token");
+    const fromSession = window.sessionStorage.getItem("freerouterDesktopToken");
+    const next = fromUrl || fromSession || "";
+    if (next) window.sessionStorage.setItem("freerouterDesktopToken", next);
+    return next;
+  });
+  return token;
 }
 
 function useGatewayQuery<T>(key: string, path: string, refetchInterval: number) {
@@ -272,6 +306,117 @@ function Traffic({ live }: { live: LiveEvent[] }) {
   );
 }
 
+function SettingsPanel({ desktopToken }: { desktopToken: string }) {
+  const settings = useDesktopQuery<DesktopSettingsPayload>(
+    "desktop-settings",
+    "/v1/desktop/settings",
+    desktopToken,
+  );
+  const [values, setValues] = React.useState<Record<string, string>>({});
+  const saveSettings = useMutation({
+    mutationFn: async () =>
+      fetchJson<{ settings: DesktopSettingsPayload; restart_required: boolean }>(
+        "/v1/desktop/settings",
+        {
+          method: "POST",
+          headers: desktopHeaders(desktopToken),
+          body: JSON.stringify(values),
+        },
+      ),
+    onSuccess: (payload) => {
+      queryClient.setQueryData(["desktop-settings"], payload.settings);
+    },
+  });
+
+  React.useEffect(() => {
+    if (!settings.data) return;
+    setValues(Object.fromEntries(settings.data.fields.map((field) => [field.key, field.value])));
+  }, [settings.data]);
+
+  if (!desktopToken) return <DesktopRequired title="Settings" />;
+  if (settings.isLoading) return <Panel title="Settings" icon={Settings}><EmptyState message="Loading desktop settings..." /></Panel>;
+  if (settings.error) {
+    return (
+      <Panel title="Settings" icon={Settings}>
+        <EmptyState message={settings.error.message} />
+      </Panel>
+    );
+  }
+  const payload = settings.data;
+  if (!payload) return null;
+
+  return (
+    <div className="section-stack">
+      <div className="section-heading">
+        <div>
+          <h1>Settings</h1>
+          <p>Provider keys, runtime limits, storage paths, and endpoint maintenance controls.</p>
+        </div>
+        <button
+          className="primary-action"
+          type="button"
+          disabled={saveSettings.isPending}
+          onClick={() => saveSettings.mutate()}
+        >
+          <Save size={16} />
+          {saveSettings.isPending ? "Saving" : "Save settings"}
+        </button>
+      </div>
+      {saveSettings.isSuccess && <Notice tone="ok">Settings saved. Restart the gateway to apply runtime changes.</Notice>}
+      {saveSettings.error && <Notice tone="bad">{saveSettings.error.message}</Notice>}
+      {payload.groups.map((group) => {
+        const fields = payload.fields.filter((field) => field.group === group);
+        return (
+          <Panel title={group} icon={Settings} key={group}>
+            <div className="form-grid">
+              {fields.map((field) => (
+                <label className="field" key={field.key}>
+                  <span>{field.label}</span>
+                  {field.kind === "bool" ? (
+                    <select
+                      value={values[field.key] ?? ""}
+                      onChange={(event) =>
+                        setValues((current) => ({ ...current, [field.key]: event.target.value }))
+                      }
+                    >
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : (
+                    <input
+                      type={field.secret ? "password" : numericFieldKind(field.kind) ? "number" : "text"}
+                      step={field.kind === "float" ? "0.1" : undefined}
+                      value={values[field.key] ?? ""}
+                      onChange={(event) =>
+                        setValues((current) => ({ ...current, [field.key]: event.target.value }))
+                      }
+                    />
+                  )}
+                </label>
+              ))}
+            </div>
+          </Panel>
+        );
+      })}
+      <p className="path-note">Settings file: {payload.env_path}</p>
+    </div>
+  );
+}
+
+function LogsPanel({ desktopToken }: { desktopToken: string }) {
+  const logs = useDesktopQuery<DesktopLogsPayload>("desktop-logs", "/v1/desktop/logs", desktopToken, 5000);
+  if (!desktopToken) return <DesktopRequired title="Logs" />;
+  return (
+    <Panel title="Logs" icon={Activity}>
+      {logs.isLoading && <EmptyState message="Loading desktop logs..." />}
+      {logs.error && <EmptyState message={logs.error.message} />}
+      {logs.data && (
+        <pre className="log-box">{logs.data.lines.join("") || "No logs captured yet."}</pre>
+      )}
+    </Panel>
+  );
+}
+
 function ProviderTable({ providers }: { providers: ProviderStatus[] }) {
   if (!providers.length) return <EmptyState message="No provider state loaded yet." />;
   return (
@@ -332,6 +477,38 @@ function Placeholder({ title }: { title: string }) {
   );
 }
 
+function DesktopRequired({ title }: { title: string }) {
+  return (
+    <Panel title={title} icon={Settings}>
+      <EmptyState message="Open FreeRouter from the desktop shell to use this local-machine control." />
+    </Panel>
+  );
+}
+
+function Notice({ tone, children }: { tone: "ok" | "bad"; children: React.ReactNode }) {
+  return <div className={`notice ${tone}`}>{children}</div>;
+}
+
+function numericFieldKind(kind: string) {
+  return kind === "int" || kind === "optional_int" || kind === "float";
+}
+
+function desktopHeaders(token: string) {
+  return {
+    "Content-Type": "application/json",
+    "X-FreeRouter-Desktop-Token": token,
+  };
+}
+
+function useDesktopQuery<T>(key: string, path: string, token: string, refetchInterval?: number) {
+  return useQuery({
+    queryKey: [key],
+    queryFn: () => fetchJson<T>(path, { headers: desktopHeaders(token) }),
+    enabled: Boolean(token),
+    refetchInterval,
+  });
+}
+
 function Metric({ label, value, note }: { label: string; value: React.ReactNode; note: string }) {
   return (
     <div className="metric">
@@ -377,6 +554,7 @@ const NAV_ITEMS = [
   { id: "traffic", label: "Traffic", icon: Activity },
   { id: "settings", label: "Settings", icon: Settings },
   { id: "backups", label: "Backups", icon: Database },
+  { id: "logs", label: "Logs", icon: Activity },
   { id: "chat", label: "Chat", icon: MessageSquareText },
 ];
 

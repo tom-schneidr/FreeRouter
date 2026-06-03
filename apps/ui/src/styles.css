@@ -41,6 +41,25 @@ button:hover {
   background: #1a2c47;
 }
 
+.primary-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-color: #3971dd;
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: 650;
+}
+
+.primary-action:hover {
+  background: #1d4ed8;
+}
+
+.primary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -269,6 +288,79 @@ h1 {
   font-size: 15px;
 }
 
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field span {
+  color: #91a4bd;
+  font-size: 12px;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #24354d;
+  border-radius: 7px;
+  background: #08111f;
+  color: #e5edf8;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: #4f8cff;
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.16);
+}
+
+.notice {
+  border: 1px solid #24354d;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(148, 163, 184, 0.08);
+  color: #91a4bd;
+}
+
+.notice.ok {
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.12);
+  color: #bbf7d0;
+}
+
+.notice.bad {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+}
+
+.path-note {
+  color: #667892;
+  font-size: 12px;
+}
+
+.log-box {
+  max-height: min(590px, 70vh);
+  overflow: auto;
+  white-space: pre-wrap;
+  margin: 0;
+  border: 1px solid #24354d;
+  border-radius: 8px;
+  background: #050b15;
+  color: #c7d2fe;
+  padding: 14px;
+  font: 12px/1.45 Consolas, "Cascadia Mono", ui-monospace, monospace;
+}
+
 .table-wrap {
   overflow: auto;
   border: 1px solid #24354d;
@@ -416,7 +508,8 @@ td span {
   }
 
   .metrics,
-  .two-column {
+  .two-column,
+  .form-grid {
     grid-template-columns: 1fr;
   }
 }
