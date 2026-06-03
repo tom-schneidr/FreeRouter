@@ -82,7 +82,7 @@ pub fn run() {
             thread::spawn(move || {
                 if wait_for_port(GATEWAY_HOST, gateway_port, Duration::from_secs(20)) {
                     let url = format!(
-                        "http://{}:{}/app-next?desktop_token={}",
+                        "http://{}:{}/app?desktop_token={}",
                         GATEWAY_HOST, gateway_port, token
                     );
                     let window_handle = handle.clone();

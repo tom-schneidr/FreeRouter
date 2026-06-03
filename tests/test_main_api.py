@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from app.main import (
@@ -12,7 +13,7 @@ from app.main import (
     app,
 )
 from app.request_limiter import GatewayRequestLimiter
-from app.react_app import react_dist_path
+from app.react_app import _react_index_response, react_dist_path
 from app.settings import get_settings
 
 
@@ -80,6 +81,21 @@ def test_react_dist_path_can_resolve_pyinstaller_bundle(tmp_path, monkeypatch):
     monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
 
     assert react_dist_path(Path("missing-source-root")) == bundled_dist
+
+
+def test_react_app_missing_build_redirects_to_classic_app(tmp_path):
+    api = FastAPI()
+
+    @api.get("/app-next")
+    async def missing_react_app(request: Request):
+        return _react_index_response(tmp_path, request)
+
+    client = TestClient(api)
+
+    response = client.get("/app-next?desktop_token=token", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/app?desktop_token=token"
 
 
 def test_classic_pages_include_embed_support(tmp_path, monkeypatch):
