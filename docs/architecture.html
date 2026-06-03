@@ -104,6 +104,11 @@ npm run build:desktop  Build the sidecar, React UI, and Tauri desktop bundle</co
         React app served by that sidecar. Runtime files live under the platform app-data directory,
         not inside the repository checkout.
       </p>
+      <p>
+        During <code>tauri dev</code>, the desktop shell uses the fixed backend port <code>8000</code>
+        because Vite serves the React app and proxies API calls to a known target. Packaged builds use
+        a dynamic backend port and navigate the window directly to the sidecar-served app.
+      </p>
 
       <h2>Migration Sequence</h2>
       <ol>

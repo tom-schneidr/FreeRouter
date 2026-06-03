@@ -110,6 +110,10 @@ pub fn run() {
 }
 
 fn select_gateway_port(host: &str) -> u16 {
+    if cfg!(debug_assertions) {
+        return DEFAULT_GATEWAY_PORT;
+    }
+
     TcpListener::bind((host, 0))
         .and_then(|listener| listener.local_addr())
         .map(|address| address.port())
