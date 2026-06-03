@@ -431,6 +431,10 @@ DESKTOP_APP_HTML = r"""<!doctype html>
             <iframe id="frame-live" class="embed-frame" title="Live Traffic" loading="lazy"></iframe>
           </section>
 
+          <section id="section-docs" class="section embed-section">
+            <iframe id="frame-docs" class="embed-frame" title="API Docs" loading="lazy"></iframe>
+          </section>
+
           <section id="section-settings" class="section">
             <div class="section-header">
               <div>
@@ -481,7 +485,8 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         providers: [],
         live: [],
         settings: null,
-        activeSection: 'dashboard'
+        activeSection: 'dashboard',
+        previousSection: 'dashboard'
       };
 
       const navButtons = [...document.querySelectorAll('.nav button[data-section]')];
@@ -491,6 +496,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         usage: '/status?embed=1',
         health: '/health?embed=1',
         live: '/live?embed=1',
+        docs: '/docs',
       };
       const loadedEmbeds = new Set();
 
@@ -770,12 +776,22 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         }
       }
 
+      function updateDocsButton() {
+        const onDocs = appState.activeSection === 'docs';
+        $('openDocs').textContent = onDocs ? 'Back' : 'API Docs';
+        $('openDocs').title = onDocs ? 'Return to the previous page' : 'Open OpenAPI docs inside the app';
+      }
+
       function selectSection(section) {
+        if (section !== 'docs' && appState.activeSection !== 'docs') {
+          appState.previousSection = appState.activeSection;
+        }
         appState.activeSection = section;
         navButtons.forEach((button) => button.classList.toggle('active', button.dataset.section === section));
         document.querySelectorAll('.section').forEach((el) => el.classList.toggle('active', el.id === `section-${section}`));
         if (location.hash !== `#${section}`) history.replaceState(null, '', `#${section}`);
         ensureEmbedFrame(section);
+        updateDocsButton();
       }
 
       document.addEventListener('click', async (event) => {
@@ -810,7 +826,14 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       });
 
       $('refreshAll').addEventListener('click', refreshAll);
-      $('openDocs').addEventListener('click', () => { window.location.href = '/docs'; });
+      $('openDocs').addEventListener('click', () => {
+        if (appState.activeSection === 'docs') {
+          selectSection(appState.previousSection || 'dashboard');
+        } else {
+          appState.previousSection = appState.activeSection;
+          selectSection('docs');
+        }
+      });
       $('copyBaseUrl').addEventListener('click', async () => {
         const text = $('baseUrl').textContent;
         try {

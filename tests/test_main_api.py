@@ -51,6 +51,7 @@ def test_desktop_app_page_is_served(tmp_path, monkeypatch):
     assert "frame-models" in response.text
     assert "frame-usage" in response.text
     assert "frame-live" in response.text
+    assert "frame-docs" in response.text
     assert "Desktop app required" in response.text
 
 
