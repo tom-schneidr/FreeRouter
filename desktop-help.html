@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FreeRouter Desktop Help</title>
+    <style>
+      body { margin: 0; font: 15px/1.6 "Segoe UI", system-ui, sans-serif; background: #07111f; color: #e5edf8; }
+      main { max-width: 820px; margin: 0 auto; padding: 40px 24px; }
+      h1 { font-size: 28px; margin: 0 0 10px; }
+      h2 { font-size: 18px; margin-top: 28px; }
+      p, li { color: #a8b6ca; }
+      code { color: #bfdbfe; background: #101b2e; border: 1px solid #24354d; padding: 2px 6px; border-radius: 5px; }
+      .panel { border: 1px solid #24354d; background: #101b2e; border-radius: 8px; padding: 18px; margin-top: 18px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>FreeRouter Desktop</h1>
+      <p>FreeRouter is still a local gateway at <code>http://127.0.0.1:8000/v1</code>, but the desktop app starts it without a console and gives you a normal app window for admin work.</p>
+      <div class="panel">
+        <h2>Install Shortcuts</h2>
+        <p>Run <code>.\install-desktop.ps1</code> once from the project folder. It creates Start Menu and Desktop shortcuts that launch <code>pythonw.exe -m app.desktop_app</code>.</p>
+      </div>
+      <h2>Daily Use</h2>
+      <ul>
+        <li>Open FreeRouter from the Start Menu or Desktop shortcut.</li>
+        <li>Close the window to keep the server running in the tray.</li>
+        <li>Use the tray menu to show the window, restart the server, copy the base URL, or quit.</li>
+      </ul>
+      <h2>Notes</h2>
+      <p>The app is private/local. It does not install a Windows service, auto-updater, or signed executable.</p>
+    </main>
+  </body>
+</html>

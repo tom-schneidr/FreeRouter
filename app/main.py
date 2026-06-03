@@ -21,6 +21,18 @@ from app.codex_compat import (
     responses_stream_done,
     responses_stream_start,
 )
+from app.desktop_api import (
+    desktop_capabilities,
+    desktop_logs,
+    desktop_settings_payload,
+    export_desktop_backup,
+    import_desktop_backup,
+    import_desktop_backup_upload,
+    request_desktop_restart,
+    save_desktop_settings,
+)
+from app.desktop_page import DESKTOP_APP_HTML
+from app.ui.embed import with_embed_support
 from app.endpoint_diagnosis import (
     BackgroundEndpointDiagnosis,
     EndpointDiagnosisService,
@@ -270,14 +282,59 @@ async def chat_page() -> str:
     return CHAT_HTML
 
 
+@app.get("/app", response_class=HTMLResponse)
+async def desktop_app_page() -> str:
+    return DESKTOP_APP_HTML
+
+
+@app.get("/v1/desktop/capabilities")
+async def desktop_capabilities_endpoint(request: Request) -> dict[str, Any]:
+    return desktop_capabilities(request)
+
+
+@app.post("/v1/desktop/restart")
+async def desktop_restart_endpoint(request: Request) -> dict[str, Any]:
+    return request_desktop_restart(request)
+
+
+@app.get("/v1/desktop/settings")
+async def desktop_settings_endpoint(request: Request) -> dict[str, Any]:
+    return desktop_settings_payload(request)
+
+
+@app.post("/v1/desktop/settings")
+async def save_desktop_settings_endpoint(request: Request) -> dict[str, Any]:
+    return await save_desktop_settings(request)
+
+
+@app.post("/v1/desktop/backups/export")
+async def export_desktop_backup_endpoint(request: Request) -> dict[str, Any]:
+    return export_desktop_backup(request)
+
+
+@app.post("/v1/desktop/backups/import")
+async def import_desktop_backup_endpoint(request: Request) -> dict[str, Any]:
+    return await import_desktop_backup(request)
+
+
+@app.post("/v1/desktop/backups/import-upload")
+async def import_desktop_backup_upload_endpoint(request: Request) -> dict[str, Any]:
+    return await import_desktop_backup_upload(request)
+
+
+@app.get("/v1/desktop/logs")
+async def desktop_logs_endpoint(request: Request) -> dict[str, Any]:
+    return desktop_logs(request)
+
+
 @app.get("/models", response_class=HTMLResponse)
 async def model_catalog_page() -> str:
-    return MODEL_CATALOG_HTML
+    return with_embed_support(MODEL_CATALOG_HTML)
 
 
 @app.get("/health", response_class=HTMLResponse)
 async def route_health_page() -> str:
-    return ROUTE_HEALTH_HTML
+    return with_embed_support(ROUTE_HEALTH_HTML)
 
 
 @app.get("/v1/gateway/health.json")
@@ -482,7 +539,7 @@ async def _catalog_payload_with_health(
 
 @app.get("/status", response_class=HTMLResponse)
 async def provider_status_page() -> HTMLResponse:
-    return HTMLResponse(r"""
+    return HTMLResponse(with_embed_support(r"""
 <!doctype html>
 <html lang="en">
   <head>
@@ -828,7 +885,7 @@ async def provider_status_page() -> HTMLResponse:
     </script>
   </body>
 </html>
-""")
+"""))
 
 
 @app.get("/v1/providers/status")
@@ -883,7 +940,7 @@ async def provider_status(request: Request) -> dict[str, Any]:
 
 @app.get("/live", response_class=HTMLResponse)
 async def live_api_page() -> HTMLResponse:
-    return HTMLResponse(LIVE_API_HTML)
+    return HTMLResponse(with_embed_support(LIVE_API_HTML))
 
 
 @app.get("/v1/gateway/live/snapshot")

@@ -41,6 +41,28 @@ def test_v1_models_includes_gateway_alias(tmp_path, monkeypatch):
     assert payload["data"][0]["id"] == "auto"
 
 
+def test_desktop_app_page_is_served(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.get("/app")
+    assert response.status_code == 200
+    assert "FreeRouter" in response.text
+    assert "section-dashboard" in response.text
+    assert "frame-chat" in response.text
+    assert "frame-models" in response.text
+    assert "frame-usage" in response.text
+    assert "frame-live" in response.text
+    assert "Desktop app required" in response.text
+
+
+def test_classic_pages_include_embed_support(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        for path in ("/chat", "/models", "/health", "/status", "/live"):
+            response = client.get(path)
+            assert response.status_code == 200
+            assert "fr-embed-styles" in response.text
+            assert "embed-mode" in response.text
+
+
 def test_gateway_models_update_rejects_invalid_payload(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.put("/v1/gateway/models", json={"data": "not-a-list"})

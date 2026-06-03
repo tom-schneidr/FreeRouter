@@ -17,8 +17,8 @@ function Resolve-TempDir {
         $candidates += $env:FREEROUTER_TEMP
     }
     $candidates += @(
-        (Join-Path $ProjectRoot ".pip-temp"),
-        (Join-Path ([System.IO.Path]::GetTempPath()) "FreeRouter\pip-temp")
+        (Join-Path ([System.IO.Path]::GetTempPath()) "FreeRouter\pip-temp"),
+        (Join-Path $ProjectRoot ".pip-temp")
     )
 
     foreach ($candidate in $candidates) {

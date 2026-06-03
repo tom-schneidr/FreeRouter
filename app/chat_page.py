@@ -1,6 +1,8 @@
 """Chat page HTML served at /chat."""
 
-CHAT_HTML = r"""<!doctype html>
+from app.ui.embed import with_embed_support
+
+CHAT_HTML = with_embed_support(r"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -657,4 +659,4 @@ inputEl.addEventListener('keydown', (e) => {
 </script>
 </body>
 </html>
-"""
+""")

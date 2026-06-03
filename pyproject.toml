@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.8.0",
     "pystray>=0.19.5",
+    "pywebview>=5.0.0",
     "uvicorn[standard]>=0.34.0",
 ]
 
