@@ -11,9 +11,13 @@ $WorkDir = Join-Path $ProjectRoot "build\sidecar"
 $SpecDir = Join-Path $WorkDir "spec"
 $PyInstallerName = "freerouterd-$TargetTriple"
 $ExpectedExe = Join-Path $TargetDir "$PyInstallerName.exe"
+$ReactDist = Join-Path $ProjectRoot "apps\ui\dist"
 
 if (-not (Test-Path $VenvPython)) {
     throw "Missing .venv. Run .\run.ps1 -InstallOnly -RuntimeOnly first."
+}
+if (-not (Test-Path (Join-Path $ReactDist "index.html"))) {
+    throw "Missing React build output. Run npm run build:web before building the sidecar."
 }
 
 New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
@@ -38,6 +42,7 @@ Write-Host "Building FreeRouter sidecar..."
     --hidden-import app.main `
     --hidden-import app.sidecar `
     --collect-submodules app `
+    --add-data "$ReactDist;apps\ui\dist" `
     (Join-Path $ProjectRoot "app\sidecar.py")
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller sidecar build failed."

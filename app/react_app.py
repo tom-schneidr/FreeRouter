@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -11,8 +12,20 @@ REACT_APP_ROUTE = "/app-next"
 
 
 def react_dist_path(project_root: Path | None = None) -> Path:
-    root = project_root or Path(__file__).resolve().parent.parent
-    return root / "apps" / "ui" / "dist"
+    roots: list[Path] = []
+    if project_root is not None:
+        roots.append(project_root)
+    if getattr(sys, "frozen", False):
+        roots.append(Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)))
+    roots.append(Path(__file__).resolve().parent.parent)
+    roots.append(Path.cwd())
+
+    for root in roots:
+        candidate = root / "apps" / "ui" / "dist"
+        if (candidate / "index.html").exists():
+            return candidate
+
+    return roots[0] / "apps" / "ui" / "dist"
 
 
 def mount_react_app(app: FastAPI, *, project_root: Path | None = None) -> None:

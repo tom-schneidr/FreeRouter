@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -11,6 +12,7 @@ from app.main import (
     app,
 )
 from app.request_limiter import GatewayRequestLimiter
+from app.react_app import react_dist_path
 from app.settings import get_settings
 
 
@@ -67,6 +69,17 @@ def test_react_app_route_is_served(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "FreeRouter" in response.text
     assert "root" in response.text
+
+
+def test_react_dist_path_can_resolve_pyinstaller_bundle(tmp_path, monkeypatch):
+    bundled_dist = tmp_path / "apps" / "ui" / "dist"
+    bundled_dist.mkdir(parents=True)
+    (bundled_dist / "index.html").write_text("<div id=\"root\"></div>", encoding="utf-8")
+
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
+
+    assert react_dist_path(Path("missing-source-root")) == bundled_dist
 
 
 def test_classic_pages_include_embed_support(tmp_path, monkeypatch):
