@@ -32,7 +32,6 @@ from app.desktop_api import (
     save_desktop_settings,
 )
 from app.desktop_page import DESKTOP_APP_HTML
-from app.ui.embed import with_embed_support
 from app.endpoint_diagnosis import (
     BackgroundEndpointDiagnosis,
     EndpointDiagnosisService,
@@ -52,6 +51,8 @@ from app.router import (
 from app.settings import get_settings
 from app.state import StateManager
 from app.stream_route import stream_route_chat
+from app.ui.docs_page import swagger_docs_html
+from app.ui.embed import with_embed_support
 
 WEB_SEARCH_TOOL = {"type": "web_search_preview"}
 
@@ -132,6 +133,7 @@ app = FastAPI(
     title="FreeRouter",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None,
 )
 
 
@@ -275,6 +277,11 @@ async def index() -> str:
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> Response:
     return Response(status_code=204)
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_docs_page() -> HTMLResponse:
+    return swagger_docs_html(openapi_url=app.openapi_url, title=f"{app.title} API")
 
 
 @app.get("/chat", response_class=HTMLResponse)

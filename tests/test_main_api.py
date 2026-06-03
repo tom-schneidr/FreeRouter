@@ -64,6 +64,15 @@ def test_classic_pages_include_embed_support(tmp_path, monkeypatch):
             assert "embed-mode" in response.text
 
 
+def test_docs_page_uses_dark_theme(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.get("/docs")
+    assert response.status_code == 200
+    assert "fr-docs-theme" in response.text
+    assert "#07111f" in response.text
+    assert "swagger-ui" in response.text
+
+
 def test_gateway_models_update_rejects_invalid_payload(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.put("/v1/gateway/models", json={"data": "not-a-list"})
