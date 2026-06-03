@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     nvidia_api_key: str | None = None
     openrouter_api_key: str | None = None
+    sambanova_api_key: str | None = None
 
     database_path: str = "./data/gateway.sqlite3"
     model_catalog_path: str = "./data/model_catalog.json"

@@ -35,6 +35,12 @@ PROVIDER_QUOTAS = [
         requests_per_day=None,
         requests_per_minute=None,
     ),
+    ProviderQuota(
+        name="sambanova",
+        tokens_per_day=None,
+        requests_per_day=None,
+        requests_per_minute=None,
+    ),
 ]
 
 
@@ -78,5 +84,12 @@ def build_provider_adapters(settings: Settings) -> list[ProviderAdapter]:
                 "HTTP-Referer": "http://localhost:8000",
                 "X-Title": "FreeRouter",
             },
+        ),
+        ProviderAdapter(
+            name="sambanova",
+            api_key=settings.sambanova_api_key,
+            base_url="https://api.sambanova.ai/v1",
+            default_model="Llama-4-Maverick-17B-128E-Instruct",
+            max_context_tokens=None,
         ),
     ]

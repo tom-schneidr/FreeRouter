@@ -26,6 +26,7 @@ DESKTOP_SETTINGS: tuple[DesktopSetting, ...] = (
     DesktopSetting("GEMINI_API_KEY", "Gemini API key", "Provider Keys", secret=True),
     DesktopSetting("NVIDIA_API_KEY", "NVIDIA API key", "Provider Keys", secret=True),
     DesktopSetting("OPENROUTER_API_KEY", "OpenRouter API key", "Provider Keys", secret=True),
+    DesktopSetting("SAMBANOVA_API_KEY", "SambaNova API key", "Provider Keys", secret=True),
     DesktopSetting("DATABASE_PATH", "SQLite database path", "Storage", default="./data/gateway.sqlite3"),
     DesktopSetting("MODEL_CATALOG_PATH", "Model catalog path", "Storage", default="./data/model_catalog.json"),
     DesktopSetting("REQUEST_TIMEOUT_SECONDS", "Provider timeout seconds", "Request Limits", kind="float", default="90"),

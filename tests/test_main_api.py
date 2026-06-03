@@ -28,6 +28,7 @@ def _client(tmp_path, monkeypatch) -> TestClient:
         "GEMINI_API_KEY": "",
         "NVIDIA_API_KEY": "",
         "OPENROUTER_API_KEY": "",
+        "SAMBANOVA_API_KEY": "",
     }
     for key, value in settings.items():
         monkeypatch.setenv(key, value)
