@@ -307,6 +307,20 @@ button:hover {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.embed-panel {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.embed-panel.active {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .embed-frame {

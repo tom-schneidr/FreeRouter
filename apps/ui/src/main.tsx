@@ -297,9 +297,19 @@ function FreeRouterShell() {
               live={liveRows}
             />
           )}
-          {EMBED_SECTIONS[activeSection] && loadedEmbeds.has(activeSection) && (
-            <EmbedFrame title={activeSection} src={EMBED_SECTIONS[activeSection]} />
-          )}
+          {Array.from(loadedEmbeds).map((sectionId) => {
+            const src = EMBED_SECTIONS[sectionId];
+            if (!src) return null;
+            return (
+              <div
+                key={sectionId}
+                className={`embed-panel ${activeSection === sectionId ? "active" : ""}`}
+                aria-hidden={activeSection !== sectionId}
+              >
+                <EmbedFrame title={sectionId} src={src} />
+              </div>
+            );
+          })}
           {activeSection === "settings" && (
             <SettingsView desktopToken={desktopToken} desktopReady={desktopReady.data?.desktop ?? false} />
           )}
