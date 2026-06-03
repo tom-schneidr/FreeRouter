@@ -53,23 +53,23 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         padding: 0 12px;
         cursor: pointer;
       }
-      button:hover:not(:disabled) { border-color: #3a5578; background: #1a2c47; }
-      button.primary { border-color: #3971dd; background: #2563eb; color: #fff; }
+      button:hover:not(:disabled) { border-color: var(--button-hover-border); background: var(--button-hover-bg); }
+      button.primary { border-color: #3971dd; background: #2563eb; color: var(--on-accent); }
       button.primary:hover:not(:disabled) { background: #1d4ed8; }
-      button.danger { border-color: rgba(239,68,68,.55); color: #fecaca; background: rgba(239,68,68,.12); }
+      button.danger { border-color: var(--danger-border); color: var(--danger-text); background: var(--danger-bg); }
       button:disabled { cursor: not-allowed; opacity: .52; }
       input, textarea, select {
         width: 100%;
         border: 1px solid var(--line);
         border-radius: 7px;
-        background: #08111f;
+        background: var(--input-bg);
         color: var(--text);
         padding: 9px 10px;
         outline: none;
       }
       textarea { resize: vertical; min-height: 118px; line-height: 1.45; }
       input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,140,255,.16); }
-      a { color: #93c5fd; text-decoration: none; }
+      a { color: var(--link); text-decoration: none; }
       .app {
         display: grid;
         grid-template-columns: 248px minmax(0, 1fr);
@@ -83,7 +83,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         min-width: 0;
         min-height: 0;
         overflow: hidden;
-        background: #091321;
+        background: var(--sidebar-bg);
         border-right: 1px solid var(--line);
       }
       .brand {
@@ -106,7 +106,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         content: "";
         width: 17px;
         height: 14px;
-        border-left: 4px solid #93c5fd;
+        border-left: 4px solid var(--link);
         border-bottom: 4px solid #22c55e;
         transform: skewX(-12deg);
       }
@@ -134,7 +134,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         color: var(--muted);
       }
       .nav button:hover { color: var(--text); background: rgba(148,163,184,.08); }
-      .nav button.active { color: #fff; background: rgba(79,140,255,.16); border-color: rgba(79,140,255,.28); }
+      .nav button.active { color: var(--on-accent); background: rgba(79,140,255,.16); border-color: rgba(79,140,255,.28); }
       .nav-icon {
         width: 18px;
         height: 18px;
@@ -162,7 +162,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         background: var(--bg-soft);
       }
       .base-url label { color: var(--muted); font-size: 11px; text-transform: uppercase; }
-      .base-url code { color: #bfdbfe; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .base-url code { color: var(--link-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .main {
         min-width: 0;
         min-height: 0;
@@ -178,7 +178,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         gap: 12px;
         padding: 14px 18px;
         border-bottom: 1px solid var(--line);
-        background: rgba(7, 17, 31, .86);
+        background: var(--surface-alpha);
         backdrop-filter: blur(12px);
       }
       .status-dot {
@@ -224,7 +224,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       .panel {
         border: 1px solid var(--line);
         border-radius: var(--radius);
-        background: rgba(16, 27, 46, .9);
+        background: var(--surface-alpha);
         box-shadow: var(--shadow);
         min-width: 0;
       }
@@ -242,9 +242,9 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       .table-wrap { overflow: auto; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); }
       table { width: 100%; border-collapse: collapse; min-width: 760px; }
       th, td { padding: 10px 12px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: middle; }
-      th { position: sticky; top: 0; z-index: 1; color: var(--muted); background: #0d1728; font-size: 11px; text-transform: uppercase; }
-      td { color: #d9e4f2; }
-      tr:hover td { background: rgba(79,140,255,.06); }
+      th { position: sticky; top: 0; z-index: 1; color: var(--muted); background: var(--table-head-solid); font-size: 11px; text-transform: uppercase; }
+      td { color: var(--text); }
+      tr:hover td { background: var(--table-row-hover); }
       .cell-main { display: grid; gap: 3px; min-width: 0; }
       .cell-main strong, .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
       .cell-main small { color: var(--muted); overflow-wrap: anywhere; }
@@ -261,9 +261,9 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         font-size: 12px;
         white-space: nowrap;
       }
-      .pill.ok { color: #bbf7d0; border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.12); }
-      .pill.warn { color: #fde68a; border-color: rgba(245,158,11,.44); background: rgba(245,158,11,.12); }
-      .pill.error { color: #fecaca; border-color: rgba(239,68,68,.44); background: rgba(239,68,68,.12); }
+      .pill.ok { color: var(--success-text); border-color: var(--success-border); background: var(--success-bg); }
+      .pill.warn { color: var(--warning-text); border-color: var(--warning-border); background: var(--warning-bg); }
+      .pill.error { color: var(--danger-text); border-color: var(--danger-border); background: var(--danger-bg); }
       .muted { color: var(--muted); }
       .empty, .error-box, .disabled-box {
         display: grid;
@@ -274,9 +274,9 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         text-align: center;
         border: 1px dashed var(--line);
         border-radius: var(--radius);
-        background: rgba(8,17,31,.74);
+        background: var(--empty-bg);
       }
-      .error-box { color: #fecaca; border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.08); }
+      .error-box { color: var(--danger-text); border-color: var(--danger-border); background: var(--danger-bg); }
       .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
       .field { display: grid; gap: 6px; min-width: 0; }
       .field label { color: var(--muted); font-size: 12px; }
@@ -291,8 +291,8 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         font-size: 12px;
         line-height: 1.45;
         padding: 14px;
-        color: #c7d2fe;
-        background: #050b15;
+        color: var(--code-text);
+        background: var(--code-bg);
         border-radius: var(--radius);
         border: 1px solid var(--line);
       }
@@ -308,7 +308,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         width: 100%;
         min-height: 0;
         border: none;
-        background: #0a0e1a;
+        background: var(--bg-primary);
         display: block;
       }
       @media (max-width: 1180px) {
@@ -324,10 +324,10 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         html, body { overflow: hidden; }
         .app { display: grid; grid-template-columns: 74px minmax(0, 1fr); height: var(--app-height, 100%); min-height: 0; }
         .sidebar { position: relative; z-index: 4; min-height: 0; }
-        .brand { justify-content: flex-start; padding: 12px; }
-        .brand div:last-child { display: block; }
-        .nav { display: flex; overflow: auto; padding: 8px; }
-        .nav button { width: auto; min-width: 42px; }
+        .brand { justify-content: center; padding: 12px 0; }
+        .brand div:last-child { display: none; }
+        .nav { display: grid; gap: 4px; overflow-y: auto; overflow-x: hidden; padding: 8px; align-content: start; }
+        .nav button { width: 100%; min-width: 0; justify-content: center; padding: 0; }
         .main { display: grid; min-height: 0; overflow: hidden; }
         .topbar, .section-header { align-items: flex-start; flex-direction: column; }
         .content { overflow: hidden; padding: 0; min-height: 0; }
@@ -695,14 +695,16 @@ DESKTOP_APP_HTML = r"""<!doctype html>
 
       function renderDesktopOnlyPanels() {
         if (!appState.bridgeReady) {
-          $('settingsPanel').innerHTML = empty('Checking desktop capabilities...');
+          $('settingsPanel').innerHTML = renderAppearanceSettings() + empty('Checking desktop capabilities...');
+          syncAppearanceSettings();
           $('backupsPanel').innerHTML = empty('Checking desktop capabilities...');
           $('logsPanel').innerHTML = empty('Checking desktop capabilities...');
           return;
         }
         if (!appState.desktop) {
           const disabled = `<div class="disabled-box"><div><strong>Desktop app required</strong><br><span>Open FreeRouter from the desktop shortcut to use settings, backups, logs, restart, and tray controls. Normal gateway pages still work in a browser.</span></div></div>`;
-          $('settingsPanel').innerHTML = disabled;
+          $('settingsPanel').innerHTML = renderAppearanceSettings() + disabled;
+          syncAppearanceSettings();
           $('backupsPanel').innerHTML = disabled;
           $('logsPanel').innerHTML = disabled;
           return;
@@ -717,13 +719,51 @@ DESKTOP_APP_HTML = r"""<!doctype html>
           const payload = await bridgeCall('get_settings');
           appState.settings = payload;
           const groups = [...new Set(payload.fields.map((field) => field.group))];
-          $('settingsPanel').innerHTML = groups.map((group) => {
+          $('settingsPanel').innerHTML = renderAppearanceSettings() + groups.map((group) => {
             const fields = payload.fields.filter((field) => field.group === group);
             return `<div class="panel pad settings-group"><h3>${escapeHtml(group)}</h3><div class="form-grid">${fields.map(settingField).join('')}</div></div>`;
           }).join('') + `<div class="qa-note">Settings file: ${escapeHtml(payload.env_path)}</div>`;
+          syncAppearanceSettings();
         } catch (error) {
           $('settingsPanel').innerHTML = `<div class="error-box">${escapeHtml(error.message)}</div>`;
         }
+      }
+
+      function renderAppearanceSettings() {
+        return `
+          <div class="panel pad settings-group">
+            <div class="fr-theme-choice">
+              <div class="fr-theme-choice-head">
+                <div class="fr-theme-choice-title">
+                  <strong>Appearance</strong>
+                  <span>Use Windows theme automatically, or keep FreeRouter pinned to light or dark mode.</span>
+                </div>
+              </div>
+              <div class="fr-theme-segmented" role="group" aria-label="Theme preference">
+                <button class="fr-theme-option" type="button" data-fr-theme-option="system" aria-pressed="false">
+                  <span class="fr-theme-option-dot" aria-hidden="true"></span>
+                  System
+                </button>
+                <button class="fr-theme-option" type="button" data-fr-theme-option="light" aria-pressed="false">
+                  <span class="fr-theme-option-dot" aria-hidden="true"></span>
+                  Light
+                </button>
+                <button class="fr-theme-option" type="button" data-fr-theme-option="dark" aria-pressed="false">
+                  <span class="fr-theme-option-dot" aria-hidden="true"></span>
+                  Dark
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      function syncAppearanceSettings() {
+        if (!window.FreeRouterTheme) return;
+        window.FreeRouterTheme.setTheme(window.FreeRouterTheme.getPreference(), {
+          persist: false,
+          broadcast: true,
+        });
       }
 
       function settingField(field) {
@@ -795,6 +835,12 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       }
 
       document.addEventListener('click', async (event) => {
+        const themeOption = event.target.closest('[data-fr-theme-option]');
+        if (themeOption && window.FreeRouterTheme) {
+          window.FreeRouterTheme.setTheme(themeOption.dataset.frThemeOption);
+          return;
+        }
+
         const nav = event.target.closest('.nav button[data-section]');
         if (nav) selectSection(nav.dataset.section);
 

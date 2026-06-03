@@ -46,6 +46,12 @@ def test_desktop_app_page_is_served(tmp_path, monkeypatch):
         response = client.get("/app")
     assert response.status_code == 200
     assert "FreeRouter" in response.text
+    assert "fr-theme-styles" in response.text
+    assert "data-fr-theme-option" in response.text
+    assert "Appearance" in response.text
+    assert "freerouter.theme" in response.text
+    assert "data-theme-preference" in response.text
+    assert "System" in response.text
     assert "section-dashboard" in response.text
     assert "frame-chat" in response.text
     assert "frame-models" in response.text
@@ -55,6 +61,14 @@ def test_desktop_app_page_is_served(tmp_path, monkeypatch):
     assert "Desktop app required" in response.text
 
 
+def test_react_app_route_is_served(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.get("/app-next")
+    assert response.status_code == 200
+    assert "FreeRouter" in response.text
+    assert "root" in response.text
+
+
 def test_classic_pages_include_embed_support(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         for path in ("/chat", "/models", "/health", "/status", "/live"):
@@ -62,6 +76,19 @@ def test_classic_pages_include_embed_support(tmp_path, monkeypatch):
             assert response.status_code == 200
             assert "fr-embed-styles" in response.text
             assert "embed-mode" in response.text
+            assert "fr-theme-styles" in response.text
+            assert "data-fr-theme-toggle" in response.text
+            assert "data-theme-preference" in response.text
+
+
+def test_index_page_includes_theme_switch(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.get("/")
+    assert response.status_code == 200
+    assert "fr-theme-styles" in response.text
+    assert "data-fr-theme-toggle" in response.text
+    assert "data-theme-preference" in response.text
+    assert "#f6f8fb" in response.text
 
 
 def test_docs_page_uses_dark_theme(tmp_path, monkeypatch):
@@ -69,7 +96,12 @@ def test_docs_page_uses_dark_theme(tmp_path, monkeypatch):
         response = client.get("/docs")
     assert response.status_code == 200
     assert "fr-docs-theme" in response.text
+    assert "fr-theme-styles" in response.text
+    assert "fr-theme-floating" in response.text
+    assert "data-fr-theme-toggle" in response.text
+    assert "data-theme-preference" in response.text
     assert "#07111f" in response.text
+    assert "#f6f8fb" in response.text
     assert "swagger-ui" in response.text
 
 

@@ -43,7 +43,17 @@ htmlcov/
 Thumbs.db
 
 # Runtime data (user-specific, not source)
+data/*
+!data/.gitkeep
 data/*.sqlite3
 data/*.sqlite3-*
 data/model_catalog.json
 backups/
+
+# Frontend / desktop build outputs
+node_modules/
+apps/*/node_modules/
+apps/ui/dist/
+apps/ui/tsconfig.tsbuildinfo
+apps/desktop/src-tauri/target/
+dist-sidecar/

@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 
+from app.ui.theme import with_theme_support
+
 DOCS_THEME_STYLE = """
     <style id="fr-docs-theme">
       :root {
@@ -44,7 +46,7 @@ DOCS_THEME_STYLE = """
       .swagger-ui .btn {
         background: var(--fr-accent);
         border-color: var(--fr-accent);
-        color: #fff;
+        color: var(--on-accent);
         border-radius: 7px;
         box-shadow: none;
       }
@@ -69,14 +71,14 @@ DOCS_THEME_STYLE = """
       }
       .swagger-ui .info .title small {
         background: rgba(79, 140, 255, 0.16);
-        color: #bfdbfe;
+        color: var(--link-strong);
       }
       .swagger-ui .info .title small.version-stamp {
         background: rgba(34, 197, 94, 0.16);
-        color: #bbf7d0;
+        color: var(--success-text);
       }
       .swagger-ui .info a, .swagger-ui .info .link, .swagger-ui a {
-        color: #93c5fd;
+        color: var(--link);
       }
       .swagger-ui .info .description, .swagger-ui .markdown p,
       .swagger-ui .markdown li, .swagger-ui .renderedMarkdown p {
@@ -184,7 +186,7 @@ DOCS_THEME_STYLE = """
         background: var(--fr-bg-soft);
       }
       .swagger-ui .prop-row .prop-name, .swagger-ui .prop-row .prop-format {
-        color: #bfdbfe;
+        color: var(--link-strong);
       }
       .swagger-ui .response-control-media-type__accept-message {
         color: var(--fr-muted);
@@ -217,15 +219,15 @@ DOCS_THEME_STYLE = """
       }
       .swagger-ui .highlight-code > .microlight,
       .swagger-ui .microlight, .swagger-ui .highlight-code {
-        background: #050b15 !important;
-        color: #c7d2fe !important;
+        background: var(--code-bg) !important;
+        color: var(--code-text) !important;
         border-radius: 8px;
       }
       .swagger-ui .opblock-body pre.microlight,
       .swagger-ui .responses-inner pre.microlight,
       .swagger-ui .model-box pre {
-        background: #050b15 !important;
-        color: #c7d2fe !important;
+        background: var(--code-bg) !important;
+        color: var(--code-text) !important;
       }
       .swagger-ui svg.arrow {
         fill: var(--fr-muted);
@@ -246,4 +248,5 @@ def swagger_docs_html(*, openapi_url: str, title: str) -> HTMLResponse:
     html = response.body.decode("utf-8")
     if "fr-docs-theme" not in html:
         html = html.replace("</head>", f"{DOCS_THEME_STYLE}\n</head>", 1)
+    html = with_theme_support(html, nav=False, floating=True)
     return HTMLResponse(html)
