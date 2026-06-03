@@ -50,6 +50,8 @@ type ModelRoute = {
   tags?: string[];
   health?: {
     status?: string;
+    status_reason?: string | null;
+    consecutive_failures?: number;
   };
 };
 
@@ -86,6 +88,40 @@ type RouteEvent = {
   text?: string;
   content?: string;
   message?: string;
+};
+
+type EndpointSuggestion = {
+  suggestion_id: string;
+  action: string;
+  provider_name: string;
+  model_id: string;
+  route_id: string;
+  title: string;
+  details: string;
+};
+
+type ProviderDiagnosis = {
+  provider_name: string;
+  configured: boolean;
+  ok: boolean;
+  discovered_model_count: number;
+  new_route_suggestion_count: number;
+  stale_route_suggestion_count: number;
+  recovered_route_suggestion_count: number;
+  error?: string | null;
+};
+
+type DiagnosisReport = {
+  checked_at: number;
+  providers: ProviderDiagnosis[];
+  suggestions: EndpointSuggestion[];
+};
+
+type EndpointDiagnosisStatus = {
+  enabled: boolean;
+  auto_maintenance_enabled: boolean;
+  last_auto_applied: EndpointSuggestion[];
+  last_report: DiagnosisReport | null;
 };
 
 type DesktopField = {
@@ -147,6 +183,11 @@ function FreeRouterShell() {
     "provider-status",
     "/v1/providers/status",
     10000,
+  );
+  const diagnosis = useGatewayQuery<EndpointDiagnosisStatus>(
+    "endpoint-diagnosis",
+    "/v1/gateway/endpoint-diagnosis",
+    15000,
   );
   const live = useGatewayQuery<{ data: LiveEvent[] }>(
     "live-traffic",
@@ -219,7 +260,7 @@ function FreeRouterShell() {
               live={liveRows}
             />
           )}
-          {activeSection === "models" && <Models routes={routes} />}
+          {activeSection === "models" && <Models routes={routes} diagnosis={diagnosis.data ?? null} />}
           {activeSection === "providers" && <Providers providers={providerRows} />}
           {activeSection === "traffic" && <Traffic live={liveRows} />}
           {activeSection === "settings" && <SettingsPanel desktopToken={desktopToken} />}
@@ -294,9 +335,16 @@ function Dashboard(props: {
   );
 }
 
-function Models({ routes }: { routes: ModelRoute[] }) {
+function Models({
+  routes,
+  diagnosis,
+}: {
+  routes: ModelRoute[];
+  diagnosis: EndpointDiagnosisStatus | null;
+}) {
   const [message, setMessage] = React.useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   const refreshModels = () => queryClient.invalidateQueries({ queryKey: ["gateway-models"] });
+  const refreshDiagnosis = () => queryClient.invalidateQueries({ queryKey: ["endpoint-diagnosis"] });
   const toggleRoute = useMutation({
     mutationFn: async (route: ModelRoute) => {
       const action = route.enabled ? "disable" : "enable";
@@ -314,10 +362,46 @@ function Models({ routes }: { routes: ModelRoute[] }) {
     },
     onError: (error) => setMessage({ tone: "bad", text: error.message }),
   });
+  const resetHealth = useMutation({
+    mutationFn: (route: ModelRoute) =>
+      fetchJson<{ data: ModelRoute }>(
+        `/v1/gateway/models/${encodeURIComponent(route.route_id)}/health/reset`,
+        { method: "POST" },
+      ),
+    onSuccess: (_, route) => {
+      setMessage({ tone: "ok", text: `${route.display_name} health reset.` });
+      refreshModels();
+    },
+    onError: (error) => setMessage({ tone: "bad", text: error.message }),
+  });
   const autoRank = useMutation({
     mutationFn: () => fetchJson<{ data: ModelRoute[] }>("/v1/gateway/models/auto-rank", { method: "POST" }),
     onSuccess: () => {
       setMessage({ tone: "ok", text: "Model routes auto-ranked." });
+      refreshModels();
+    },
+    onError: (error) => setMessage({ tone: "bad", text: error.message }),
+  });
+  const runDiagnosis = useMutation({
+    mutationFn: () => fetchJson<{ data: DiagnosisReport }>("/v1/gateway/endpoint-diagnosis/refresh", { method: "POST" }),
+    onSuccess: (payload) => {
+      const count = payload.data.suggestions.length;
+      setMessage({ tone: "ok", text: `Endpoint diagnosis finished with ${count} suggestion${count === 1 ? "" : "s"}.` });
+      refreshDiagnosis();
+      refreshModels();
+    },
+    onError: (error) => setMessage({ tone: "bad", text: error.message }),
+  });
+  const applySuggestions = useMutation({
+    mutationFn: (suggestions: EndpointSuggestion[]) =>
+      fetchJson<{ data: EndpointSuggestion[] }>("/v1/gateway/endpoint-diagnosis/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ suggestion_ids: suggestions.map((item) => item.suggestion_id) }),
+      }),
+    onSuccess: (payload) => {
+      setMessage({ tone: "ok", text: `Applied ${payload.data.length} endpoint suggestion${payload.data.length === 1 ? "" : "s"}.` });
+      refreshDiagnosis();
       refreshModels();
     },
     onError: (error) => setMessage({ tone: "bad", text: error.message }),
@@ -364,9 +448,17 @@ function Models({ routes }: { routes: ModelRoute[] }) {
               <div className="route-meta">
                 <span>#{route.rank}</span>
                 <span>{route.provider_name}</span>
-                <StatusPill tone={route.enabled ? "ok" : "muted"}>
-                  {route.enabled ? "Enabled" : "Disabled"}
-                </StatusPill>
+                <StatusPill tone={healthTone(route.health?.status)}>{route.health?.status ?? "active"}</StatusPill>
+                <StatusPill tone={route.enabled ? "ok" : "muted"}>{route.enabled ? "Enabled" : "Disabled"}</StatusPill>
+                {route.health?.status && route.health.status !== "active" && (
+                  <button
+                    type="button"
+                    disabled={resetHealth.isPending}
+                    onClick={() => resetHealth.mutate(route)}
+                  >
+                    Reset health
+                  </button>
+                )}
                 <button
                   className={route.enabled ? "small-danger" : "small-success"}
                   type="button"
@@ -380,6 +472,13 @@ function Models({ routes }: { routes: ModelRoute[] }) {
           ))}
         </div>
       </Panel>
+      <EndpointDiagnosisPanel
+        diagnosis={diagnosis}
+        onRefresh={() => runDiagnosis.mutate()}
+        onApply={(suggestions) => applySuggestions.mutate(suggestions)}
+        refreshing={runDiagnosis.isPending}
+        applying={applySuggestions.isPending}
+      />
     </div>
   );
 }
@@ -388,6 +487,112 @@ function Providers({ providers }: { providers: ProviderStatus[] }) {
   return (
     <Panel title="Providers" icon={Database}>
       <ProviderTable providers={providers} />
+    </Panel>
+  );
+}
+
+function EndpointDiagnosisPanel({
+  diagnosis,
+  onRefresh,
+  onApply,
+  refreshing,
+  applying,
+}: {
+  diagnosis: EndpointDiagnosisStatus | null;
+  onRefresh: () => void;
+  onApply: (suggestions: EndpointSuggestion[]) => void;
+  refreshing: boolean;
+  applying: boolean;
+}) {
+  const report = diagnosis?.last_report;
+  const suggestions = report?.suggestions ?? [];
+  return (
+    <Panel title="Endpoint Diagnosis" icon={ShieldCheck}>
+      <div className="panel-actions">
+        <div>
+          <p className="panel-copy">
+            {diagnosis?.enabled
+              ? `Automatic diagnosis is enabled${diagnosis.auto_maintenance_enabled ? " with safe maintenance" : ""}.`
+              : "Automatic diagnosis is disabled."}
+          </p>
+          {report && (
+            <p className="path-note">
+              Last checked {new Date(report.checked_at * 1000).toLocaleString()} across {report.providers.length} providers.
+            </p>
+          )}
+        </div>
+        <div className="toolbar-actions">
+          <button type="button" disabled={refreshing} onClick={onRefresh}>
+            <RefreshCw size={16} />
+            {refreshing ? "Running" : "Run diagnosis"}
+          </button>
+          <button
+            className="primary-action"
+            type="button"
+            disabled={!suggestions.length || applying}
+            onClick={() => onApply(suggestions)}
+          >
+            {applying ? "Applying" : "Apply suggestions"}
+          </button>
+        </div>
+      </div>
+
+      {!report ? (
+        <EmptyState message="No diagnosis report yet." />
+      ) : (
+        <div className="diagnosis-grid">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th>Status</th>
+                  <th>Discovered</th>
+                  <th>Suggestions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.providers.map((provider) => (
+                  <tr key={provider.provider_name}>
+                    <td>
+                      {provider.provider_name}
+                      {provider.error && <span>{provider.error}</span>}
+                    </td>
+                    <td>
+                      <StatusPill tone={provider.ok ? "ok" : provider.configured ? "warn" : "bad"}>
+                        {provider.ok ? "ok" : provider.configured ? "attention" : "not configured"}
+                      </StatusPill>
+                    </td>
+                    <td>{provider.discovered_model_count}</td>
+                    <td>
+                      {provider.new_route_suggestion_count +
+                        provider.stale_route_suggestion_count +
+                        provider.recovered_route_suggestion_count}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="suggestion-list">
+            {suggestions.length ? (
+              suggestions.slice(0, 8).map((suggestion) => (
+                <article className="event-row" key={suggestion.suggestion_id}>
+                  <div>
+                    <strong>{suggestion.title}</strong>
+                    <span>{suggestion.details}</span>
+                  </div>
+                  <StatusPill tone={suggestion.action === "add_route" ? "ok" : "warn"}>
+                    {suggestion.action.replace(/_/g, " ")}
+                  </StatusPill>
+                </article>
+              ))
+            ) : (
+              <EmptyState message="No endpoint changes suggested." />
+            )}
+          </div>
+        </div>
+      )}
     </Panel>
   );
 }
@@ -824,6 +1029,12 @@ function routeEventTone(type: string): "ok" | "warn" | "bad" | "muted" {
   if (type === "route_fail") return "bad";
   if (type === "route_skip" || type === "route_flagged") return "warn";
   return "muted";
+}
+
+function healthTone(status?: string | null): "ok" | "warn" | "bad" | "muted" {
+  if (!status || status === "active") return "ok";
+  if (status.includes("disabled") || status.includes("exhausted")) return "bad";
+  return "warn";
 }
 
 function desktopHeaders(token: string) {
