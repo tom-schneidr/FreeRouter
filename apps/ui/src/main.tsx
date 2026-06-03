@@ -72,6 +72,22 @@ type LiveEvent = {
   route_id?: string;
 };
 
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type RouteEvent = {
+  type: string;
+  provider?: string;
+  model_id?: string;
+  route_id?: string;
+  reason?: string;
+  text?: string;
+  content?: string;
+  message?: string;
+};
+
 type DesktopField = {
   key: string;
   label: string;
@@ -208,7 +224,7 @@ function FreeRouterShell() {
           {activeSection === "traffic" && <Traffic live={liveRows} />}
           {activeSection === "settings" && <SettingsPanel desktopToken={desktopToken} />}
           {activeSection === "backups" && <BackupsPanel desktopToken={desktopToken} />}
-          {activeSection === "chat" && <Placeholder title="Chat" />}
+          {activeSection === "chat" && <ChatPanel />}
           {activeSection === "logs" && <LogsPanel desktopToken={desktopToken} />}
         </section>
       </main>
@@ -606,6 +622,127 @@ function BackupsPanel({ desktopToken }: { desktopToken: string }) {
   );
 }
 
+function ChatPanel() {
+  const [input, setInput] = React.useState("");
+  const [messages, setMessages] = React.useState<ChatMessage[]>([]);
+  const [events, setEvents] = React.useState<RouteEvent[]>([]);
+  const [isSending, setIsSending] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function sendMessage() {
+    const text = input.trim();
+    if (!text || isSending) return;
+    setInput("");
+    setError(null);
+    setIsSending(true);
+    const nextMessages: ChatMessage[] = [...messages, { role: "user", content: text }];
+    setMessages(nextMessages);
+    setEvents([]);
+
+    try {
+      const response = await fetch("/v1/chat/completions/stream-route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: nextMessages, max_tokens: 4096 }),
+      });
+      if (!response.body) throw new Error("The gateway did not return a stream.");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let assistantText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+
+        for (const block of blocks) {
+          const raw = block
+            .split("\n")
+            .find((line) => line.startsWith("data: "))
+            ?.slice(6)
+            .trim();
+          if (!raw || raw === "[DONE]") continue;
+          const event = JSON.parse(raw) as RouteEvent;
+          if (event.type === "content" && event.text) {
+            assistantText += event.text;
+            setMessages([...nextMessages, { role: "assistant", content: assistantText }]);
+          } else if (event.type === "done") {
+            if (event.content) assistantText = event.content;
+            setMessages([...nextMessages, { role: "assistant", content: assistantText }]);
+          } else if (event.type === "error") {
+            throw new Error(event.message || "All providers exhausted.");
+          } else {
+            setEvents((current) => [event, ...current].slice(0, 80));
+          }
+        }
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  return (
+    <div className="chat-layout">
+      <section className="chat-main panel">
+        <header>
+          <MessageSquareText size={18} />
+          <h2>Chat</h2>
+        </header>
+        <div className="messages">
+          {!messages.length && <EmptyState message="Send a message to route through the local gateway." />}
+          {messages.map((message, index) => (
+            <article className={`message ${message.role}`} key={`${message.role}-${index}`}>
+              <span>{message.role}</span>
+              <p>{message.content}</p>
+            </article>
+          ))}
+          {isSending && <div className="typing">Routing request...</div>}
+          {error && <Notice tone="bad">{error}</Notice>}
+        </div>
+        <div className="composer">
+          <textarea
+            rows={3}
+            value={input}
+            placeholder="Type a message..."
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+              }
+            }}
+          />
+          <button className="primary-action" type="button" disabled={isSending} onClick={sendMessage}>
+            {isSending ? "Sending" : "Send"}
+          </button>
+        </div>
+      </section>
+      <Panel title="Route Activity" icon={Route}>
+        <div className="event-list">
+          {!events.length && <EmptyState message="Route attempts will appear here for the current message." />}
+          {events.map((event, index) => (
+            <div className="event-row" key={`${event.type}-${index}`}>
+              <div>
+                <strong>{event.type.replace(/_/g, " ")}</strong>
+                <span>
+                  {[event.provider, event.model_id, event.reason].filter(Boolean).join(" / ")}
+                </span>
+              </div>
+              <StatusPill tone={routeEventTone(event.type)}>{event.route_id || event.provider || "route"}</StatusPill>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 function ProviderTable({ providers }: { providers: ProviderStatus[] }) {
   if (!providers.length) return <EmptyState message="No provider state loaded yet." />;
   return (
@@ -680,6 +817,13 @@ function Notice({ tone, children }: { tone: "ok" | "bad"; children: React.ReactN
 
 function numericFieldKind(kind: string) {
   return kind === "int" || kind === "optional_int" || kind === "float";
+}
+
+function routeEventTone(type: string): "ok" | "warn" | "bad" | "muted" {
+  if (type === "route_selected") return "ok";
+  if (type === "route_fail") return "bad";
+  if (type === "route_skip" || type === "route_flagged") return "warn";
+  return "muted";
 }
 
 function desktopHeaders(token: string) {
