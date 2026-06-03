@@ -7,6 +7,7 @@
     "apps/desktop"
   ],
   "scripts": {
+    "dev": "powershell -ExecutionPolicy Bypass -File scripts/dev.ps1",
     "dev:web": "npm --workspace @freerouter/ui run dev",
     "dev:desktop": "npm --workspace @freerouter/desktop run dev",
     "build:web": "npm --workspace @freerouter/ui run build",

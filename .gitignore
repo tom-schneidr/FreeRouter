@@ -49,6 +49,7 @@ data/*.sqlite3
 data/*.sqlite3-*
 data/model_catalog.json
 backups/
+.dev-logs/
 
 # Frontend / desktop build outputs
 node_modules/
