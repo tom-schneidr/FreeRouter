@@ -331,7 +331,7 @@ fn force_kill_process_tree(pid: u32) {
 fn force_kill_process_tree(_pid: u32) {}
 
 fn select_gateway_port(host: &str) -> u16 {
-    if cfg!(debug_assertions) {
+    if TcpListener::bind((host, DEFAULT_GATEWAY_PORT)).is_ok() {
         return DEFAULT_GATEWAY_PORT;
     }
 

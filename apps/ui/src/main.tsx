@@ -86,7 +86,7 @@ const EMBED_SECTIONS: Record<string, string> = {
   usage: "/status?embed=1",
   health: "/health?embed=1",
   live: "/live?embed=1",
-  docs: "/docs",
+  docs: "/docs?embed=1&v=2",
 };
 
 const NAV_ITEMS = [

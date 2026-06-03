@@ -496,7 +496,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         usage: '/status?embed=1',
         health: '/health?embed=1',
         live: '/live?embed=1',
-        docs: '/docs',
+        docs: '/docs?embed=1&v=2',
       };
       const loadedEmbeds = new Set();
 

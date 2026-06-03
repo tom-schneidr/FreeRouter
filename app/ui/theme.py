@@ -491,13 +491,97 @@ THEME_HEAD_FRAGMENT = f"""
     </script>
 """
 
+_THEME_CONTROL_STYLE_MARKER = "      .fr-theme-toggle {"
+_THEME_SYNC_SCRIPT = f"""
+    <script id="fr-theme-script">
+      (function () {{
+        var key = "{THEME_STORAGE_KEY}";
+        var media = null;
+        try {{
+          media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
+        }} catch (_) {{}}
+        function normalizePreference(preference) {{
+          return preference === "light" || preference === "dark" ? preference : "system";
+        }}
+        function resolveTheme(preference) {{
+          preference = normalizePreference(preference);
+          if (preference === "light" || preference === "dark") return preference;
+          return media && media.matches ? "light" : "dark";
+        }}
+        function storedPreference() {{
+          try {{ return localStorage.getItem(key); }} catch (_) {{ return null; }}
+        }}
+        function currentPreference() {{
+          return normalizePreference(document.documentElement.dataset.themePreference || storedPreference() || "system");
+        }}
+        function persist(preference) {{
+          try {{ localStorage.setItem(key, preference); }} catch (_) {{}}
+        }}
+        function apply(preference, options) {{
+          options = options || {{}};
+          preference = normalizePreference(preference);
+          var theme = resolveTheme(preference);
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.dataset.themePreference = preference;
+          document.documentElement.style.colorScheme = theme;
+          if (options.persist !== false) persist(preference);
+        }}
+        window.FreeRouterTheme = {{
+          getTheme: function () {{ return resolveTheme(currentPreference()); }},
+          getPreference: currentPreference,
+          setTheme: function (preference, options) {{ apply(preference, options || {{ persist: true, broadcast: false }}); }}
+        }};
+        window.addEventListener("message", function (event) {{
+          var data = event.data || {{}};
+          if (data.source === "freerouter" && data.type === "theme") {{
+            apply(data.preference || data.theme, {{ persist: true, broadcast: false }});
+          }}
+        }});
+        window.addEventListener("storage", function (event) {{
+          if (event.key === key && event.newValue) {{
+            apply(event.newValue, {{ persist: false, broadcast: false }});
+          }}
+        }});
+        if (media) {{
+          var onSystemThemeChange = function () {{
+            if (currentPreference() === "system") {{
+              apply("system", {{ persist: false, broadcast: false }});
+            }}
+          }};
+          if (media.addEventListener) media.addEventListener("change", onSystemThemeChange);
+          else if (media.addListener) media.addListener(onSystemThemeChange);
+        }}
+        document.addEventListener("DOMContentLoaded", function () {{
+          apply(currentPreference(), {{ persist: false, broadcast: false }});
+        }});
+      }})();
+    </script>
+"""
 
-def with_theme_support(html: str, *, nav: bool = True, floating: bool = False) -> str:
+THEME_SYNC_HEAD_FRAGMENT = (
+    THEME_HEAD_FRAGMENT[: THEME_HEAD_FRAGMENT.index(_THEME_CONTROL_STYLE_MARKER)]
+    + "    </style>\n"
+    + _THEME_SYNC_SCRIPT
+)
+
+
+def with_theme_sync(html: str) -> str:
+    """Inject shared theme preference sync without any in-page theme controls."""
+
+    if "fr-theme-styles" not in html and "</head>" in html:
+        html = html.replace("</head>", f"{THEME_SYNC_HEAD_FRAGMENT}\n  </head>", 1)
+    return html
+
+
+def with_theme_support(html: str, *, nav: bool = True, floating: bool = False, controls: bool = True) -> str:
     """Inject shared FreeRouter theme support into an HTML document."""
 
     has_toggle = '<button class="fr-theme-toggle"' in html
     if "fr-theme-styles" not in html and "</head>" in html:
-        html = html.replace("</head>", f"{THEME_HEAD_FRAGMENT}\n  </head>", 1)
+        fragment = THEME_HEAD_FRAGMENT if controls else THEME_SYNC_HEAD_FRAGMENT
+        html = html.replace("</head>", f"{fragment}\n  </head>", 1)
+    if not controls:
+        return html
     if nav and not has_toggle and "</nav>" in html:
         html = html.replace("</nav>", f"{THEME_TOGGLE_BUTTON.rstrip()}\n        </nav>", 1)
         has_toggle = True

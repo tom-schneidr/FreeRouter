@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 
-from app.ui.theme import with_theme_support
+from app.ui.theme import with_theme_sync
 
 DOCS_THEME_STYLE = """
     <style id="fr-docs-theme">
@@ -235,7 +235,27 @@ DOCS_THEME_STYLE = """
       .swagger-ui .wrapper {
         padding: 0 16px 24px;
       }
+      .fr-theme-floating,
+      .fr-theme-toggle {
+        display: none !important;
+      }
+      html.embed-mode,
+      html.embed-mode body {
+        height: 100%;
+        margin: 0;
+      }
     </style>
+    <script id="fr-docs-embed">
+      (function () {
+        if (new URLSearchParams(location.search).get("embed") !== "1") return;
+        document.documentElement.classList.add("embed-mode");
+        function syncEmbedHeight() {
+          document.documentElement.style.setProperty("--embed-height", window.innerHeight + "px");
+        }
+        syncEmbedHeight();
+        window.addEventListener("resize", syncEmbedHeight);
+      })();
+    </script>
 """
 
 
@@ -248,5 +268,5 @@ def swagger_docs_html(*, openapi_url: str, title: str) -> HTMLResponse:
     html = response.body.decode("utf-8")
     if "fr-docs-theme" not in html:
         html = html.replace("</head>", f"{DOCS_THEME_STYLE}\n</head>", 1)
-    html = with_theme_support(html, nav=False, floating=True)
+    html = with_theme_sync(html)
     return HTMLResponse(html)

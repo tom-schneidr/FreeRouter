@@ -135,9 +135,13 @@ def test_docs_page_uses_dark_theme(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "fr-docs-theme" in response.text
     assert "fr-theme-styles" in response.text
-    assert "fr-theme-floating" in response.text
-    assert "data-fr-theme-toggle" in response.text
-    assert "data-theme-preference" in response.text
+    assert "fr-theme-boot" in response.text
+    assert "dataset.themePreference" in response.text
+    assert '<button class="fr-theme-toggle"' not in response.text
+    assert '<div class="fr-theme-floating"' not in response.text
+    assert ".fr-theme-floating," in response.text
+    assert "display: none !important" in response.text
+    assert "fr-theme-segmented" not in response.text
     assert "#07111f" in response.text
     assert "#f6f8fb" in response.text
     assert "swagger-ui" in response.text
