@@ -1,5 +1,5 @@
 use std::{
-    net::{TcpStream, ToSocketAddrs},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 const SIDECAR_NAME: &str = "freerouterd";
 const GATEWAY_HOST: &str = "127.0.0.1";
-const GATEWAY_PORT: u16 = 8000;
+const DEFAULT_GATEWAY_PORT: u16 = 8000;
 
 #[derive(Default)]
 struct SidecarState {
@@ -29,6 +29,8 @@ pub fn run() {
         .manage(SidecarState::default())
         .setup(|app| {
             let token = Uuid::new_v4().to_string();
+            let gateway_port = select_gateway_port(GATEWAY_HOST);
+            let gateway_port_arg = gateway_port.to_string();
             let project_root = app
                 .path()
                 .app_data_dir()
@@ -37,7 +39,7 @@ pub fn run() {
             let (_rx, child) = app
                 .shell()
                 .sidecar(SIDECAR_NAME)?
-                .args(["--host", GATEWAY_HOST, "--port", &GATEWAY_PORT.to_string()])
+                .args(["--host", GATEWAY_HOST, "--port", gateway_port_arg.as_str()])
                 .env("FREEROUTER_DESKTOP_TOKEN", &token)
                 .env("FREEROUTER_APP_DATA_DIR", &project_root)
                 .env("FREEROUTER_DESKTOP_PROJECT_ROOT", &project_root)
@@ -78,10 +80,10 @@ pub fn run() {
 
             let handle = app.handle().clone();
             thread::spawn(move || {
-                if wait_for_port(GATEWAY_HOST, GATEWAY_PORT, Duration::from_secs(20)) {
+                if wait_for_port(GATEWAY_HOST, gateway_port, Duration::from_secs(20)) {
                     let url = format!(
                         "http://{}:{}/app-next?desktop_token={}",
-                        GATEWAY_HOST, GATEWAY_PORT, token
+                        GATEWAY_HOST, gateway_port, token
                     );
                     let window_handle = handle.clone();
                     let _ = handle.run_on_main_thread(move || {
@@ -105,6 +107,13 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running FreeRouter desktop shell");
+}
+
+fn select_gateway_port(host: &str) -> u16 {
+    TcpListener::bind((host, 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|address| address.port())
+        .unwrap_or(DEFAULT_GATEWAY_PORT)
 }
 
 fn wait_for_port(host: &str, port: u16, timeout: Duration) -> bool {
