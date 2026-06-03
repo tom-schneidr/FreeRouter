@@ -60,6 +60,26 @@ button:hover {
   opacity: 0.55;
 }
 
+.danger-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+  font-weight: 650;
+}
+
+.danger-action:hover {
+  background: rgba(239, 68, 68, 0.18);
+}
+
+.danger-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -294,6 +314,11 @@ h1 {
   gap: 12px;
 }
 
+.form-grid.single {
+  grid-template-columns: 1fr;
+  margin-bottom: 12px;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -323,7 +348,27 @@ h1 {
   box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.16);
 }
 
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #91a4bd;
+  font-size: 13px;
+}
+
+.check-field input {
+  width: auto;
+  accent-color: #4f8cff;
+}
+
+.panel-copy {
+  margin-bottom: 14px;
+  color: #91a4bd;
+  line-height: 1.55;
+}
+
 .notice {
+  margin-top: 12px;
   border: 1px solid #24354d;
   border-radius: 8px;
   padding: 10px 12px;
