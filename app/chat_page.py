@@ -1,8 +1,8 @@
 """Chat page HTML served at /chat."""
 
-from app.ui.theme import with_web_page
+from app.ui.embed import with_embed_support
 
-CHAT_HTML = with_web_page(r"""<!doctype html>
+CHAT_HTML = with_embed_support(r"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -659,4 +659,4 @@ inputEl.addEventListener('keydown', (e) => {
 </script>
 </body>
 </html>
-""", embed=True)
+""")
