@@ -80,6 +80,26 @@ button:hover {
   opacity: 0.55;
 }
 
+.small-danger,
+.small-success {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.small-danger {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+}
+
+.small-success {
+  border-color: rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.12);
+  color: #bbf7d0;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -224,6 +244,20 @@ button:hover {
   align-items: flex-end;
   justify-content: space-between;
   gap: 18px;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.toolbar-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
 
 h1,
@@ -514,6 +548,8 @@ td span {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .route-meta span {

@@ -279,26 +279,92 @@ function Dashboard(props: {
 }
 
 function Models({ routes }: { routes: ModelRoute[] }) {
+  const [message, setMessage] = React.useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+  const refreshModels = () => queryClient.invalidateQueries({ queryKey: ["gateway-models"] });
+  const toggleRoute = useMutation({
+    mutationFn: async (route: ModelRoute) => {
+      const action = route.enabled ? "disable" : "enable";
+      return fetchJson<{ data: ModelRoute }>(
+        `/v1/gateway/models/${encodeURIComponent(route.route_id)}/${action}`,
+        { method: "POST" },
+      );
+    },
+    onSuccess: (_, route) => {
+      setMessage({
+        tone: "ok",
+        text: `${route.display_name} ${route.enabled ? "disabled" : "enabled"}.`,
+      });
+      refreshModels();
+    },
+    onError: (error) => setMessage({ tone: "bad", text: error.message }),
+  });
+  const autoRank = useMutation({
+    mutationFn: () => fetchJson<{ data: ModelRoute[] }>("/v1/gateway/models/auto-rank", { method: "POST" }),
+    onSuccess: () => {
+      setMessage({ tone: "ok", text: "Model routes auto-ranked." });
+      refreshModels();
+    },
+    onError: (error) => setMessage({ tone: "bad", text: error.message }),
+  });
+  const resetCatalog = useMutation({
+    mutationFn: () => fetchJson<{ data: ModelRoute[] }>("/v1/gateway/models/reset", { method: "POST" }),
+    onSuccess: () => {
+      setMessage({ tone: "ok", text: "Model catalog reset to defaults." });
+      refreshModels();
+    },
+    onError: (error) => setMessage({ tone: "bad", text: error.message }),
+  });
+
   return (
-    <Panel title="Model Routes" icon={Bot}>
-      <div className="route-grid">
-        {routes.slice(0, 30).map((route) => (
-          <article className="route-card" key={route.route_id}>
-            <div>
-              <strong>{route.display_name}</strong>
-              <span>{route.model_id}</span>
-            </div>
-            <div className="route-meta">
-              <span>#{route.rank}</span>
-              <span>{route.provider_name}</span>
-              <StatusPill tone={route.enabled ? "ok" : "muted"}>
-                {route.enabled ? "Enabled" : "Disabled"}
-              </StatusPill>
-            </div>
-          </article>
-        ))}
+    <div className="section-stack">
+      <div className="section-heading">
+        <div>
+          <h1>Model Routes</h1>
+          <p>Control the ranked waterfall catalog used by new gateway requests.</p>
+        </div>
+        <div className="toolbar-actions">
+          <button type="button" onClick={refreshModels}>
+            <RefreshCw size={16} />
+            Refresh
+          </button>
+          <button type="button" disabled={autoRank.isPending} onClick={() => autoRank.mutate()}>
+            <Gauge size={16} />
+            Auto-rank
+          </button>
+          <button className="danger-action" type="button" disabled={resetCatalog.isPending} onClick={() => resetCatalog.mutate()}>
+            Reset
+          </button>
+        </div>
       </div>
-    </Panel>
+      {message && <Notice tone={message.tone}>{message.text}</Notice>}
+      <Panel title="Catalog" icon={Bot}>
+        <div className="route-grid">
+          {routes.slice(0, 60).map((route) => (
+            <article className="route-card" key={route.route_id}>
+              <div>
+                <strong>{route.display_name}</strong>
+                <span>{route.model_id}</span>
+              </div>
+              <div className="route-meta">
+                <span>#{route.rank}</span>
+                <span>{route.provider_name}</span>
+                <StatusPill tone={route.enabled ? "ok" : "muted"}>
+                  {route.enabled ? "Enabled" : "Disabled"}
+                </StatusPill>
+                <button
+                  className={route.enabled ? "small-danger" : "small-success"}
+                  type="button"
+                  disabled={toggleRoute.isPending}
+                  onClick={() => toggleRoute.mutate(route)}
+                >
+                  {route.enabled ? "Disable" : "Enable"}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </Panel>
+    </div>
   );
 }
 
