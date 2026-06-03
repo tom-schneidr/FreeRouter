@@ -65,7 +65,7 @@
         architecture: FastAPI for the gateway core, React and TypeScript for the control plane, and
         Tauri for a packaged desktop shell.
       </p>
-      <div class="status">Migration started on the React/Tauri foundation branch.</div>
+      <div class="status">React, Tauri, sidecar packaging, and app-data runtime paths are now in place.</div>
 
       <section class="grid" aria-label="Target architecture layers">
         <div class="panel">
@@ -78,16 +78,31 @@
         </div>
         <div class="panel">
           <strong>Desktop Shell</strong>
-          <span>Tauri owns windows, tray actions, app data paths, native dialogs, and the bundled backend sidecar.</span>
+          <span>Tauri owns windows, tray actions, dynamic localhost port selection, app data paths, and the bundled backend sidecar.</span>
         </div>
       </section>
 
       <h2>Workspace Shape</h2>
       <pre><code>apps/ui/          React + TypeScript + Vite frontend
 apps/desktop/     Tauri desktop shell
-app/               Current FastAPI backend, to be migrated into src/freerouter/
+app/               FastAPI backend, sidecar entrypoint, runtime path helpers
 docs/              User-facing HTML documentation
 scripts/           Development and packaging helpers</code></pre>
+
+      <h2>Build And Run</h2>
+      <pre><code>npm run dev:web        Start the React control plane during UI development
+npm run build:web      Compile the React control plane into apps/ui/dist
+npm run check:desktop  Compile-check the Tauri shell
+npm run build:sidecar  Build dist-sidecar/freerouterd-*.exe with PyInstaller
+npm run build:desktop  Build the sidecar, React UI, and Tauri desktop bundle</code></pre>
+
+      <h2>Packaged Desktop Runtime</h2>
+      <p>
+        The installed desktop executable is more than a shortcut. It starts a bundled Python backend
+        sidecar, generates a desktop-only token, chooses an available localhost port, and opens the
+        React app served by that sidecar. Runtime files live under the platform app-data directory,
+        not inside the repository checkout.
+      </p>
 
       <h2>Migration Sequence</h2>
       <ol>
@@ -100,9 +115,10 @@ scripts/           Development and packaging helpers</code></pre>
 
       <h2>Current Milestone</h2>
       <p>
-        The first migration slice adds the npm workspace, React/Vite shell, Tauri scaffold, FastAPI
-        static mount, and source-tree hygiene. It deliberately preserves the existing desktop app
-        while the new shell is built to parity.
+        The current branch has a React/Vite control plane, a Tauri desktop shell, a PyInstaller
+        backend sidecar, explicit app-data runtime paths, desktop settings, backups, model controls,
+        logs, and streaming chat in the React surface. The legacy Python HTML pages are still present
+        until the React app reaches full operational parity.
       </p>
     </main>
   </body>
