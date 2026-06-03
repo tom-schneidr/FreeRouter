@@ -122,10 +122,10 @@ npm run build:desktop  Build the sidecar, React UI, and Tauri desktop bundle</co
 
       <h2>Current Milestone</h2>
       <p>
-        The current branch has a React/Vite control plane, a Tauri desktop shell, a PyInstaller
-        backend sidecar, explicit app-data runtime paths, desktop settings, backups, model controls,
-        logs, and streaming chat in the React surface. The legacy Python HTML pages are still present
-        and remain the default desktop surface until the React app reaches full operational parity.
+        The desktop shell now uses Tauri with a bundled Python sidecar and serves the same
+        proven desktop control plane at <code>/app-next</code> that the legacy pywebview app used
+        at <code>/app</code>. The React workspace remains available for future UI work, but the
+        packaged desktop experience intentionally keeps feature parity with the original app.
       </p>
     </main>
   </body>

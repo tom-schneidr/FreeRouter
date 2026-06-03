@@ -3,56 +3,35 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Activity,
+  BarChart3,
   Bot,
   Database,
   Download,
   Gauge,
-  type LucideIcon,
+  HeartPulse,
   MessageSquareText,
   RefreshCw,
   Route,
-  Save,
+  ScrollText,
   Settings,
-  ShieldCheck,
   Upload,
 } from "lucide-react";
 import "./styles.css";
+import "./theme.css";
+import { applyTheme, getThemePreference, initTheme, type ThemePreference } from "./theme";
 
 type GatewayHealth = {
   status: string;
-  service: string;
   version: string;
   database_path: string;
-  model_catalog_path: string;
-  providers: {
-    total: number;
-    configured: number;
-    available: number;
-  };
-  routes: {
-    total: number;
-    enabled: number;
-  };
-  request_limits: {
-    max_concurrent_requests: number;
-    queue_timeout_seconds: number;
-    max_waiting_requests: number | null;
-  };
+  providers: { configured: number; total: number };
+  routes: { enabled: number; total: number };
 };
 
 type ModelRoute = {
   route_id: string;
-  display_name: string;
-  provider_name: string;
-  model_id: string;
   enabled: boolean;
-  rank: number;
-  tags?: string[];
-  health?: {
-    status?: string;
-    status_reason?: string | null;
-    consecutive_failures?: number;
-  };
+  health?: { status?: string };
 };
 
 type ProviderStatus = {
@@ -74,56 +53,6 @@ type LiveEvent = {
   route_id?: string;
 };
 
-type ChatMessage = {
-  role: "user" | "assistant";
-  content: string;
-};
-
-type RouteEvent = {
-  type: string;
-  provider?: string;
-  model_id?: string;
-  route_id?: string;
-  reason?: string;
-  text?: string;
-  content?: string;
-  message?: string;
-};
-
-type EndpointSuggestion = {
-  suggestion_id: string;
-  action: string;
-  provider_name: string;
-  model_id: string;
-  route_id: string;
-  title: string;
-  details: string;
-};
-
-type ProviderDiagnosis = {
-  provider_name: string;
-  configured: boolean;
-  ok: boolean;
-  discovered_model_count: number;
-  new_route_suggestion_count: number;
-  stale_route_suggestion_count: number;
-  recovered_route_suggestion_count: number;
-  error?: string | null;
-};
-
-type DiagnosisReport = {
-  checked_at: number;
-  providers: ProviderDiagnosis[];
-  suggestions: EndpointSuggestion[];
-};
-
-type EndpointDiagnosisStatus = {
-  enabled: boolean;
-  auto_maintenance_enabled: boolean;
-  last_auto_applied: EndpointSuggestion[];
-  last_report: DiagnosisReport | null;
-};
-
 type DesktopField = {
   key: string;
   label: string;
@@ -131,7 +60,6 @@ type DesktopField = {
   kind: string;
   secret: boolean;
   value: string;
-  configured: boolean | null;
 };
 
 type DesktopSettingsPayload = {
@@ -140,19 +68,40 @@ type DesktopSettingsPayload = {
   fields: DesktopField[];
 };
 
+type DesktopCapabilities = {
+  desktop: boolean;
+  server?: { base_url?: string };
+};
+
 type DesktopLogsPayload = {
   lines: string[];
 };
 
-type BackupExportPayload = {
-  ok: boolean;
-  path: string;
+type BackupExportPayload = { ok: boolean; path: string };
+type BackupImportPayload = { ok: boolean; restored: string[] };
+
+const EMBED_SECTIONS: Record<string, string> = {
+  chat: "/chat?embed=1",
+  models: "/models?embed=1",
+  usage: "/status?embed=1",
+  health: "/health?embed=1",
+  live: "/live?embed=1",
+  docs: "/docs",
 };
 
-type BackupImportPayload = {
-  ok: boolean;
-  restored: string[];
-};
+const NAV_ITEMS = [
+  { id: "dashboard", label: "Dashboard", icon: Gauge },
+  { id: "chat", label: "Chat", icon: MessageSquareText },
+  { id: "models", label: "Models", icon: Bot },
+  { id: "usage", label: "Usage", icon: BarChart3 },
+  { id: "health", label: "Route Health", icon: HeartPulse },
+  { id: "live", label: "Live Traffic", icon: Activity },
+  { id: "settings", label: "Settings", icon: Settings },
+  { id: "backups", label: "Backups", icon: Database },
+  { id: "logs", label: "Logs", icon: ScrollText },
+] as const;
+
+type SectionId = (typeof NAV_ITEMS)[number]["id"] | "docs";
 
 const queryClient = new QueryClient();
 
@@ -166,7 +115,18 @@ async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
   return payload as T;
 }
 
+function desktopHeaders(token: string) {
+  return {
+    "Content-Type": "application/json",
+    "X-FreeRouter-Desktop-Token": token,
+  };
+}
+
 function App() {
+  React.useEffect(() => {
+    initTheme();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <FreeRouterShell />
@@ -175,34 +135,97 @@ function App() {
 }
 
 function FreeRouterShell() {
-  const [activeSection, setActiveSection] = React.useState("dashboard");
   const desktopToken = useDesktopToken();
+  const [activeSection, setActiveSection] = React.useState<SectionId>(() => initialSection());
+  const [previousSection, setPreviousSection] = React.useState<SectionId>("dashboard");
+  const [loadedEmbeds, setLoadedEmbeds] = React.useState<Set<string>>(() => new Set());
+
+  React.useEffect(() => {
+    if (EMBED_SECTIONS[activeSection]) {
+      setLoadedEmbeds((current) => new Set(current).add(activeSection));
+    }
+  }, [activeSection]);
+
+  const desktopReady = useDesktopReady(desktopToken);
   const health = useGatewayQuery<GatewayHealth>("gateway-health", "/v1/gateway/health.json", 5000);
   const models = useGatewayQuery<{ data: ModelRoute[] }>("gateway-models", "/v1/gateway/models", 10000);
-  const providers = useGatewayQuery<{ data: ProviderStatus[] }>(
-    "provider-status",
-    "/v1/providers/status",
-    10000,
-  );
-  const diagnosis = useGatewayQuery<EndpointDiagnosisStatus>(
-    "endpoint-diagnosis",
-    "/v1/gateway/endpoint-diagnosis",
-    15000,
-  );
-  const live = useGatewayQuery<{ data: LiveEvent[] }>(
-    "live-traffic",
-    "/v1/gateway/live/snapshot",
-    3000,
-  );
+  const providers = useGatewayQuery<{ data: ProviderStatus[] }>("provider-status", "/v1/providers/status", 10000);
+  const live = useGatewayQuery<{ data: LiveEvent[] }>("live-traffic", "/v1/gateway/live/snapshot", 3000);
 
   const routes = models.data?.data ?? [];
   const providerRows = providers.data?.data ?? [];
   const liveRows = live.data?.data ?? [];
+  const baseUrl =
+    desktopReady.data?.server?.base_url ?? `${window.location.origin}/v1`;
+
+  React.useEffect(() => {
+    const onHashChange = () => setActiveSection(initialSection());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  React.useEffect(() => {
+    if (activeSection === "dashboard") {
+      const timer = window.setInterval(() => {
+        queryClient.invalidateQueries({ queryKey: ["live-traffic"] });
+      }, 3000);
+      return () => window.clearInterval(timer);
+    }
+    return undefined;
+  }, [activeSection]);
+
+  function selectSection(section: SectionId) {
+    if (section !== "docs" && activeSection !== "docs") {
+      setPreviousSection(activeSection);
+    }
+    setActiveSection(section);
+    if (location.hash !== `#${section}`) {
+      history.replaceState(null, "", `#${section}`);
+    }
+    if (EMBED_SECTIONS[section]) {
+      setLoadedEmbeds((current) => new Set(current).add(section));
+    }
+  }
+
+  function refreshAll() {
+    queryClient.invalidateQueries();
+  }
+
+  async function restartServer() {
+    if (!desktopToken) return;
+    await fetchJson("/v1/desktop/restart", {
+      method: "POST",
+      headers: desktopHeaders(desktopToken),
+      body: JSON.stringify({}),
+    });
+    window.setTimeout(refreshAll, 700);
+  }
+
+  function toggleDocs() {
+    if (activeSection === "docs") {
+      selectSection(previousSection);
+      return;
+    }
+    setPreviousSection(activeSection);
+    selectSection("docs");
+  }
+
   const configuredProviders = providerRows.filter((provider) => provider.configured).length;
   const availableProviders = providerRows.filter((provider) => provider.available).length;
+  const enabledRoutes = routes.filter((route) => route.enabled).length;
   const flaggedRoutes = routes.filter(
     (route) => route.health?.status && route.health.status !== "active",
   ).length;
+
+  const statusTone =
+    health.data?.status === "ok" ? "ok" : health.isLoading ? "warn" : health.error ? "error" : "warn";
+  const statusTitle =
+    health.data?.status === "ok" ? "Gateway running" : health.error ? "Gateway needs attention" : "Checking gateway";
+  const statusDetail = health.data
+    ? `${health.data.providers.configured} configured providers, ${health.data.routes.enabled} enabled routes.`
+    : health.error?.message ?? "Loading local status...";
+
+  const isEmbed = Boolean(EMBED_SECTIONS[activeSection]);
 
   return (
     <div className="app-shell">
@@ -222,55 +245,82 @@ function FreeRouterShell() {
               key={item.id}
               className={activeSection === item.id ? "active" : ""}
               type="button"
-              onClick={() => setActiveSection(item.id)}
+              onClick={() => selectSection(item.id)}
             >
               <item.icon size={18} />
-              <span>{item.label}</span>
+              <span className="nav-label">{item.label}</span>
             </button>
           ))}
         </nav>
+        <div className="sidebar-footer">
+          <div className="base-url">
+            <label>OpenAI base URL</label>
+            <code>{baseUrl}</code>
+            <button type="button" onClick={() => copyText(baseUrl)}>
+              Copy URL
+            </button>
+          </div>
+        </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
-          <div className={`status-dot ${health.data?.status === "ok" ? "ok" : "warn"}`} />
-          <div>
-            <strong>{health.data?.status === "ok" ? "Gateway running" : "Checking gateway"}</strong>
-            <span>
-              {health.data
-                ? `${health.data.providers.configured} configured providers, ${health.data.routes.enabled} enabled routes`
-                : health.error?.message ?? "Loading local runtime state"}
-            </span>
+          <div className={`status-dot ${statusTone}`} />
+          <div className="topbar-title">
+            <strong>{statusTitle}</strong>
+            <span>{statusDetail}</span>
           </div>
-          <button type="button" onClick={() => window.location.reload()}>
-            <RefreshCw size={16} />
-            Refresh
-          </button>
+          <div className="topbar-actions">
+            <button type="button" onClick={toggleDocs}>
+              {activeSection === "docs" ? "Back" : "API Docs"}
+            </button>
+            <button type="button" onClick={refreshAll}>
+              <RefreshCw size={16} />
+              Refresh
+            </button>
+            <button type="button" disabled={!desktopReady.data?.desktop} onClick={restartServer}>
+              Restart
+            </button>
+          </div>
         </header>
 
-        <section className="content">
+        <section className={`content ${isEmbed ? "content-embed" : ""}`}>
           {activeSection === "dashboard" && (
-            <Dashboard
+            <DashboardView
               health={health.data ?? null}
               configuredProviders={configuredProviders}
               availableProviders={availableProviders}
+              enabledRoutes={enabledRoutes}
               routeCount={routes.length}
               flaggedRoutes={flaggedRoutes}
               providers={providerRows}
               live={liveRows}
             />
           )}
-          {activeSection === "models" && <Models routes={routes} diagnosis={diagnosis.data ?? null} />}
-          {activeSection === "providers" && <Providers providers={providerRows} />}
-          {activeSection === "traffic" && <Traffic live={liveRows} />}
-          {activeSection === "settings" && <SettingsPanel desktopToken={desktopToken} />}
-          {activeSection === "backups" && <BackupsPanel desktopToken={desktopToken} />}
-          {activeSection === "chat" && <ChatPanel />}
-          {activeSection === "logs" && <LogsPanel desktopToken={desktopToken} />}
+          {EMBED_SECTIONS[activeSection] && loadedEmbeds.has(activeSection) && (
+            <EmbedFrame title={activeSection} src={EMBED_SECTIONS[activeSection]} />
+          )}
+          {activeSection === "settings" && (
+            <SettingsView desktopToken={desktopToken} desktopReady={desktopReady.data?.desktop ?? false} />
+          )}
+          {activeSection === "backups" && (
+            <BackupsView desktopToken={desktopToken} desktopReady={desktopReady.data?.desktop ?? false} />
+          )}
+          {activeSection === "logs" && (
+            <LogsView desktopToken={desktopToken} desktopReady={desktopReady.data?.desktop ?? false} />
+          )}
         </section>
       </main>
     </div>
   );
+}
+
+function initialSection(): SectionId {
+  const hash = (location.hash || "#dashboard").slice(1);
+  if (hash === "docs" || NAV_ITEMS.some((item) => item.id === hash)) {
+    return hash as SectionId;
+  }
+  return "dashboard";
 }
 
 function useDesktopToken() {
@@ -284,6 +334,18 @@ function useDesktopToken() {
   return token;
 }
 
+function useDesktopReady(token: string) {
+  return useQuery({
+    queryKey: ["desktop-capabilities", token],
+    queryFn: () =>
+      fetchJson<DesktopCapabilities>("/v1/desktop/capabilities", {
+        headers: desktopHeaders(token),
+      }),
+    enabled: Boolean(token),
+    retry: false,
+  });
+}
+
 function useGatewayQuery<T>(key: string, path: string, refetchInterval: number) {
   return useQuery({
     queryKey: [key],
@@ -292,10 +354,35 @@ function useGatewayQuery<T>(key: string, path: string, refetchInterval: number) 
   });
 }
 
-function Dashboard(props: {
+function EmbedFrame({ title, src }: { title: string; src: string }) {
+  const iframeRef = React.useRef<HTMLIFrameElement>(null);
+
+  React.useEffect(() => {
+    const frame = iframeRef.current;
+    if (!frame) return;
+    const onLoad = () => {
+      applyTheme(getThemePreference(), { persist: false, broadcast: true });
+    };
+    frame.addEventListener("load", onLoad);
+    return () => frame.removeEventListener("load", onLoad);
+  }, [src]);
+
+  return (
+    <iframe
+      ref={iframeRef}
+      className="embed-frame"
+      title={title}
+      src={src}
+      loading="lazy"
+    />
+  );
+}
+
+function DashboardView(props: {
   health: GatewayHealth | null;
   configuredProviders: number;
   availableProviders: number;
+  enabledRoutes: number;
   routeCount: number;
   flaggedRoutes: number;
   providers: ProviderStatus[];
@@ -305,326 +392,81 @@ function Dashboard(props: {
     <div className="section-stack">
       <div className="section-heading">
         <div>
-          <h1>Gateway Command Center</h1>
-          <p>Desktop-first control plane for routing, provider health, traffic, and local state.</p>
+          <h1>Dashboard</h1>
+          <p>Local gateway status, provider readiness, route health, and recent traffic in one place.</p>
         </div>
       </div>
       <div className="metrics">
-        <Metric label="Gateway" value={props.health?.status ?? "Loading"} note={props.health?.version ?? ""} />
+        <Metric label="Gateway" value={props.health?.status ?? "Unknown"} note={props.health?.database_path ?? "Waiting for server"} />
         <Metric
           label="Providers"
-          value={`${props.configuredProviders}/${props.providers.length || props.health?.providers.total || 0}`}
-          note={`${props.availableProviders} available now`}
+          value={`${props.configuredProviders}/${props.providers.length}`}
+          note={`${props.availableProviders} available right now`}
         />
+        <Metric label="Enabled routes" value={props.enabledRoutes} note={`${props.routeCount} routes in catalog`} />
         <Metric
-          label="Enabled Routes"
-          value={props.health?.routes.enabled ?? 0}
-          note={`${props.routeCount || props.health?.routes.total || 0} catalog routes`}
+          label="Route flags"
+          value={props.flaggedRoutes}
+          note={props.flaggedRoutes ? "Review route health" : "No active route flags"}
         />
-        <Metric label="Route Flags" value={props.flaggedRoutes} note="Routes needing review" />
       </div>
       <div className="two-column">
-        <Panel title="Provider Readiness" icon={ShieldCheck}>
-          <ProviderTable providers={props.providers.slice(0, 8)} />
+        <Panel title="Provider readiness">
+          <ProviderTable providers={props.providers} />
         </Panel>
-        <Panel title="Recent Traffic" icon={Activity}>
-          <TrafficList live={props.live.slice(0, 8)} />
+        <Panel title="Recent traffic">
+          <TrafficTable live={props.live.slice(0, 6)} />
         </Panel>
       </div>
     </div>
   );
 }
 
-function Models({
-  routes,
-  diagnosis,
-}: {
-  routes: ModelRoute[];
-  diagnosis: EndpointDiagnosisStatus | null;
-}) {
-  const [message, setMessage] = React.useState<{ tone: "ok" | "bad"; text: string } | null>(null);
-  const refreshModels = () => queryClient.invalidateQueries({ queryKey: ["gateway-models"] });
-  const refreshDiagnosis = () => queryClient.invalidateQueries({ queryKey: ["endpoint-diagnosis"] });
-  const toggleRoute = useMutation({
-    mutationFn: async (route: ModelRoute) => {
-      const action = route.enabled ? "disable" : "enable";
-      return fetchJson<{ data: ModelRoute }>(
-        `/v1/gateway/models/${encodeURIComponent(route.route_id)}/${action}`,
-        { method: "POST" },
-      );
-    },
-    onSuccess: (_, route) => {
-      setMessage({
-        tone: "ok",
-        text: `${route.display_name} ${route.enabled ? "disabled" : "enabled"}.`,
-      });
-      refreshModels();
-    },
-    onError: (error) => setMessage({ tone: "bad", text: error.message }),
-  });
-  const resetHealth = useMutation({
-    mutationFn: (route: ModelRoute) =>
-      fetchJson<{ data: ModelRoute }>(
-        `/v1/gateway/models/${encodeURIComponent(route.route_id)}/health/reset`,
-        { method: "POST" },
-      ),
-    onSuccess: (_, route) => {
-      setMessage({ tone: "ok", text: `${route.display_name} health reset.` });
-      refreshModels();
-    },
-    onError: (error) => setMessage({ tone: "bad", text: error.message }),
-  });
-  const autoRank = useMutation({
-    mutationFn: () => fetchJson<{ data: ModelRoute[] }>("/v1/gateway/models/auto-rank", { method: "POST" }),
-    onSuccess: () => {
-      setMessage({ tone: "ok", text: "Model routes auto-ranked." });
-      refreshModels();
-    },
-    onError: (error) => setMessage({ tone: "bad", text: error.message }),
-  });
-  const runDiagnosis = useMutation({
-    mutationFn: () => fetchJson<{ data: DiagnosisReport }>("/v1/gateway/endpoint-diagnosis/refresh", { method: "POST" }),
-    onSuccess: (payload) => {
-      const count = payload.data.suggestions.length;
-      setMessage({ tone: "ok", text: `Endpoint diagnosis finished with ${count} suggestion${count === 1 ? "" : "s"}.` });
-      refreshDiagnosis();
-      refreshModels();
-    },
-    onError: (error) => setMessage({ tone: "bad", text: error.message }),
-  });
-  const applySuggestions = useMutation({
-    mutationFn: (suggestions: EndpointSuggestion[]) =>
-      fetchJson<{ data: EndpointSuggestion[] }>("/v1/gateway/endpoint-diagnosis/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ suggestion_ids: suggestions.map((item) => item.suggestion_id) }),
-      }),
-    onSuccess: (payload) => {
-      setMessage({ tone: "ok", text: `Applied ${payload.data.length} endpoint suggestion${payload.data.length === 1 ? "" : "s"}.` });
-      refreshDiagnosis();
-      refreshModels();
-    },
-    onError: (error) => setMessage({ tone: "bad", text: error.message }),
-  });
-  const resetCatalog = useMutation({
-    mutationFn: () => fetchJson<{ data: ModelRoute[] }>("/v1/gateway/models/reset", { method: "POST" }),
-    onSuccess: () => {
-      setMessage({ tone: "ok", text: "Model catalog reset to defaults." });
-      refreshModels();
-    },
-    onError: (error) => setMessage({ tone: "bad", text: error.message }),
-  });
-
+function AppearanceSettings() {
+  const [preference, setPreference] = React.useState(getThemePreference);
   return (
-    <div className="section-stack">
-      <div className="section-heading">
-        <div>
-          <h1>Model Routes</h1>
-          <p>Control the ranked waterfall catalog used by new gateway requests.</p>
-        </div>
-        <div className="toolbar-actions">
-          <button type="button" onClick={refreshModels}>
-            <RefreshCw size={16} />
-            Refresh
-          </button>
-          <button type="button" disabled={autoRank.isPending} onClick={() => autoRank.mutate()}>
-            <Gauge size={16} />
-            Auto-rank
-          </button>
-          <button className="danger-action" type="button" disabled={resetCatalog.isPending} onClick={() => resetCatalog.mutate()}>
-            Reset
-          </button>
-        </div>
-      </div>
-      {message && <Notice tone={message.tone}>{message.text}</Notice>}
-      <Panel title="Catalog" icon={Bot}>
-        <div className="route-grid">
-          {routes.slice(0, 60).map((route) => (
-            <article className="route-card" key={route.route_id}>
-              <div>
-                <strong>{route.display_name}</strong>
-                <span>{route.model_id}</span>
-              </div>
-              <div className="route-meta">
-                <span>#{route.rank}</span>
-                <span>{route.provider_name}</span>
-                <StatusPill tone={healthTone(route.health?.status)}>{route.health?.status ?? "active"}</StatusPill>
-                <StatusPill tone={route.enabled ? "ok" : "muted"}>{route.enabled ? "Enabled" : "Disabled"}</StatusPill>
-                {route.health?.status && route.health.status !== "active" && (
-                  <button
-                    type="button"
-                    disabled={resetHealth.isPending}
-                    onClick={() => resetHealth.mutate(route)}
-                  >
-                    Reset health
-                  </button>
-                )}
-                <button
-                  className={route.enabled ? "small-danger" : "small-success"}
-                  type="button"
-                  disabled={toggleRoute.isPending}
-                  onClick={() => toggleRoute.mutate(route)}
-                >
-                  {route.enabled ? "Disable" : "Enable"}
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      </Panel>
-      <EndpointDiagnosisPanel
-        diagnosis={diagnosis}
-        onRefresh={() => runDiagnosis.mutate()}
-        onApply={(suggestions) => applySuggestions.mutate(suggestions)}
-        refreshing={runDiagnosis.isPending}
-        applying={applySuggestions.isPending}
-      />
-    </div>
-  );
-}
-
-function Providers({ providers }: { providers: ProviderStatus[] }) {
-  return (
-    <Panel title="Providers" icon={Database}>
-      <ProviderTable providers={providers} />
-    </Panel>
-  );
-}
-
-function EndpointDiagnosisPanel({
-  diagnosis,
-  onRefresh,
-  onApply,
-  refreshing,
-  applying,
-}: {
-  diagnosis: EndpointDiagnosisStatus | null;
-  onRefresh: () => void;
-  onApply: (suggestions: EndpointSuggestion[]) => void;
-  refreshing: boolean;
-  applying: boolean;
-}) {
-  const report = diagnosis?.last_report;
-  const suggestions = report?.suggestions ?? [];
-  return (
-    <Panel title="Endpoint Diagnosis" icon={ShieldCheck}>
-      <div className="panel-actions">
-        <div>
-          <p className="panel-copy">
-            {diagnosis?.enabled
-              ? `Automatic diagnosis is enabled${diagnosis.auto_maintenance_enabled ? " with safe maintenance" : ""}.`
-              : "Automatic diagnosis is disabled."}
-          </p>
-          {report && (
-            <p className="path-note">
-              Last checked {new Date(report.checked_at * 1000).toLocaleString()} across {report.providers.length} providers.
-            </p>
-          )}
-        </div>
-        <div className="toolbar-actions">
-          <button type="button" disabled={refreshing} onClick={onRefresh}>
-            <RefreshCw size={16} />
-            {refreshing ? "Running" : "Run diagnosis"}
-          </button>
+    <Panel title="Appearance">
+      <p className="panel-copy">
+        Use Windows theme automatically, or keep FreeRouter pinned to light or dark mode.
+      </p>
+      <div className="fr-theme-segmented" role="group" aria-label="Theme preference">
+        {(["system", "light", "dark"] as ThemePreference[]).map((option) => (
           <button
-            className="primary-action"
+            key={option}
+            className={`fr-theme-option ${preference === option ? "active" : ""}`}
             type="button"
-            disabled={!suggestions.length || applying}
-            onClick={() => onApply(suggestions)}
+            aria-pressed={preference === option}
+            onClick={() => {
+              applyTheme(option, { persist: true, broadcast: true });
+              setPreference(option);
+            }}
           >
-            {applying ? "Applying" : "Apply suggestions"}
+            {option === "system" ? "System" : option === "light" ? "Light" : "Dark"}
           </button>
-        </div>
+        ))}
       </div>
-
-      {!report ? (
-        <EmptyState message="No diagnosis report yet." />
-      ) : (
-        <div className="diagnosis-grid">
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Provider</th>
-                  <th>Status</th>
-                  <th>Discovered</th>
-                  <th>Suggestions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.providers.map((provider) => (
-                  <tr key={provider.provider_name}>
-                    <td>
-                      {provider.provider_name}
-                      {provider.error && <span>{provider.error}</span>}
-                    </td>
-                    <td>
-                      <StatusPill tone={provider.ok ? "ok" : provider.configured ? "warn" : "bad"}>
-                        {provider.ok ? "ok" : provider.configured ? "attention" : "not configured"}
-                      </StatusPill>
-                    </td>
-                    <td>{provider.discovered_model_count}</td>
-                    <td>
-                      {provider.new_route_suggestion_count +
-                        provider.stale_route_suggestion_count +
-                        provider.recovered_route_suggestion_count}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="suggestion-list">
-            {suggestions.length ? (
-              suggestions.slice(0, 8).map((suggestion) => (
-                <article className="event-row" key={suggestion.suggestion_id}>
-                  <div>
-                    <strong>{suggestion.title}</strong>
-                    <span>{suggestion.details}</span>
-                  </div>
-                  <StatusPill tone={suggestion.action === "add_route" ? "ok" : "warn"}>
-                    {suggestion.action.replace(/_/g, " ")}
-                  </StatusPill>
-                </article>
-              ))
-            ) : (
-              <EmptyState message="No endpoint changes suggested." />
-            )}
-          </div>
-        </div>
-      )}
     </Panel>
   );
 }
 
-function Traffic({ live }: { live: LiveEvent[] }) {
-  return (
-    <Panel title="Live Traffic" icon={Activity}>
-      <TrafficList live={live} />
-    </Panel>
-  );
-}
-
-function SettingsPanel({ desktopToken }: { desktopToken: string }) {
-  const settings = useDesktopQuery<DesktopSettingsPayload>(
-    "desktop-settings",
-    "/v1/desktop/settings",
-    desktopToken,
-  );
+function SettingsView({ desktopToken, desktopReady }: { desktopToken: string; desktopReady: boolean }) {
+  const settings = useQuery({
+    queryKey: ["desktop-settings", desktopToken],
+    queryFn: () =>
+      fetchJson<DesktopSettingsPayload>("/v1/desktop/settings", {
+        headers: desktopHeaders(desktopToken),
+      }),
+    enabled: desktopReady,
+  });
   const [values, setValues] = React.useState<Record<string, string>>({});
   const saveSettings = useMutation({
-    mutationFn: async () =>
-      fetchJson<{ settings: DesktopSettingsPayload; restart_required: boolean }>(
-        "/v1/desktop/settings",
-        {
-          method: "POST",
-          headers: desktopHeaders(desktopToken),
-          body: JSON.stringify(values),
-        },
-      ),
-    onSuccess: (payload) => {
-      queryClient.setQueryData(["desktop-settings"], payload.settings);
-    },
+    mutationFn: () =>
+      fetchJson("/v1/desktop/settings", {
+        method: "POST",
+        headers: desktopHeaders(desktopToken),
+        body: JSON.stringify(values),
+      }),
+    onSuccess: () => settings.refetch(),
   });
 
   React.useEffect(() => {
@@ -632,91 +474,73 @@ function SettingsPanel({ desktopToken }: { desktopToken: string }) {
     setValues(Object.fromEntries(settings.data.fields.map((field) => [field.key, field.value])));
   }, [settings.data]);
 
-  if (!desktopToken) return <DesktopRequired title="Settings" />;
-  if (settings.isLoading) return <Panel title="Settings" icon={Settings}><EmptyState message="Loading desktop settings..." /></Panel>;
-  if (settings.error) {
-    return (
-      <Panel title="Settings" icon={Settings}>
-        <EmptyState message={settings.error.message} />
-      </Panel>
-    );
-  }
-  const payload = settings.data;
-  if (!payload) return null;
-
   return (
     <div className="section-stack">
       <div className="section-heading">
         <div>
           <h1>Settings</h1>
-          <p>Provider keys, runtime limits, storage paths, and endpoint maintenance controls.</p>
+          <p>Local API keys, runtime values, storage paths, and endpoint maintenance options.</p>
         </div>
         <button
           className="primary-action"
           type="button"
-          disabled={saveSettings.isPending}
+          disabled={!desktopReady || saveSettings.isPending}
           onClick={() => saveSettings.mutate()}
         >
-          <Save size={16} />
           {saveSettings.isPending ? "Saving" : "Save settings"}
         </button>
       </div>
-      {saveSettings.isSuccess && <Notice tone="ok">Settings saved. Restart the gateway to apply runtime changes.</Notice>}
-      {saveSettings.error && <Notice tone="bad">{saveSettings.error.message}</Notice>}
-      {payload.groups.map((group) => {
-        const fields = payload.fields.filter((field) => field.group === group);
-        return (
-          <Panel title={group} icon={Settings} key={group}>
-            <div className="form-grid">
-              {fields.map((field) => (
-                <label className="field" key={field.key}>
-                  <span>{field.label}</span>
-                  {field.kind === "bool" ? (
-                    <select
-                      value={values[field.key] ?? ""}
-                      onChange={(event) =>
-                        setValues((current) => ({ ...current, [field.key]: event.target.value }))
-                      }
-                    >
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  ) : (
-                    <input
-                      type={field.secret ? "password" : numericFieldKind(field.kind) ? "number" : "text"}
-                      step={field.kind === "float" ? "0.1" : undefined}
-                      value={values[field.key] ?? ""}
-                      onChange={(event) =>
-                        setValues((current) => ({ ...current, [field.key]: event.target.value }))
-                      }
-                    />
-                  )}
-                </label>
-              ))}
-            </div>
-          </Panel>
-        );
-      })}
-      <p className="path-note">Settings file: {payload.env_path}</p>
+      <AppearanceSettings />
+      {!desktopReady && <DesktopRequired />}
+      {desktopReady && settings.isLoading && <EmptyState message="Loading desktop settings..." />}
+      {desktopReady && settings.error && <Notice tone="bad">{settings.error.message}</Notice>}
+      {desktopReady && settings.data && (
+        <>
+          {settings.data.groups.map((group) => {
+            const fields = settings.data.fields.filter((field) => field.group === group);
+            return (
+              <Panel title={group} key={group}>
+                <div className="form-grid">
+                  {fields.map((field) => (
+                    <label className="field" key={field.key}>
+                      <span>{field.label}</span>
+                      {field.kind === "bool" ? (
+                        <select
+                          value={values[field.key] ?? ""}
+                          onChange={(event) =>
+                            setValues((current) => ({ ...current, [field.key]: event.target.value }))
+                          }
+                        >
+                          <option value="true">true</option>
+                          <option value="false">false</option>
+                        </select>
+                      ) : (
+                        <input
+                          type={field.secret ? "password" : numericFieldKind(field.kind) ? "number" : "text"}
+                          step={field.kind === "float" ? "0.1" : undefined}
+                          value={values[field.key] ?? ""}
+                          onChange={(event) =>
+                            setValues((current) => ({ ...current, [field.key]: event.target.value }))
+                          }
+                        />
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </Panel>
+            );
+          })}
+          <p className="path-note">Settings file: {settings.data.env_path}</p>
+          {saveSettings.isSuccess && (
+            <Notice tone="ok">Settings saved. Restart the server to apply runtime changes.</Notice>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-function LogsPanel({ desktopToken }: { desktopToken: string }) {
-  const logs = useDesktopQuery<DesktopLogsPayload>("desktop-logs", "/v1/desktop/logs", desktopToken, 5000);
-  if (!desktopToken) return <DesktopRequired title="Logs" />;
-  return (
-    <Panel title="Logs" icon={Activity}>
-      {logs.isLoading && <EmptyState message="Loading desktop logs..." />}
-      {logs.error && <EmptyState message={logs.error.message} />}
-      {logs.data && (
-        <pre className="log-box">{logs.data.lines.join("") || "No logs captured yet."}</pre>
-      )}
-    </Panel>
-  );
-}
-
-function BackupsPanel({ desktopToken }: { desktopToken: string }) {
+function BackupsView({ desktopToken, desktopReady }: { desktopToken: string; desktopReady: boolean }) {
   const [path, setPath] = React.useState("");
   const [overwrite, setOverwrite] = React.useState(false);
   const [file, setFile] = React.useState<File | null>(null);
@@ -753,44 +577,38 @@ function BackupsPanel({ desktopToken }: { desktopToken: string }) {
     },
   });
 
-  if (!desktopToken) return <DesktopRequired title="Backups" />;
+  if (!desktopReady) {
+    return (
+      <div className="section-stack">
+        <SectionIntro title="Backups" copy="Export or restore local model catalog and SQLite state. Secrets are not included in backups." />
+        <DesktopRequired />
+      </div>
+    );
+  }
+
   return (
     <div className="section-stack">
-      <div className="section-heading">
-        <div>
-          <h1>Backups</h1>
-          <p>Export and restore local model catalog, SQLite state, and non-secret local settings.</p>
-        </div>
-      </div>
+      <SectionIntro title="Backups" copy="Export or restore local model catalog and SQLite state. Secrets are not included in backups." />
       <div className="two-column">
-        <Panel title="Export Local State" icon={Download}>
+        <Panel title="Export local state">
           <p className="panel-copy">
-            Create a zip backup of editable local state. Provider secrets are intentionally excluded.
+            Creates a zip with the editable model catalog, SQLite state, and non-secret local settings.
           </p>
-          <button
-            className="primary-action"
-            type="button"
-            disabled={exportBackup.isPending}
-            onClick={() => exportBackup.mutate()}
-          >
+          <button className="primary-action" type="button" disabled={exportBackup.isPending} onClick={() => exportBackup.mutate()}>
             <Download size={16} />
             {exportBackup.isPending ? "Exporting" : "Export backup"}
           </button>
           {exportBackup.data && <Notice tone="ok">Exported to {exportBackup.data.path}</Notice>}
           {exportBackup.error && <Notice tone="bad">{exportBackup.error.message}</Notice>}
         </Panel>
-        <Panel title="Restore Local State" icon={Upload}>
+        <Panel title="Restore local state">
           <div className="form-grid single">
             <label className="field">
               <span>Backup zip file</span>
-              <input
-                type="file"
-                accept=".zip,application/zip"
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-              />
+              <input type="file" accept=".zip,application/zip" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
             </label>
             <label className="field">
-              <span>Or restore from path</span>
+              <span>Or enter a path</span>
               <input
                 value={path}
                 placeholder="C:\\path\\to\\freerouter-local-state.zip"
@@ -798,27 +616,16 @@ function BackupsPanel({ desktopToken }: { desktopToken: string }) {
               />
             </label>
             <label className="check-field">
-              <input
-                type="checkbox"
-                checked={overwrite}
-                onChange={(event) => setOverwrite(event.target.checked)}
-              />
+              <input type="checkbox" checked={overwrite} onChange={(event) => setOverwrite(event.target.checked)} />
               <span>Overwrite existing local state</span>
             </label>
           </div>
-          <button
-            className="danger-action"
-            type="button"
-            disabled={importBackup.isPending}
-            onClick={() => importBackup.mutate()}
-          >
+          <button className="danger-action" type="button" disabled={importBackup.isPending} onClick={() => importBackup.mutate()}>
             <Upload size={16} />
             {importBackup.isPending ? "Restoring" : "Restore backup"}
           </button>
           {importBackup.data && (
-            <Notice tone="ok">
-              Restored {importBackup.data.restored.length} file(s). Restart the gateway to use the restored state.
-            </Notice>
+            <Notice tone="ok">Restored {importBackup.data.restored.length} file(s). Restart the server.</Notice>
           )}
           {importBackup.error && <Notice tone="bad">{importBackup.error.message}</Notice>}
         </Panel>
@@ -827,123 +634,34 @@ function BackupsPanel({ desktopToken }: { desktopToken: string }) {
   );
 }
 
-function ChatPanel() {
-  const [input, setInput] = React.useState("");
-  const [messages, setMessages] = React.useState<ChatMessage[]>([]);
-  const [events, setEvents] = React.useState<RouteEvent[]>([]);
-  const [isSending, setIsSending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-
-  async function sendMessage() {
-    const text = input.trim();
-    if (!text || isSending) return;
-    setInput("");
-    setError(null);
-    setIsSending(true);
-    const nextMessages: ChatMessage[] = [...messages, { role: "user", content: text }];
-    setMessages(nextMessages);
-    setEvents([]);
-
-    try {
-      const response = await fetch("/v1/chat/completions/stream-route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, max_tokens: 4096 }),
-      });
-      if (!response.body) throw new Error("The gateway did not return a stream.");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let assistantText = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() ?? "";
-
-        for (const block of blocks) {
-          const raw = block
-            .split("\n")
-            .find((line) => line.startsWith("data: "))
-            ?.slice(6)
-            .trim();
-          if (!raw || raw === "[DONE]") continue;
-          const event = JSON.parse(raw) as RouteEvent;
-          if (event.type === "content" && event.text) {
-            assistantText += event.text;
-            setMessages([...nextMessages, { role: "assistant", content: assistantText }]);
-          } else if (event.type === "done") {
-            if (event.content) assistantText = event.content;
-            setMessages([...nextMessages, { role: "assistant", content: assistantText }]);
-          } else if (event.type === "error") {
-            throw new Error(event.message || "All providers exhausted.");
-          } else {
-            setEvents((current) => [event, ...current].slice(0, 80));
-          }
-        }
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setIsSending(false);
-    }
-  }
+function LogsView({ desktopToken, desktopReady }: { desktopToken: string; desktopReady: boolean }) {
+  const logs = useQuery({
+    queryKey: ["desktop-logs", desktopToken],
+    queryFn: () =>
+      fetchJson<DesktopLogsPayload>("/v1/desktop/logs", {
+        headers: desktopHeaders(desktopToken),
+      }),
+    enabled: desktopReady,
+    refetchInterval: 5000,
+  });
 
   return (
-    <div className="chat-layout">
-      <section className="chat-main panel">
-        <header>
-          <MessageSquareText size={18} />
-          <h2>Chat</h2>
-        </header>
-        <div className="messages">
-          {!messages.length && <EmptyState message="Send a message to route through the local gateway." />}
-          {messages.map((message, index) => (
-            <article className={`message ${message.role}`} key={`${message.role}-${index}`}>
-              <span>{message.role}</span>
-              <p>{message.content}</p>
-            </article>
-          ))}
-          {isSending && <div className="typing">Routing request...</div>}
-          {error && <Notice tone="bad">{error}</Notice>}
+    <div className="section-stack">
+      <div className="section-heading">
+        <div>
+          <h1>Logs</h1>
+          <p>Server output captured by the desktop launcher.</p>
         </div>
-        <div className="composer">
-          <textarea
-            rows={3}
-            value={input}
-            placeholder="Type a message..."
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                sendMessage();
-              }
-            }}
-          />
-          <button className="primary-action" type="button" disabled={isSending} onClick={sendMessage}>
-            {isSending ? "Sending" : "Send"}
-          </button>
-        </div>
-      </section>
-      <Panel title="Route Activity" icon={Route}>
-        <div className="event-list">
-          {!events.length && <EmptyState message="Route attempts will appear here for the current message." />}
-          {events.map((event, index) => (
-            <div className="event-row" key={`${event.type}-${index}`}>
-              <div>
-                <strong>{event.type.replace(/_/g, " ")}</strong>
-                <span>
-                  {[event.provider, event.model_id, event.reason].filter(Boolean).join(" / ")}
-                </span>
-              </div>
-              <StatusPill tone={routeEventTone(event.type)}>{event.route_id || event.provider || "route"}</StatusPill>
-            </div>
-          ))}
-        </div>
-      </Panel>
+        <button type="button" disabled={!desktopReady} onClick={() => logs.refetch()}>
+          Refresh logs
+        </button>
+      </div>
+      {!desktopReady && <DesktopRequired />}
+      {desktopReady && logs.isLoading && <EmptyState message="Loading desktop logs..." />}
+      {desktopReady && logs.error && <Notice tone="bad">{logs.error.message}</Notice>}
+      {desktopReady && logs.data && (
+        <pre className="log-box">{logs.data.lines.join("") || "No logs captured yet."}</pre>
+      )}
     </div>
   );
 }
@@ -957,8 +675,8 @@ function ProviderTable({ providers }: { providers: ProviderStatus[] }) {
           <tr>
             <th>Provider</th>
             <th>Status</th>
-            <th>Requests</th>
-            <th>Tokens</th>
+            <th>Requests today</th>
+            <th>Tokens today</th>
           </tr>
         </thead>
         <tbody>
@@ -983,36 +701,59 @@ function ProviderTable({ providers }: { providers: ProviderStatus[] }) {
   );
 }
 
-function TrafficList({ live }: { live: LiveEvent[] }) {
+function TrafficTable({ live }: { live: LiveEvent[] }) {
   if (!live.length) return <EmptyState message="No traffic recorded in this session." />;
   return (
-    <div className="event-list">
-      {live.map((event, index) => (
-        <div className="event-row" key={`${event.request_id ?? "event"}-${index}`}>
-          <div>
-            <strong>{event.method || event.event_type || "request"}</strong>
-            <span>{event.path || event.request_id || ""}</span>
-          </div>
-          <StatusPill tone="muted">{event.status || event.event_type || "event"}</StatusPill>
-        </div>
-      ))}
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Event</th>
+            <th>Status</th>
+            <th>Route</th>
+          </tr>
+        </thead>
+        <tbody>
+          {live.map((event, index) => (
+            <tr key={`${event.request_id ?? "event"}-${index}`}>
+              <td>
+                <strong>{event.method || event.path || event.event_type || "request"}</strong>
+                <span>{event.path || event.request_id || ""}</span>
+              </td>
+              <td>
+                <StatusPill tone="muted">{event.status || event.event_type || "event"}</StatusPill>
+              </td>
+              <td>{event.provider_name || event.route_id || ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function Placeholder({ title }: { title: string }) {
+function SectionIntro({ title, copy }: { title: string; copy: string }) {
   return (
-    <Panel title={title} icon={Settings}>
-      <EmptyState message="This surface will move from the legacy desktop shell into the React app next." />
-    </Panel>
+    <div className="section-heading">
+      <div>
+        <h1>{title}</h1>
+        <p>{copy}</p>
+      </div>
+    </div>
   );
 }
 
-function DesktopRequired({ title }: { title: string }) {
+function DesktopRequired() {
   return (
-    <Panel title={title} icon={Settings}>
-      <EmptyState message="Open FreeRouter from the desktop shell to use this local-machine control." />
-    </Panel>
+    <div className="disabled-box">
+      <div>
+        <strong>Desktop app required</strong>
+        <span>
+          Open FreeRouter from the desktop shortcut to use settings, backups, logs, restart, and tray controls.
+          Normal gateway pages still work in a browser.
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -1024,32 +765,9 @@ function numericFieldKind(kind: string) {
   return kind === "int" || kind === "optional_int" || kind === "float";
 }
 
-function routeEventTone(type: string): "ok" | "warn" | "bad" | "muted" {
-  if (type === "route_selected") return "ok";
-  if (type === "route_fail") return "bad";
-  if (type === "route_skip" || type === "route_flagged") return "warn";
-  return "muted";
-}
-
-function healthTone(status?: string | null): "ok" | "warn" | "bad" | "muted" {
-  if (!status || status === "active") return "ok";
-  if (status.includes("disabled") || status.includes("exhausted")) return "bad";
-  return "warn";
-}
-
-function desktopHeaders(token: string) {
-  return {
-    "Content-Type": "application/json",
-    "X-FreeRouter-Desktop-Token": token,
-  };
-}
-
-function useDesktopQuery<T>(key: string, path: string, token: string, refetchInterval?: number) {
-  return useQuery({
-    queryKey: [key],
-    queryFn: () => fetchJson<T>(path, { headers: desktopHeaders(token) }),
-    enabled: Boolean(token),
-    refetchInterval,
+function copyText(text: string) {
+  navigator.clipboard?.writeText(text).catch(() => {
+    // Ignore clipboard failures.
   });
 }
 
@@ -1063,19 +781,10 @@ function Metric({ label, value, note }: { label: string; value: React.ReactNode;
   );
 }
 
-function Panel({
-  title,
-  icon: Icon,
-  children,
-}: {
-  title: string;
-  icon: LucideIcon;
-  children: React.ReactNode;
-}) {
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="panel">
       <header>
-        <Icon size={18} />
         <h2>{title}</h2>
       </header>
       {children}
@@ -1090,17 +799,6 @@ function StatusPill({ tone, children }: { tone: "ok" | "warn" | "bad" | "muted";
 function EmptyState({ message }: { message: string }) {
   return <div className="empty">{message}</div>;
 }
-
-const NAV_ITEMS = [
-  { id: "dashboard", label: "Dashboard", icon: Gauge },
-  { id: "models", label: "Models", icon: Bot },
-  { id: "providers", label: "Providers", icon: ShieldCheck },
-  { id: "traffic", label: "Traffic", icon: Activity },
-  { id: "settings", label: "Settings", icon: Settings },
-  { id: "backups", label: "Backups", icon: Database },
-  { id: "logs", label: "Logs", icon: Activity },
-  { id: "chat", label: "Chat", icon: MessageSquareText },
-];
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -52,7 +52,7 @@ def desktop_capabilities(request: Request) -> dict[str, Any]:
             "host": host,
             "port": port,
             "base_url": base_url,
-            "app_url": f"{request_base}/app",
+            "app_url": f"{request_base}/app-next",
         },
     }
 
