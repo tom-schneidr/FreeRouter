@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
+from app.runtime_paths import ENV_FILE_ENV, runtime_root
+
 SECRET_KEY_PARTS = ("API_KEY", "TOKEN", "SECRET", "PASSWORD")
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+    return runtime_root()
+
+
+def _env_path() -> Path:
+    raw_path = os.environ.get(ENV_FILE_ENV)
+    return Path(raw_path) if raw_path else _project_root() / ".env"
 
 
 def _read_env_without_secrets(path: Path) -> dict[str, str]:
@@ -55,7 +63,7 @@ def export_backup(output: Path | None = None) -> Path:
                 archive.write(path, path.relative_to(root).as_posix())
                 manifest["files"].append(path.relative_to(root).as_posix())
 
-        env_values = _read_env_without_secrets(root / ".env")
+        env_values = _read_env_without_secrets(_env_path())
         archive.writestr("config/local-settings-without-secrets.json", json.dumps(env_values, indent=2))
         manifest["files"].append("config/local-settings-without-secrets.json")
         archive.writestr("manifest.json", json.dumps(manifest, indent=2))

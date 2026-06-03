@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.runtime_paths import APP_DATA_DIR_ENV
+
 APP_NAME = "FreeRouter"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -169,6 +171,7 @@ class DesktopServerController:
             env["PYTHONUNBUFFERED"] = "1"
             env[DESKTOP_TOKEN_ENV] = self.desktop_token
             env[DESKTOP_PROJECT_ROOT_ENV] = str(self.project_root)
+            env[APP_DATA_DIR_ENV] = str(self.project_root)
             startupinfo = None
             creationflags = 0
             if os.name == "nt":

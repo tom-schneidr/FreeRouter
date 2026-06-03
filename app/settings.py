@@ -3,6 +3,8 @@ from functools import lru_cache
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.runtime_paths import runtime_env_path
+
 
 class Settings(BaseSettings):
     """Environment-driven gateway configuration loaded from .env and environment variables."""
@@ -89,4 +91,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings(_env_file=runtime_env_path())

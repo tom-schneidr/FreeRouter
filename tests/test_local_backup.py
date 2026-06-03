@@ -4,6 +4,7 @@ import json
 import zipfile
 
 import app.local_backup as local_backup
+from app.runtime_paths import APP_DATA_DIR_ENV
 
 
 def test_export_backup_omits_secret_env_values(tmp_path, monkeypatch):
@@ -59,3 +60,16 @@ def test_import_backup_can_overwrite(tmp_path, monkeypatch):
 
     assert restored == [root / "data" / "model_catalog.json"]
     assert (root / "data" / "model_catalog.json").read_text(encoding="utf-8") == "[{}]\n"
+
+
+def test_backup_uses_desktop_app_data_root(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "gateway.sqlite3").write_bytes(b"sqlite")
+    monkeypatch.setenv(APP_DATA_DIR_ENV, str(tmp_path))
+
+    target = local_backup.export_backup()
+
+    assert target.parent == tmp_path / "backups"
+    with zipfile.ZipFile(target) as archive:
+        assert "data/gateway.sqlite3" in set(archive.namelist())

@@ -16,6 +16,7 @@ from app.desktop_runtime import (
 )
 from app.desktop_settings import settings_payload, write_settings
 from app.local_backup import export_backup, import_backup
+from app.runtime_paths import runtime_root
 
 
 def desktop_enabled() -> bool:
@@ -26,7 +27,7 @@ def desktop_project_root() -> Path:
     raw_root = os.environ.get(DESKTOP_PROJECT_ROOT_ENV)
     if raw_root:
         return Path(raw_root)
-    return Path(__file__).resolve().parent.parent
+    return runtime_root()
 
 
 def require_desktop_request(request: Request) -> None:

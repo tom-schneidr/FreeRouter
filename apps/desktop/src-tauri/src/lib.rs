@@ -39,6 +39,7 @@ pub fn run() {
                 .sidecar(SIDECAR_NAME)?
                 .args(["--host", GATEWAY_HOST, "--port", &GATEWAY_PORT.to_string()])
                 .env("FREEROUTER_DESKTOP_TOKEN", &token)
+                .env("FREEROUTER_APP_DATA_DIR", &project_root)
                 .env("FREEROUTER_DESKTOP_PROJECT_ROOT", &project_root)
                 .spawn()?;
             *app.state::<SidecarState>().child.lock().unwrap() = Some(child);
