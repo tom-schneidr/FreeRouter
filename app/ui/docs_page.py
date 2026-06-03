@@ -1,24 +1,10 @@
-from __future__ import annotations
-
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 
+from app.ui.theme import inject_docs_theme
+
 DOCS_THEME_STYLE = """
     <style id="fr-docs-theme">
-      :root {
-        color-scheme: dark;
-        --fr-bg: #07111f;
-        --fr-bg-soft: #0b1424;
-        --fr-surface: #101b2e;
-        --fr-surface-2: #142238;
-        --fr-line: #24354d;
-        --fr-text: #e5edf8;
-        --fr-muted: #91a4bd;
-        --fr-accent: #4f8cff;
-        --fr-ok: #22c55e;
-        --fr-warn: #f59e0b;
-        --fr-danger: #ef4444;
-      }
       html, body {
         margin: 0;
         background: var(--fr-bg);
@@ -246,4 +232,4 @@ def swagger_docs_html(*, openapi_url: str, title: str) -> HTMLResponse:
     html = response.body.decode("utf-8")
     if "fr-docs-theme" not in html:
         html = html.replace("</head>", f"{DOCS_THEME_STYLE}\n</head>", 1)
-    return HTMLResponse(html)
+    return HTMLResponse(inject_docs_theme(html))

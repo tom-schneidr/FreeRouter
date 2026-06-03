@@ -52,7 +52,7 @@ from app.settings import get_settings
 from app.state import StateManager
 from app.stream_route import stream_route_chat
 from app.ui.docs_page import swagger_docs_html
-from app.ui.embed import with_embed_support
+from app.ui.theme import with_web_page
 
 WEB_SEARCH_TOOL = {"type": "web_search_preview"}
 
@@ -211,7 +211,7 @@ def _content_parts_to_text(parts: list[Any]) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
-    return """
+    return with_web_page("""
     <!doctype html>
     <html lang="en">
       <head>
@@ -236,9 +236,9 @@ async def index() -> str:
           nav a:hover { color: var(--text); }
           .nav-spacer { flex: 1; }
           main { max-width: 800px; margin: 4rem auto; padding: 2rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
-          h2 { font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; color: #fff; }
+          h2 { font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; color: var(--text-strong); }
           p { color: var(--text-muted); line-height: 1.6; margin-bottom: 1.5rem; font-size: 0.95rem; }
-          code { background: var(--bg-primary); border: 1px solid var(--border); padding: 0.4rem 0.6rem; border-radius: 6px; font-family: monospace; color: #93c5fd; }
+          code { background: var(--code-bg); border: 1px solid var(--border); padding: 0.4rem 0.6rem; border-radius: 6px; font-family: monospace; color: var(--code-text); }
           .links { display: grid; gap: 0.75rem; }
           .link-card { display: flex; align-items: center; gap: 1rem; padding: 1rem 1.25rem; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; text-decoration: none; color: var(--text); transition: all 0.2s; }
           .link-card:hover { border-color: var(--accent); background: var(--accent-glow); transform: translateY(-1px); }
@@ -271,7 +271,7 @@ async def index() -> str:
         </main>
       </body>
     </html>
-    """
+    """)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -336,12 +336,12 @@ async def desktop_logs_endpoint(request: Request) -> dict[str, Any]:
 
 @app.get("/models", response_class=HTMLResponse)
 async def model_catalog_page() -> str:
-    return with_embed_support(MODEL_CATALOG_HTML)
+    return MODEL_CATALOG_HTML
 
 
 @app.get("/health", response_class=HTMLResponse)
 async def route_health_page() -> str:
-    return with_embed_support(ROUTE_HEALTH_HTML)
+    return ROUTE_HEALTH_HTML
 
 
 @app.get("/v1/gateway/health.json")
@@ -546,7 +546,7 @@ async def _catalog_payload_with_health(
 
 @app.get("/status", response_class=HTMLResponse)
 async def provider_status_page() -> HTMLResponse:
-    return HTMLResponse(with_embed_support(r"""
+    return HTMLResponse(with_web_page(r"""
 <!doctype html>
 <html lang="en">
   <head>
@@ -947,7 +947,7 @@ async def provider_status(request: Request) -> dict[str, Any]:
 
 @app.get("/live", response_class=HTMLResponse)
 async def live_api_page() -> HTMLResponse:
-    return HTMLResponse(with_embed_support(LIVE_API_HTML))
+    return HTMLResponse(LIVE_API_HTML)
 
 
 @app.get("/v1/gateway/live/snapshot")
@@ -1727,7 +1727,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
     )
 
 
-ROUTE_HEALTH_HTML = """
+ROUTE_HEALTH_HTML = with_web_page("""
 <!doctype html>
 <html lang="en">
   <head>
@@ -1810,10 +1810,10 @@ ROUTE_HEALTH_HTML = """
     </script>
   </body>
 </html>
-"""
+""")
 
 
-LIVE_API_HTML = r"""
+LIVE_API_HTML = with_web_page(r"""
 <!doctype html>
 <html lang="en">
   <head>
@@ -2417,10 +2417,10 @@ LIVE_API_HTML = r"""
     </script>
   </body>
 </html>
-"""
+""")
 
 
-MODEL_CATALOG_HTML = """
+MODEL_CATALOG_HTML = with_web_page("""
 <!doctype html>
 <html lang="en">
   <head>
@@ -3025,4 +3025,4 @@ MODEL_CATALOG_HTML = """
     </script>
   </body>
 </html>
-"""
+""")

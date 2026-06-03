@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-DESKTOP_APP_HTML = r"""<!doctype html>
+from app.ui.theme import inject_desktop_shell_theme
+
+_DESKTOP_APP_HTML_RAW = r"""<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
@@ -580,6 +582,14 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         if (!frame) return;
         if (!loadedEmbeds.has(section)) {
           frame.src = path;
+          frame.addEventListener('load', () => {
+            try {
+              frame.contentWindow.postMessage({
+                type: 'freerouter-theme',
+                theme: document.documentElement.getAttribute('data-theme') || 'dark',
+              }, '*');
+            } catch (error) {}
+          }, { once: true });
           loadedEmbeds.add(section);
         }
       }
@@ -886,3 +896,5 @@ DESKTOP_APP_HTML = r"""<!doctype html>
   </body>
 </html>
 """
+
+DESKTOP_APP_HTML = inject_desktop_shell_theme(_DESKTOP_APP_HTML_RAW)

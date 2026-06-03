@@ -69,8 +69,22 @@ def test_docs_page_uses_dark_theme(tmp_path, monkeypatch):
         response = client.get("/docs")
     assert response.status_code == 200
     assert "fr-docs-theme" in response.text
-    assert "#07111f" in response.text
+    assert "fr-theme-tokens-docs" in response.text
+    assert "fr-theme-boot" in response.text
+    assert "data-theme" in response.text
     assert "swagger-ui" in response.text
+
+
+def test_web_pages_include_theme_support(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        for path in ("/", "/chat", "/models", "/health", "/status", "/live", "/app"):
+            response = client.get(path)
+            assert response.status_code == 200
+            assert "fr-theme-boot" in response.text, path
+            assert "data-theme-toggle" in response.text or path == "/app", path
+    with _client(tmp_path, monkeypatch) as client:
+        app_response = client.get("/app")
+    assert "fr-theme-tokens-desktop" in app_response.text
 
 
 def test_gateway_models_update_rejects_invalid_payload(tmp_path, monkeypatch):
