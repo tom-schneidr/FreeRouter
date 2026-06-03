@@ -11,6 +11,7 @@ from typing import Any
 from app.desktop_bridge import DesktopBridge
 from app.desktop_icon import build_icon_image
 from app.desktop_runtime import APP_NAME, DEFAULT_HOST, DEFAULT_PORT, DesktopServerController
+from app.desktop_screen import primary_work_area
 from app.desktop_settings import launcher_host_port
 
 
@@ -27,12 +28,16 @@ class FreeRouterDesktopApp:
         import webview
 
         self._log("Desktop launcher starting.")
+        bounds = primary_work_area()
         self.window = webview.create_window(
             APP_NAME,
             html=self._startup_html(),
-            width=1040,
-            height=760,
-            min_size=(860, 560),
+            x=bounds.x,
+            y=bounds.y,
+            width=bounds.width,
+            height=bounds.height,
+            min_size=(720, 520),
+            maximized=True,
             background_color="#07111f",
             text_select=True,
         )

@@ -27,7 +27,11 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         --shadow: 0 20px 60px rgba(0, 0, 0, .28);
         --font: "Segoe UI", Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       }
-      html, body { height: 100%; margin: 0; }
+      html, body {
+        height: var(--app-height, 100%);
+        max-height: var(--app-height, 100%);
+        margin: 0;
+      }
       body {
         overflow: hidden;
         background: var(--bg);
@@ -69,12 +73,16 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       .app {
         display: grid;
         grid-template-columns: 248px minmax(0, 1fr);
-        height: 100%;
+        height: var(--app-height, 100%);
+        max-height: var(--app-height, 100%);
+        min-height: 0;
       }
       .sidebar {
         display: flex;
         flex-direction: column;
         min-width: 0;
+        min-height: 0;
+        overflow: hidden;
         background: #091321;
         border-right: 1px solid var(--line);
       }
@@ -108,6 +116,10 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         display: grid;
         gap: 4px;
         padding: 12px;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        align-content: start;
       }
       .nav button {
         display: flex;
@@ -139,6 +151,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         margin-top: auto;
         padding: 14px;
         border-top: 1px solid var(--line-soft);
+        flex-shrink: 0;
       }
       .base-url {
         display: grid;
@@ -152,9 +165,11 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       .base-url code { color: #bfdbfe; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .main {
         min-width: 0;
+        min-height: 0;
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
         background: radial-gradient(circle at 76% -10%, rgba(59,130,246,.12), transparent 34%), var(--bg);
+        overflow: hidden;
       }
       .topbar {
         min-width: 0;
@@ -182,11 +197,16 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       .topbar-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
       .content {
         min-width: 0;
-        overflow: auto;
-        padding: 18px;
+        min-height: 0;
+        overflow: hidden;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
       }
-      .section { display: none; max-width: 1480px; margin: 0 auto; }
+      .section { display: none; max-width: none; margin: 0; flex: 1; min-height: 0; overflow: auto; }
       .section.active { display: block; }
+      .section.embed-section.active { display: flex; flex-direction: column; overflow: hidden; }
+      .section:not(.embed-section) { padding: 18px; max-width: 1480px; width: 100%; margin: 0 auto; box-sizing: border-box; }
       .section-header {
         display: flex;
         align-items: flex-end;
@@ -282,14 +302,14 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       .route-item { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 7px; background: rgba(8,17,31,.5); }
       .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
       .qa-note { margin-top: 12px; color: var(--subtle); font-size: 12px; }
-      .embed-section { padding: 0; max-width: none; }
-      .embed-section.active { display: flex; flex-direction: column; min-height: calc(100vh - 62px); }
+      .embed-section { padding: 0; max-width: none; overflow: hidden; }
       .embed-frame {
         flex: 1;
         width: 100%;
-        min-height: calc(100vh - 62px);
+        min-height: 0;
         border: none;
         background: #0a0e1a;
+        display: block;
       }
       @media (max-width: 1180px) {
         .app { grid-template-columns: 74px minmax(0, 1fr); }
@@ -301,16 +321,17 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         .chat-layout { grid-template-columns: 1fr; }
       }
       @media (max-width: 760px) {
-        body { overflow: auto; }
-        .app { display: block; min-height: 100%; }
-        .sidebar { position: sticky; top: 0; z-index: 4; }
+        html, body { overflow: hidden; }
+        .app { display: grid; grid-template-columns: 74px minmax(0, 1fr); height: var(--app-height, 100%); min-height: 0; }
+        .sidebar { position: relative; z-index: 4; min-height: 0; }
         .brand { justify-content: flex-start; padding: 12px; }
         .brand div:last-child { display: block; }
         .nav { display: flex; overflow: auto; padding: 8px; }
         .nav button { width: auto; min-width: 42px; }
-        .main { display: block; }
+        .main { display: grid; min-height: 0; overflow: hidden; }
         .topbar, .section-header { align-items: flex-start; flex-direction: column; }
-        .content { overflow: visible; padding: 12px; }
+        .content { overflow: hidden; padding: 0; min-height: 0; }
+        .section:not(.embed-section) { padding: 12px; }
         .grid.cols-4, .grid.cols-3, .grid.cols-2, .form-grid { grid-template-columns: 1fr; }
       }
     </style>
@@ -472,6 +493,11 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         live: '/live?embed=1',
       };
       const loadedEmbeds = new Set();
+
+      function syncViewportHeight() {
+        const height = window.innerHeight;
+        document.documentElement.style.setProperty('--app-height', `${height}px`);
+      }
 
       function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -818,8 +844,10 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       $('refreshLogs').addEventListener('click', loadLogs);
 
       window.addEventListener('hashchange', () => selectSection((location.hash || '#dashboard').slice(1)));
+      window.addEventListener('resize', syncViewportHeight);
       window.addEventListener('pywebviewready', detectDesktopBridge);
 
+      syncViewportHeight();
       selectSection((location.hash || '#dashboard').slice(1));
       detectDesktopBridge();
       refreshAll();

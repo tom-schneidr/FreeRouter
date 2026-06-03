@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app import desktop_bridge, desktop_runtime
+from app import desktop_bridge, desktop_runtime, desktop_screen
 from app.desktop_api import DESKTOP_PROJECT_ROOT_ENV, DESKTOP_TOKEN_ENV, desktop_capabilities
 from app.desktop_bridge import DesktopBridge
 from app.desktop_runtime import DesktopServerController, build_desktop_launch_command
@@ -159,6 +159,12 @@ def test_bridge_backup_methods_delegate_to_local_backup(monkeypatch, tmp_path):
         "ok": True,
         "restored": [str(restore_path)],
     }
+
+
+def test_primary_work_area_returns_positive_dimensions():
+    bounds = desktop_screen.primary_work_area()
+    assert bounds.width >= 640
+    assert bounds.height >= 480
 
 
 def test_desktop_api_requires_token(monkeypatch, tmp_path):
