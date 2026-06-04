@@ -53,12 +53,17 @@ def test_desktop_app_page_is_served(tmp_path, monkeypatch):
     assert "/app/assets/" in response.text
 
 
-def test_react_app_route_is_served(tmp_path, monkeypatch):
+def test_root_redirects_to_app(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.get("/", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/app"
+
+
+def test_legacy_app_next_route_is_gone(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.get("/app-next", follow_redirects=False)
-    assert response.status_code == 200
-    assert "FreeRouter" in response.text
-    assert "root" in response.text
+    assert response.status_code == 404
 
 
 def test_react_app_missing_build_reports_missing_ui(tmp_path):
@@ -95,14 +100,19 @@ def test_react_dist_path_can_resolve_pyinstaller_bundle(tmp_path, monkeypatch):
 
 def test_embedded_legacy_routes_still_support_desktop_shell(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
-        for path in ("/chat", "/models", "/health", "/status", "/live"):
+        for path in ("/chat", "/status", "/health", "/live"):
             response = client.get(path)
             assert response.status_code == 200
             assert "fr-embed-styles" in response.text
             assert "embed-mode" in response.text
             assert "fr-theme-styles" in response.text
-            assert "data-fr-theme-toggle" in response.text
-            assert "data-theme-preference" in response.text
+
+
+def test_removed_legacy_control_plane_routes_return_not_found(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        for path in ("/models",):
+            response = client.get(path)
+            assert response.status_code == 404
 
 
 def test_docs_page_uses_dark_theme(tmp_path, monkeypatch):

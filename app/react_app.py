@@ -11,7 +11,6 @@ from app.ui.brand import FAVICON_LINK
 
 
 REACT_APP_ROUTE = "/app"
-REACT_APP_COMPAT_ROUTE = "/app-next"
 
 
 def react_dist_path(project_root: Path | None = None) -> Path:
@@ -44,14 +43,6 @@ def mount_react_app(app: FastAPI, *, project_root: Path | None = None) -> None:
 
     @app.get(f"{REACT_APP_ROUTE}/{{path:path}}", include_in_schema=False)
     async def react_app_fallback(path: str, request: Request) -> Response:
-        return _react_index_response(dist, request)
-
-    @app.get(REACT_APP_COMPAT_ROUTE, include_in_schema=False)
-    async def react_app_compat_index(request: Request) -> Response:
-        return _react_index_response(dist, request)
-
-    @app.get(f"{REACT_APP_COMPAT_ROUTE}/{{path:path}}", include_in_schema=False)
-    async def react_app_compat_fallback(path: str, request: Request) -> Response:
         return _react_index_response(dist, request)
 
 

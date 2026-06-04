@@ -9,9 +9,10 @@
   "scripts": {
     "dev": "powershell -ExecutionPolicy Bypass -File scripts/dev.ps1",
     "desktop:dev": "powershell -ExecutionPolicy Bypass -File dev-desktop.ps1",
+    "stop": "powershell -ExecutionPolicy Bypass -File scripts/stop-all-freerouter.ps1",
     "dev:desktop:source": "npm run desktop:dev",
     "dev:web": "npm --workspace @freerouter/ui run dev",
-    "dev:desktop": "npm --workspace @freerouter/desktop run dev",
+    "dev:desktop": "npm run desktop:dev",
     "build:web": "npm --workspace @freerouter/ui run build",
     "icons:sync": "python -m app.desktop_icon --sync-all",
     "build:sidecar": "powershell -ExecutionPolicy Bypass -File scripts/build-sidecar.ps1",

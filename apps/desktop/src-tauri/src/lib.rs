@@ -25,6 +25,7 @@ const DEFAULT_GATEWAY_PORT: u16 = 8000;
 const SIDECAR_RESTART_EXIT_CODE: i32 = 42;
 const DESKTOP_APP_ROUTE: &str = "/app";
 const TRAY_ICON_ID: &str = "main";
+const GATEWAY_PORT_SWEEP: u16 = 20;
 
 struct AppRuntimeState {
     sidecar: Mutex<Option<CommandChild>>,
@@ -275,6 +276,10 @@ fn shutdown_sidecar(app: &AppHandle) {
             let _ = child.kill();
             force_kill_process_tree(pid);
         }
+        #[cfg(windows)]
+        if let Some(job) = state.sidecar_job.lock().unwrap().take() {
+            close_job_handle(job);
+        }
     }
 }
 
@@ -284,7 +289,22 @@ fn shutdown_gateway(app: &AppHandle) {
         .map(|state| state.gateway_port)
         .unwrap_or(DEFAULT_GATEWAY_PORT);
     shutdown_sidecar(app);
-    stop_gateway_listeners(GATEWAY_HOST, gateway_port);
+    kill_dev_backend_process_tree();
+    for offset in 0..=GATEWAY_PORT_SWEEP {
+        stop_gateway_listeners(GATEWAY_HOST, gateway_port.saturating_add(offset));
+    }
+}
+
+fn kill_dev_backend_process_tree() {
+    let Ok(pid_raw) = std::env::var("FREEROUTER_DEV_BACKEND_PID") else {
+        return;
+    };
+    let Ok(pid) = pid_raw.parse::<u32>() else {
+        return;
+    };
+    if pid > 0 {
+        force_kill_process_tree(pid);
+    }
 }
 
 fn quit_application(app: &AppHandle) {
@@ -294,6 +314,9 @@ fn quit_application(app: &AppHandle) {
         }
     }
     remove_tray_icon(app);
+    shutdown_gateway(app);
+    // Brief pause so taskkill / job teardown can finish before the shell exits.
+    thread::sleep(Duration::from_millis(450));
     shutdown_gateway(app);
     app.exit(0);
 }
@@ -413,6 +436,17 @@ fn force_kill_process_tree(pid: u32) {
 fn force_kill_process_tree(_pid: u32) {}
 
 #[cfg(windows)]
+fn close_job_handle(job: isize) {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+
+    if job != 0 {
+        unsafe {
+            let _ = CloseHandle(HANDLE(job as *mut _));
+        }
+    }
+}
+
+#[cfg(windows)]
 fn create_kill_on_close_job(pid: u32) -> Option<isize> {
     use std::mem::size_of;
 
@@ -508,6 +542,10 @@ fn listener_pids_on_port(host: &str, port: u16) -> Vec<u32> {
 }
 
 fn stop_gateway_listeners(host: &str, port: u16) {
+    for pid in listener_pids_on_port(host, port) {
+        force_kill_process_tree(pid);
+    }
+    thread::sleep(Duration::from_millis(120));
     for pid in listener_pids_on_port(host, port) {
         force_kill_process_tree(pid);
     }

@@ -106,26 +106,24 @@ npm run build:desktop  Build the sidecar, React UI, and Tauri desktop bundle</co
         not inside the repository checkout.
       </p>
       <p>
-        During <code>tauri dev</code>, the desktop shell uses the fixed backend port <code>8000</code>
-        because Vite serves the React app and proxies API calls to a known target. Packaged builds use
-        a dynamic backend port and navigate the window directly to the sidecar-served app.
+        During <code>tauri dev</code> (via <code>dev-desktop.ps1</code>), the shell opens
+        <code>http://127.0.0.1:8000/app</code> on a source backend with a built React bundle.
+        Packaged builds use a dynamic backend port and navigate directly to the sidecar-served app.
       </p>
 
-      <h2>Migration Sequence</h2>
-      <ol>
-        <li>Keep the current backend working while adding the React app at <code>/app-next</code>.</li>
-        <li>Move dashboard, models, providers, traffic, settings, backups, logs, and chat into React one surface at a time.</li>
-        <li>Replace legacy Python HTML pages once the React app reaches feature parity.</li>
-        <li>Package the backend as a sidecar and let Tauri control process lifecycle and app data paths.</li>
-        <li>Move runtime state out of the source tree and into platform app data.</li>
-      </ol>
+      <h2>Control Plane</h2>
+      <p>
+        Web and desktop both use the React app at <code>/app</code> (<code>apps/ui</code>). The FastAPI
+        backend serves the built UI from <code>apps/ui/dist</code> and exposes JSON APIs under
+        <code>/v1</code>. Legacy HTML routes such as <code>/chat</code> and <code>/models</code> are
+        removed; OpenAPI docs remain at <code>/docs</code>.
+      </p>
 
       <h2>Current Milestone</h2>
       <p>
-        The desktop shell now uses Tauri with a bundled Python sidecar and serves the same
-        proven desktop control plane at <code>/app-next</code> that the legacy pywebview app used
-        at <code>/app</code>. The React workspace remains available for future UI work, but the
-        packaged desktop experience intentionally keeps feature parity with the original app.
+        Tauri is the desktop shell with a bundled Python sidecar. Development uses
+        <code>npm run dev</code> (Vite + backend) or <code>npm run desktop:dev</code> (Tauri against
+        <code>http://127.0.0.1:8000/app</code>). The pywebview launcher has been retired.
       </p>
     </main>
   </body>

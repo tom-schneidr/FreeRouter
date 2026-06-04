@@ -214,9 +214,12 @@ If another coding agent is integrating with this repository, give it these rules
 
 ```text
 .
+|-- apps/
+|   |-- ui/                     # React control plane (built to apps/ui/dist, served at /app)
+|   `-- desktop/                # Tauri desktop shell
 |-- app/
-|   |-- chat_page.py            # Chat playground HTML template
 |   |-- client.py               # Programmatic client wrapper around router
+|   |-- react_app.py            # Mounts built React UI at /app
 |   |-- endpoint_diagnosis.py   # Catalog diagnosis and reviewable update suggestions
 |   |-- local_backup.py         # Local state export/import CLI
 |   |-- main.py                 # FastAPI app and OpenAI-compatible endpoints
@@ -287,13 +290,11 @@ Point OpenAI-compatible clients at:
 http://localhost:8000/v1
 ```
 
+Open the control plane UI at `http://localhost:8000/app` (or `npm run dev` for Vite on port 5173 with the same `/app` path).
+
 ## Model Ranking
 
-Open the model catalog UI:
-
-```text
-http://127.0.0.1:8000/models
-```
+Open the model catalog in the control plane at `http://127.0.0.1:8000/app#models`, or use the API:
 
 Each enabled model route has a `rank`; lower numbers are attempted first. The route points at a
 provider and model ID, so the gateway can use multiple models on the same platform while still
@@ -353,10 +354,8 @@ POST /v1/gateway/endpoint-diagnosis/apply
 
 ```text
 GET  /
-GET  /chat
-GET  /health
-GET  /models
-GET  /status
+GET  /app
+GET  /docs
 GET  /v1/models
 POST /v1/responses
 GET  /v1/gateway/health.json

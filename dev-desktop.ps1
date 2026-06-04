@@ -7,6 +7,76 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+. (Join-Path $ProjectRoot "scripts\lib\process-utils.ps1")
+
+$script:DevCleanupPort = $null
+$script:DevCleanupProcess = $null
+$script:DevShuttingDown = $false
+$script:DevBackendEnv = @{}
+$script:DevBackendJob = $null
+
+function Invoke-DevCleanup {
+    $script:DevShuttingDown = $true
+    $job = Get-Job -Name "FreeRouterDevBackend" -ErrorAction SilentlyContinue
+    if ($job) {
+        Write-Host "Stopping dev backend supervisor..."
+        Stop-Job -Job $job -ErrorAction SilentlyContinue
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
+    $script:DevBackendJob = $null
+    if ($script:DevCleanupProcess -and -not $script:DevCleanupProcess.HasExited) {
+        Write-Host "Stopping dev backend process tree (PID $($script:DevCleanupProcess.Id))..."
+        Stop-ProcessTree -ProcessId $script:DevCleanupProcess.Id | Out-Null
+    }
+    if ($null -ne $script:DevCleanupPort) {
+        Write-Host "Clearing gateway listeners on ports $($script:DevCleanupPort)-$($script:DevCleanupPort + 20)..."
+        Stop-FreeRouterGatewayPorts -MinPort $script:DevCleanupPort -MaxPort ($script:DevCleanupPort + 20)
+    }
+}
+
+function Start-DevBackendSupervisorJob {
+    param(
+        [int]$Port,
+        [string]$ProjectRoot,
+        [string]$VenvPython,
+        [string]$DesktopToken
+    )
+
+    $script:DevBackendJob = Start-Job -Name "FreeRouterDevBackend" -ScriptBlock {
+        param($Root, $Python, $Port, $Token, $AppDataDir)
+        Set-Location $Root
+        $env:PYTHONUNBUFFERED = "1"
+        $env:FREEROUTER_DESKTOP_TOKEN = $Token
+        $env:FREEROUTER_DESKTOP_PROJECT_ROOT = $Root
+        $env:FREEROUTER_APP_DATA_DIR = $AppDataDir
+        $env:FREEROUTER_DEV_BACKEND = "1"
+
+        while ($true) {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $Python
+            $psi.Arguments = "-m uvicorn app.main:app --host 127.0.0.1 --port $Port"
+            $psi.WorkingDirectory = $Root
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            if (-not $proc) {
+                break
+            }
+            $proc.WaitForExit()
+            if ($proc.ExitCode -ne 42) {
+                break
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    } -ArgumentList $ProjectRoot, $VenvPython, $Port, $DesktopToken, $ProjectRoot
+}
+
+Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Invoke-DevCleanup } | Out-Null
+trap {
+    Invoke-DevCleanup
+    break
+}
 
 function Invoke-Checked {
     param(
@@ -50,33 +120,6 @@ function Start-ChildProcess {
     return $process
 }
 
-function Stop-ProcessTree {
-    param([int]$ProcessId)
-    if ($ProcessId -le 0) {
-        return $false
-    }
-    if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
-        return $false
-    }
-
-    $previousErrorAction = $ErrorActionPreference
-    $ErrorActionPreference = "SilentlyContinue"
-    try {
-        & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null
-    }
-    finally {
-        $ErrorActionPreference = $previousErrorAction
-    }
-    return $true
-}
-
-function Stop-ChildProcess {
-    param([System.Diagnostics.Process]$Process)
-    if ($null -ne $Process -and -not $Process.HasExited) {
-        Stop-ProcessTree -ProcessId $Process.Id
-    }
-}
-
 function Test-FreeRouterHealth {
     param([int]$Port)
 
@@ -90,6 +133,76 @@ function Test-FreeRouterHealth {
         return $false
     }
     return $false
+}
+
+function Test-LivePageIsCurrent {
+    param([int]$Port)
+
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/live?embed=1" -TimeoutSec 3
+        if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 500) {
+            return $false
+        }
+        return ($response.Content -notmatch "<th>Request</th>") -and ($response.Content -notmatch "Upstream usage")
+    }
+    catch {
+        return $false
+    }
+}
+
+function Resolve-DevBackendPort {
+    param([int]$PreferredPort)
+
+    if (Test-PortOpen -Port $PreferredPort) {
+        Write-Host "Freeing 127.0.0.1:$PreferredPort..."
+        Stop-FreeRouterGatewayPorts -MinPort $PreferredPort -MaxPort ($PreferredPort + 20)
+        Start-Sleep -Seconds 2
+    }
+
+    if (Test-FreeRouterHealth -Port $PreferredPort -and (Test-LivePageIsCurrent -Port $PreferredPort)) {
+        Write-Host "Reusing current dev backend on 127.0.0.1:$PreferredPort."
+        return @{
+            Port = $PreferredPort
+            ReuseExisting = $true
+        }
+    }
+
+    if (Test-PortOpen -Port $PreferredPort) {
+        $alternate = Find-FreePort -StartingPort $PreferredPort
+        if (-not $alternate) {
+            throw "127.0.0.1:$PreferredPort is held by an old FreeRouter backend and no free port was found in range. Run scripts\stop-all-freerouter.ps1 as Administrator, then retry."
+        }
+        Write-Host ""
+        Write-Host "WARNING: 127.0.0.1:$PreferredPort is still serving an older bundled backend" -ForegroundColor Yellow
+        Write-Host "         (could not stop it without admin). Using 127.0.0.1:$alternate for this dev session." -ForegroundColor Yellow
+        Write-Host "         To reclaim port ${PreferredPort}: run scripts\stop-all-freerouter.ps1 as Administrator." -ForegroundColor Yellow
+        Write-Host ""
+        return @{
+            Port = $alternate
+            ReuseExisting = $false
+        }
+    }
+
+    return @{
+        Port = $PreferredPort
+        ReuseExisting = $false
+    }
+}
+
+function Wait-ForLivePageCurrent {
+    param(
+        [int]$Port,
+        [int]$Seconds = 35
+    )
+
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-LivePageIsCurrent -Port $Port) {
+            return
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Timed out waiting for current /live HTML on 127.0.0.1:$Port"
 }
 
 function Test-PortOpen {
@@ -142,36 +255,6 @@ function Get-PortOwnerSummary {
         }
     }
     return $details -join ", "
-}
-
-function Stop-PortOwners {
-    param([int]$Port)
-
-    $rows = netstat -ano | Select-String ":$Port" | ForEach-Object {
-        $parts = $_.Line.Trim() -split "\s+"
-        if ($parts.Count -ge 5 -and $parts[1] -like "*:$Port" -and $parts[3] -eq "LISTENING") {
-            $parts[4]
-        }
-    }
-    $owners = $rows | Select-Object -Unique
-    foreach ($owner in $owners) {
-        if (Stop-ProcessTree -ProcessId ([int]$owner)) {
-            Write-Host "Stopped existing listener on 127.0.0.1:$Port (PID $owner)."
-        }
-    }
-}
-
-function Stop-FreeRouterGatewayBackends {
-    param([int]$Port)
-
-    Get-CimInstance Win32_Process | Where-Object {
-        $_.CommandLine -and $_.CommandLine -match "uvicorn.*app\.main:app|freerouterd"
-    } | ForEach-Object {
-        if ($_.CommandLine -like "*$Port*" -or $_.CommandLine -like "*FreeRouter*") {
-            Stop-ProcessTree -ProcessId $_.ProcessId
-        }
-    }
-    Stop-PortOwners -Port $Port
 }
 
 function Find-FreePort {
@@ -234,60 +317,45 @@ if (-not (Test-Path (Join-Path $ProjectRoot "node_modules"))) {
     Invoke-Checked "npm.cmd" @("install")
 }
 
-if (Test-FreeRouterHealth -Port $ApiPort -or (Test-PortOpen -Port $ApiPort)) {
-    if ($ReplaceExisting -or -not $PSBoundParameters.ContainsKey("ApiPort")) {
-        if (Test-FreeRouterHealth -Port $ApiPort) {
-            Write-Host "Stopping existing FreeRouter backend on 127.0.0.1:$ApiPort..."
-        }
-        else {
-            $owners = Get-PortOwnerSummary -Port $ApiPort
-            Write-Host "Port 127.0.0.1:$ApiPort is in use by: $owners. Attempting to free it..."
-        }
-        Stop-FreeRouterGatewayBackends -Port $ApiPort
-        Start-Sleep -Seconds 1
-    }
-    elseif (Test-FreeRouterHealth -Port $ApiPort) {
-        throw "FreeRouter is already running on 127.0.0.1:$ApiPort. Quit it first or rerun with -ReplaceExisting."
-    }
-    else {
-        $owners = Get-PortOwnerSummary -Port $ApiPort
-        throw "Port 127.0.0.1:$ApiPort is already in use by: $owners. Quit those processes or choose a different -ApiPort."
-    }
+$backendPlan = Resolve-DevBackendPort -PreferredPort $ApiPort
+$ApiPort = $backendPlan.Port
+$reuseBackend = [bool]$backendPlan.ReuseExisting
+$script:DevCleanupPort = $ApiPort
+
+$desktopToken = [guid]::NewGuid().ToString()
+$script:DevBackendEnv = @{
+    "PYTHONUNBUFFERED" = "1"
+    "FREEROUTER_DESKTOP_TOKEN" = $desktopToken
+    "FREEROUTER_DESKTOP_PROJECT_ROOT" = $ProjectRoot
+    "FREEROUTER_APP_DATA_DIR" = $ProjectRoot
+    "FREEROUTER_DEV_BACKEND" = "1"
 }
 
 Write-Host "Building React UI from current source..."
 Invoke-Checked "npm.cmd" @("run", "build:web")
 
-$desktopToken = [guid]::NewGuid().ToString()
-$backendEnv = @{
-    "PYTHONUNBUFFERED" = "1"
-    "FREEROUTER_DESKTOP_TOKEN" = $desktopToken
-    "FREEROUTER_DESKTOP_PROJECT_ROOT" = $ProjectRoot
-    "FREEROUTER_APP_DATA_DIR" = $ProjectRoot
-}
 $backendProcess = $null
 
 try {
-    Write-Host "Starting source backend on http://127.0.0.1:$ApiPort/v1 with reload enabled..."
-    $backendProcess = Start-ChildProcess `
-        -FilePath $VenvPython `
-        -Arguments @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$ApiPort", "--reload") `
-        -WorkingDirectory $ProjectRoot `
-        -Environment $backendEnv
+    if (-not $reuseBackend) {
+        Write-Host "Starting source backend on http://127.0.0.1:$ApiPort/v1 (auto-restart enabled)..."
+        Start-DevBackendSupervisorJob -Port $ApiPort -ProjectRoot $ProjectRoot -VenvPython $VenvPython -DesktopToken $desktopToken
 
-    Wait-ForUrl -Url "http://127.0.0.1:$ApiPort/v1/gateway/health.json"
+        Wait-ForUrl -Url "http://127.0.0.1:$ApiPort/v1/gateway/health.json"
+        Wait-ForLivePageCurrent -Port $ApiPort
+    }
 
     $env:FREEROUTER_DEV_BACKEND = "1"
     $env:FREEROUTER_DESKTOP_TOKEN = $desktopToken
     $env:GATEWAY_PORT = "$ApiPort"
-    Write-Host "Launching Tauri desktop shell against the source backend..."
+    Write-Host "Desktop will use dev backend at http://127.0.0.1:$ApiPort/app"
+    Write-Host 'Launching Tauri desktop shell (close window hides to tray; tray Quit stops the backend)...'
     Invoke-Checked "npm.cmd" @("--workspace", "@freerouter/desktop", "run", "dev")
 }
 finally {
-    Write-Host "Stopping FreeRouter dev backend on 127.0.0.1:$ApiPort..."
-    Stop-ChildProcess $backendProcess
-    Stop-FreeRouterGatewayBackends -Port $ApiPort
+    Invoke-DevCleanup
     Remove-Item Env:\FREEROUTER_DEV_BACKEND -ErrorAction SilentlyContinue
+    Remove-Item Env:\FREEROUTER_DEV_BACKEND_PID -ErrorAction SilentlyContinue
     Remove-Item Env:\FREEROUTER_DESKTOP_TOKEN -ErrorAction SilentlyContinue
     Remove-Item Env:\GATEWAY_PORT -ErrorAction SilentlyContinue
 }

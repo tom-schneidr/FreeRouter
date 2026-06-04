@@ -101,7 +101,7 @@ try {
     $env:FREEROUTER_API_TARGET = "http://127.0.0.1:$ApiPort"
     Write-Host ""
     Write-Host "FreeRouter development workspace is running."
-    Write-Host "  App: http://127.0.0.1:$WebPort/app-next/"
+    Write-Host "  App: http://127.0.0.1:$WebPort/app/"
     Write-Host "  API: http://127.0.0.1:$ApiPort/v1"
     Write-Host ""
     Write-Host "Starting React UI. Press Ctrl+C to stop frontend and backend."

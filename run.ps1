@@ -151,5 +151,5 @@ if (-not $NoReload) {
     $uvicornArgs += "--reload"
 }
 
-Write-Host "Starting FreeRouter at http://${HostName}:$Port/v1"
+Write-Host "Starting FreeRouter at http://${HostName}:$Port/app (API: /v1)"
 & $VenvPython -m uvicorn @uvicornArgs
