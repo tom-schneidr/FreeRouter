@@ -163,13 +163,19 @@ button:hover {
   min-height: 40px;
   border-color: transparent;
   background: transparent;
-  color: var(--muted, #91a4bd);
+  color: var(--nav-fg, var(--muted, #91a4bd));
+}
+
+.nav-list button:hover {
+  color: var(--nav-hover-fg, var(--text));
+  background: var(--nav-hover-bg, var(--neutral-bg));
+  border-color: transparent;
 }
 
 .nav-list button.active {
-  color: var(--on-accent, #ffffff);
-  background: var(--accent-panel, rgba(79, 140, 255, 0.16));
-  border-color: var(--accent-border, rgba(79, 140, 255, 0.28));
+  color: var(--nav-active-fg, var(--text));
+  background: var(--nav-active-bg, var(--accent-panel, rgba(79, 140, 255, 0.16)));
+  border-color: var(--nav-active-border, var(--accent-border, rgba(79, 140, 255, 0.28)));
 }
 
 .main {

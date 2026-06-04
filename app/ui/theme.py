@@ -86,6 +86,12 @@ THEME_HEAD_FRAGMENT = f"""
         --on-accent: #ffffff;
         --input-bg: #08111f;
         --sidebar-bg: #091321;
+        --nav-fg: #91a4bd;
+        --nav-hover-fg: #e5edf8;
+        --nav-hover-bg: rgba(148, 163, 184, 0.08);
+        --nav-active-fg: #f8fafc;
+        --nav-active-bg: rgba(79, 140, 255, 0.16);
+        --nav-active-border: rgba(79, 140, 255, 0.28);
         --table-head-bg: rgba(15, 23, 42, 0.75);
         --table-head-solid: #0d1728;
         --table-row-hover: rgba(59, 130, 246, 0.08);
@@ -163,7 +169,13 @@ THEME_HEAD_FRAGMENT = f"""
         --link-strong: #1e40af;
         --on-accent: #ffffff;
         --input-bg: #ffffff;
-        --sidebar-bg: #f2f6fb;
+        --sidebar-bg: #ffffff;
+        --nav-fg: #142033;
+        --nav-hover-fg: #142033;
+        --nav-hover-bg: #edf3fa;
+        --nav-active-fg: #1e40af;
+        --nav-active-bg: rgba(37, 99, 235, 0.14);
+        --nav-active-border: rgba(37, 99, 235, 0.35);
         --table-head-bg: #edf3fa;
         --table-head-solid: #edf3fa;
         --table-row-hover: rgba(37, 99, 235, 0.08);

@@ -135,10 +135,18 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         padding: 0 10px;
         border-color: transparent;
         background: transparent;
-        color: var(--muted);
+        color: var(--nav-fg, var(--muted));
       }
-      .nav button:hover { color: var(--text); background: var(--neutral-bg); }
-      .nav button.active { color: var(--on-accent); background: var(--accent-panel); border-color: var(--accent-border); }
+      .nav button:hover {
+        color: var(--nav-hover-fg, var(--text));
+        background: var(--nav-hover-bg, var(--neutral-bg));
+        border-color: transparent;
+      }
+      .nav button.active {
+        color: var(--nav-active-fg, var(--text));
+        background: var(--nav-active-bg, var(--accent-panel));
+        border-color: var(--nav-active-border, var(--accent-border));
+      }
       .nav-icon {
         width: 18px;
         height: 18px;
