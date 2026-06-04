@@ -1121,7 +1121,6 @@ async def provider_status_page() -> HTMLResponse:
         const provider = providers.find((item) => item.name === model.provider_name);
         return `
                 ${stat('Route ID', model.route_id)}
-                ${stat('Model priority (rank)', model.rank ?? 'Unknown')}
                 ${stat('Enabled', model.enabled ? 'Yes' : 'No')}
                 ${stat('Context window', model.context_window ? fmt(model.context_window) : 'Unknown')}
                 ${stat('Prompt tokens', fmt(usage.prompt_tokens || 0))}

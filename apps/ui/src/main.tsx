@@ -80,17 +80,20 @@ const EMBED_SECTIONS: Record<string, string> = {
   docs: "/docs?embed=1&v=2",
 };
 
-const NAV_ITEMS = [
+const PRIMARY_NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "chat", label: "Chat", icon: MessageSquareText },
   { id: "models", label: "Models", icon: Bot },
   { id: "usage", label: "Usage", icon: BarChart3 },
   { id: "health", label: "Route Health", icon: HeartPulse },
   { id: "live", label: "Live Traffic", icon: Activity },
-  { id: "settings", label: "Settings", icon: Settings },
   { id: "backups", label: "Backups", icon: Database },
   { id: "logs", label: "Logs", icon: ScrollText },
 ] as const;
+
+const SETTINGS_NAV_ITEM = { id: "settings", label: "Settings", icon: Settings } as const;
+
+const NAV_ITEMS = [...PRIMARY_NAV_ITEMS, SETTINGS_NAV_ITEM] as const;
 
 type SectionId = (typeof NAV_ITEMS)[number]["id"] | "docs";
 
@@ -214,8 +217,8 @@ function FreeRouterShell() {
           <img className="brand-logo" src={brandLogo} alt="FreeRouter" />
           <span className="brand-subtitle">Local AI gateway</span>
         </div>
-        <nav className="nav-list">
-          {NAV_ITEMS.map((item) => (
+        <nav className="nav-list" aria-label="Primary navigation">
+          {PRIMARY_NAV_ITEMS.map((item) => (
             <button
               key={item.id}
               className={activeSection === item.id ? "active" : ""}
@@ -227,13 +230,25 @@ function FreeRouterShell() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-footer">
-          <div className="base-url">
-            <label>OpenAI base URL</label>
-            <code>{baseUrl}</code>
-            <button type="button" onClick={() => copyText(baseUrl)}>
-              Copy URL
+        <div className="sidebar-bottom">
+          <nav className="nav-list nav-list-settings" aria-label="Settings">
+            <button
+              className={activeSection === SETTINGS_NAV_ITEM.id ? "active" : ""}
+              type="button"
+              onClick={() => selectSection(SETTINGS_NAV_ITEM.id)}
+            >
+              <SETTINGS_NAV_ITEM.icon size={18} />
+              <span className="nav-label">{SETTINGS_NAV_ITEM.label}</span>
             </button>
+          </nav>
+          <div className="sidebar-footer">
+            <div className="base-url">
+              <label>OpenAI base URL</label>
+              <code>{baseUrl}</code>
+              <button type="button" onClick={() => copyText(baseUrl)}>
+                Copy URL
+              </button>
+            </div>
           </div>
         </div>
       </aside>

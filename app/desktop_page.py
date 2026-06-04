@@ -119,11 +119,22 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       .nav {
         display: grid;
         gap: 4px;
+        align-content: start;
+      }
+      .nav.nav-primary {
         padding: 12px;
         flex: 1;
         min-height: 0;
         overflow-y: auto;
-        align-content: start;
+      }
+      .sidebar-bottom {
+        flex: 0 0 auto;
+        margin-top: auto;
+      }
+      .nav.nav-settings {
+        padding: 8px 12px 0;
+        border-top: 1px solid var(--line-soft);
+        flex: 0 0 auto;
       }
       .nav button {
         display: flex;
@@ -160,7 +171,6 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         flex: 0 0 auto;
       }
       .sidebar-footer {
-        margin-top: auto;
         padding: 14px;
         border-top: 1px solid var(--line-soft);
         flex-shrink: 0;
@@ -358,22 +368,26 @@ DESKTOP_APP_HTML = r"""<!doctype html>
           <img class="brand-logo" src="/brand/logo.png" alt="FreeRouter">
           <span class="brand-subtitle">Local AI gateway</span>
         </div>
-        <nav class="nav" aria-label="App sections">
+        <nav class="nav nav-primary" aria-label="App sections">
           <button data-section="dashboard" class="active"><span class="nav-icon">D</span><span class="nav-label">Dashboard</span></button>
           <button data-section="chat"><span class="nav-icon">C</span><span class="nav-label">Chat</span></button>
           <button data-section="models"><span class="nav-icon">M</span><span class="nav-label">Models</span></button>
           <button data-section="usage"><span class="nav-icon">U</span><span class="nav-label">Usage</span></button>
           <button data-section="health"><span class="nav-icon">H</span><span class="nav-label">Route Health</span></button>
           <button data-section="live"><span class="nav-icon">L</span><span class="nav-label">Live Traffic</span></button>
-          <button data-section="settings"><span class="nav-icon">S</span><span class="nav-label">Settings</span></button>
           <button data-section="backups"><span class="nav-icon">B</span><span class="nav-label">Backups</span></button>
           <button data-section="logs"><span class="nav-icon">G</span><span class="nav-label">Logs</span></button>
         </nav>
-        <div class="sidebar-footer">
-          <div class="base-url">
-            <label>OpenAI base URL</label>
-            <code id="baseUrl">http://127.0.0.1:8000/v1</code>
-            <button id="copyBaseUrl" type="button">Copy URL</button>
+        <div class="sidebar-bottom">
+          <nav class="nav nav-settings" aria-label="Settings">
+            <button data-section="settings"><span class="nav-icon">S</span><span class="nav-label">Settings</span></button>
+          </nav>
+          <div class="sidebar-footer">
+            <div class="base-url">
+              <label>OpenAI base URL</label>
+              <code id="baseUrl">http://127.0.0.1:8000/v1</code>
+              <button id="copyBaseUrl" type="button">Copy URL</button>
+            </div>
           </div>
         </div>
       </aside>

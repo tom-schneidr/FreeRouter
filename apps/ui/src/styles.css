@@ -155,7 +155,18 @@ button:hover {
   align-content: start;
 }
 
-.nav-list button {
+.sidebar-bottom {
+  flex: 0 0 auto;
+  margin-top: auto;
+}
+
+.nav-list-settings {
+  padding: 8px 12px 0;
+  border-top: 1px solid var(--line-soft, rgba(148, 163, 184, 0.16));
+}
+
+.nav-list button,
+.nav-list-settings button {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -166,13 +177,15 @@ button:hover {
   color: var(--nav-fg, var(--muted, #91a4bd));
 }
 
-.nav-list button:hover {
+.nav-list button:hover,
+.nav-list-settings button:hover {
   color: var(--nav-hover-fg, var(--text));
   background: var(--nav-hover-bg, var(--neutral-bg));
   border-color: transparent;
 }
 
-.nav-list button.active {
+.nav-list button.active,
+.nav-list-settings button.active {
   color: var(--nav-active-fg, var(--text));
   background: var(--nav-active-bg, var(--accent-panel, rgba(79, 140, 255, 0.16)));
   border-color: var(--nav-active-border, var(--accent-border, rgba(79, 140, 255, 0.28)));
