@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -11,6 +12,7 @@ from app.main import (
     app,
 )
 from app.request_limiter import GatewayRequestLimiter
+from app.react_app import react_dist_path
 from app.settings import get_settings
 
 
@@ -25,6 +27,7 @@ def _client(tmp_path, monkeypatch) -> TestClient:
         "GEMINI_API_KEY": "",
         "NVIDIA_API_KEY": "",
         "OPENROUTER_API_KEY": "",
+        "SAMBANOVA_API_KEY": "",
     }
     for key, value in settings.items():
         monkeypatch.setenv(key, value)
@@ -46,22 +49,60 @@ def test_desktop_app_page_is_served(tmp_path, monkeypatch):
         response = client.get("/app")
     assert response.status_code == 200
     assert "FreeRouter" in response.text
-    assert "section-dashboard" in response.text
-    assert "frame-chat" in response.text
-    assert "frame-models" in response.text
-    assert "frame-usage" in response.text
-    assert "frame-live" in response.text
-    assert "frame-docs" in response.text
-    assert "Desktop app required" in response.text
+    assert "root" in response.text
+    assert "/app/assets/" in response.text
 
 
-def test_classic_pages_include_embed_support(tmp_path, monkeypatch):
+def test_react_app_route_is_served(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.get("/app-next", follow_redirects=False)
+    assert response.status_code == 200
+    assert "FreeRouter" in response.text
+    assert "root" in response.text
+
+
+def test_react_app_missing_build_reports_missing_ui(tmp_path):
+    from starlette.requests import Request
+
+    from app.react_app import _react_index_response
+
+    missing_dist = tmp_path / "missing-ui-dist"
+    request = Request(
+        {
+            "type": "http",
+            "path": "/app",
+            "query_string": b"desktop_token=token",
+            "headers": [],
+            "method": "GET",
+        }
+    )
+    response = _react_index_response(missing_dist, request)
+
+    assert response.status_code == 503
+    assert "FreeRouter UI build missing" in response.body.decode("utf-8")
+
+
+def test_react_dist_path_can_resolve_pyinstaller_bundle(tmp_path, monkeypatch):
+    bundled_dist = tmp_path / "apps" / "ui" / "dist"
+    bundled_dist.mkdir(parents=True)
+    (bundled_dist / "index.html").write_text("<div id=\"root\"></div>", encoding="utf-8")
+
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
+
+    assert react_dist_path(Path("missing-source-root")) == bundled_dist
+
+
+def test_embedded_legacy_routes_still_support_desktop_shell(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         for path in ("/chat", "/models", "/health", "/status", "/live"):
             response = client.get(path)
             assert response.status_code == 200
             assert "fr-embed-styles" in response.text
             assert "embed-mode" in response.text
+            assert "fr-theme-styles" in response.text
+            assert "data-fr-theme-toggle" in response.text
+            assert "data-theme-preference" in response.text
 
 
 def test_docs_page_uses_dark_theme(tmp_path, monkeypatch):
@@ -69,7 +110,16 @@ def test_docs_page_uses_dark_theme(tmp_path, monkeypatch):
         response = client.get("/docs")
     assert response.status_code == 200
     assert "fr-docs-theme" in response.text
+    assert "fr-theme-styles" in response.text
+    assert "fr-theme-boot" in response.text
+    assert "dataset.themePreference" in response.text
+    assert '<button class="fr-theme-toggle"' not in response.text
+    assert '<div class="fr-theme-floating"' not in response.text
+    assert ".fr-theme-floating," in response.text
+    assert "display: none !important" in response.text
+    assert "fr-theme-segmented" not in response.text
     assert "#07111f" in response.text
+    assert "#f6f8fb" in response.text
     assert "swagger-ui" in response.text
 
 

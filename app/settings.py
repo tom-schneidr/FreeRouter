@@ -3,6 +3,8 @@ from functools import lru_cache
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.runtime_paths import runtime_env_path
+
 
 class Settings(BaseSettings):
     """Environment-driven gateway configuration loaded from .env and environment variables."""
@@ -12,6 +14,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     nvidia_api_key: str | None = None
     openrouter_api_key: str | None = None
+    sambanova_api_key: str | None = None
 
     database_path: str = "./data/gateway.sqlite3"
     model_catalog_path: str = "./data/model_catalog.json"
@@ -89,4 +92,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings(_env_file=runtime_env_path())

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,13 @@ from app import desktop_bridge, desktop_runtime, desktop_screen
 from app.desktop_api import DESKTOP_PROJECT_ROOT_ENV, DESKTOP_TOKEN_ENV, desktop_capabilities
 from app.desktop_bridge import DesktopBridge
 from app.desktop_runtime import DesktopServerController, build_desktop_launch_command
-from app.desktop_settings import MASKED_SECRET, launcher_host_port, settings_payload, write_settings
+from app.desktop_settings import (
+    MASKED_SECRET,
+    launcher_host_port,
+    migrate_settings_from_legacy_env,
+    settings_payload,
+    write_settings,
+)
 
 
 def test_desktop_settings_mask_secrets_and_preserve_existing_values(tmp_path):
@@ -55,6 +62,40 @@ def test_desktop_settings_append_missing_known_keys(tmp_path):
     assert "DATABASE_PATH=./data/test.sqlite3" in written
 
 
+def test_desktop_settings_migrate_legacy_env_when_provider_keys_are_missing(tmp_path):
+    app_data = tmp_path / "app-data"
+    legacy = tmp_path / "project" / ".env"
+    legacy.parent.mkdir()
+    legacy.write_text(
+        "GROQ_API_KEY=secret\nREQUEST_TIMEOUT_SECONDS=15\nUNKNOWN=value\n",
+        encoding="utf-8",
+    )
+
+    migrated = migrate_settings_from_legacy_env(app_data, [legacy])
+
+    written = (app_data / ".env").read_text(encoding="utf-8")
+    assert migrated is True
+    assert "GROQ_API_KEY=secret" in written
+    assert "REQUEST_TIMEOUT_SECONDS=15" in written
+    assert "UNKNOWN=value" not in written
+
+
+def test_desktop_settings_migration_does_not_overwrite_existing_provider_keys(tmp_path):
+    app_data = tmp_path / "app-data"
+    app_data.mkdir()
+    (app_data / ".env").write_text("GROQ_API_KEY=existing\n", encoding="utf-8")
+    legacy = tmp_path / "project.env"
+    legacy.write_text("GROQ_API_KEY=legacy\nOPENROUTER_API_KEY=legacy-openrouter\n", encoding="utf-8")
+
+    migrated = migrate_settings_from_legacy_env(app_data, [legacy])
+
+    written = (app_data / ".env").read_text(encoding="utf-8")
+    assert migrated is True
+    assert "GROQ_API_KEY=existing" in written
+    assert "GROQ_API_KEY=legacy" not in written
+    assert "OPENROUTER_API_KEY=legacy-openrouter" in written
+
+
 def test_desktop_settings_validate_numeric_values(tmp_path):
     with pytest.raises(ValueError):
         write_settings(tmp_path, {"GATEWAY_PORT": "0"})
@@ -83,6 +124,22 @@ def test_desktop_launch_command_targets_pythonw(tmp_path):
     assert command.arguments == "-m app.desktop_app"
     assert command.working_directory == str(tmp_path)
     assert command.icon_path == str(icon)
+
+
+def test_tauri_config_points_at_canonical_react_app():
+    config_path = Path("apps/desktop/src-tauri/tauri.conf.json")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert config["build"]["devUrl"] == "http://127.0.0.1:8000/app"
+    assert config["build"]["frontendDist"] == "../../ui/dist"
+    assert "../../../dist-sidecar/freerouterd" in config["bundle"]["externalBin"]
+
+
+def test_sidecar_build_packages_react_dist_assets():
+    script = Path("scripts/build-sidecar.ps1").read_text(encoding="utf-8")
+
+    assert "$ReactDist = Join-Path $ProjectRoot \"apps\\ui\\dist\"" in script
+    assert "--add-data \"$ReactDist;apps\\ui\\dist\"" in script
 
 
 def test_controller_falls_back_when_configured_port_is_busy(monkeypatch, tmp_path):

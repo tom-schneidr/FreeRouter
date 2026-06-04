@@ -13,6 +13,7 @@ from app.desktop_icon import build_icon_image
 from app.desktop_runtime import APP_NAME, DEFAULT_HOST, DEFAULT_PORT, DesktopServerController
 from app.desktop_screen import primary_work_area
 from app.desktop_settings import launcher_host_port
+from app.ui.brand import inline_icon_html
 
 
 class FreeRouterDesktopApp:
@@ -181,6 +182,7 @@ class FreeRouterDesktopApp:
   </head>
   <body>
     <main>
+      {inline_icon_html(size=56)}
       <h1>Starting FreeRouter</h1>
       <p>Opening the local gateway and desktop controls...</p>
       <div class="bar" aria-hidden="true"></div>
@@ -205,6 +207,7 @@ class FreeRouterDesktopApp:
   </head>
   <body>
     <main>
+      {inline_icon_html(size=56)}
       <h1>FreeRouter could not start</h1>
       <p>{message}</p>
       <p>Free <code>{self.controller.host}:{self.controller.port}</code> or update <code>GATEWAY_PORT</code> in <code>.env</code>, then reopen FreeRouter.</p>

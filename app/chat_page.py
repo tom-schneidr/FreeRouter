@@ -1,8 +1,9 @@
 """Chat page HTML served at /chat."""
 
+from app.ui.brand import inject_legacy_nav_branding
 from app.ui.embed import with_embed_support
 
-CHAT_HTML = with_embed_support(r"""<!doctype html>
+CHAT_HTML = inject_legacy_nav_branding(with_embed_support(r"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -31,7 +32,7 @@ CHAT_HTML = with_embed_support(r"""<!doctype html>
     nav a:hover { color: var(--text); }
     .nav-spacer { flex: 1; }
     .model-badge { font-size: 0.75rem; padding: 0.25rem 0.6rem; border-radius: 999px;
-      background: var(--accent-glow); border: 1px solid var(--accent); color: #93c5fd; }
+      background: var(--accent-glow); border: 1px solid var(--accent); color: var(--link); }
 
     /* === LAYOUT === */
     .app { display: flex; flex: 1; overflow: hidden; }
@@ -62,12 +63,12 @@ CHAT_HTML = with_embed_support(r"""<!doctype html>
     .msg.assistant code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.85em; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 0.35rem; padding: 0.1rem 0.3rem; }
     .msg.assistant pre code { background: transparent; border: none; padding: 0; }
     .msg.assistant blockquote { border-left: 3px solid var(--accent); padding-left: 0.75rem; color: var(--text-muted); }
-    .msg.assistant a { color: #93c5fd; }
+    .msg.assistant a { color: var(--link); }
     .msg.assistant .md-table-wrap { overflow-x: auto; max-width: 100%; margin: 0.5rem 0; -webkit-overflow-scrolling: touch; }
     .msg.assistant table.md-table { border-collapse: collapse; font-size: 0.9em; width: max-content; max-width: 100%; }
     .msg.assistant table.md-table th,
     .msg.assistant table.md-table td { border: 1px solid var(--border); padding: 0.4rem 0.55rem; vertical-align: top; }
-    .msg.assistant table.md-table th { background: rgba(30, 41, 59, 0.65); font-weight: 600; color: var(--text); }
+    .msg.assistant table.md-table th { background: var(--table-head-bg); font-weight: 600; color: var(--text); }
     .msg-meta { font-size: 0.72rem; color: var(--text-muted); margin-top: 0.4rem; }
     .msg.assistant .msg-meta { color: var(--purple); }
     .msg.system-error { align-self: center; background: rgba(239,68,68,0.1); border: 1px solid var(--red);
@@ -105,7 +106,7 @@ CHAT_HTML = with_embed_support(r"""<!doctype html>
       display: flex; justify-content: space-between; }
     .route-group-header .req-id { color: var(--purple); font-weight: 500; }
     .route-event { padding: 0.5rem 0.85rem; font-size: 0.78rem; display: flex; align-items: center;
-      gap: 0.5rem; border-bottom: 1px solid rgba(45,58,79,0.5); }
+      gap: 0.5rem; border-bottom: 1px solid var(--line-soft, var(--border)); }
     .route-event.flagged { margin: 0.35rem; border: 1px solid rgba(245,158,11,0.45); border-radius: 10px;
       background: linear-gradient(135deg, rgba(245,158,11,0.16), rgba(167,139,250,0.08)); }
     .route-event:last-child { border-bottom: none; }
@@ -116,19 +117,19 @@ CHAT_HTML = with_embed_support(r"""<!doctype html>
     .icon.ok { background: rgba(34,197,94,0.2); color: var(--green); border: 1px solid var(--green); }
     .icon.fail { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid var(--red); }
     .icon.skip { background: rgba(245,158,11,0.15); color: var(--amber); border: 1px solid var(--amber); }
-    .icon.flagged-skip { background: rgba(245,158,11,0.22); color: #fcd34d; border: 1px solid var(--amber); }
-    .icon.flagged { background: rgba(245,158,11,0.25); color: #fcd34d; border: 1px solid var(--amber); }
+    .icon.flagged-skip { background: var(--warning-bg); color: var(--warning-text); border: 1px solid var(--amber); }
+    .icon.flagged { background: var(--warning-bg); color: var(--warning-text); border: 1px solid var(--amber); }
     .route-event .info { flex: 1; min-width: 0; }
     .route-event .provider-name { font-weight: 600; color: var(--text); }
     .route-event .model-name { color: var(--text-muted); font-size: 0.72rem; display: block;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .route-event .reason { color: var(--text-muted); font-size: 0.72rem; margin-left: auto; flex-shrink: 0; }
     .route-event .duration { color: var(--text-muted); font-size: 0.68rem; margin-left: 0.5rem; }
-    .route-disable { border: 1px solid rgba(239,68,68,0.35); border-radius: 999px; background: rgba(239,68,68,0.1);
-      color: #fecaca; padding: 0.2rem 0.45rem; font: inherit; font-size: 0.68rem; cursor: pointer; flex-shrink: 0; }
-    .route-disable:hover { background: rgba(239,68,68,0.18); }
-    .route-disable.enable { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.12); color: #bbf7d0; }
-    .route-disable.enable:hover { background: rgba(34,197,94,0.2); }
+    .route-disable { border: 1px solid var(--danger-border); border-radius: 999px; background: var(--danger-bg);
+      color: var(--danger-text); padding: 0.2rem 0.45rem; font: inherit; font-size: 0.68rem; cursor: pointer; flex-shrink: 0; }
+    .route-disable:hover { background: var(--danger-bg); }
+    .route-disable.enable { border-color: var(--success-border); background: var(--success-bg); color: var(--success-text); }
+    .route-disable.enable:hover { background: var(--success-bg); }
 
     .empty-state { text-align: center; color: var(--text-muted); padding: 3rem 1rem; font-size: 0.85rem; }
     .empty-state .icon-lg { font-size: 2.5rem; margin-bottom: 0.5rem; display: block; }
@@ -659,4 +660,4 @@ inputEl.addEventListener('keydown', (e) => {
 </script>
 </body>
 </html>
-""")
+"""))

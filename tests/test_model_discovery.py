@@ -154,6 +154,35 @@ def test_catalog_payload_tags_explicit_web_search_capability():
     assert routes[0].tags == ["text", "tool-use", "web-search"]
 
 
+def test_sambanova_catalog_payload_can_auto_discover_zero_priced_chat_models():
+    provider = FakeProvider("sambanova", base_url="https://api.sambanova.ai/v1")
+    routes = routes_from_payload(
+        provider,
+        {
+            "data": [
+                {
+                    "id": "Llama-Free-Instruct",
+                    "name": "Llama Free Instruct",
+                    "object": "model",
+                    "context_length": 131072,
+                    "pricing": {"prompt": "0", "completion": "0"},
+                },
+                {
+                    "id": "DeepSeek-Paid",
+                    "name": "DeepSeek Paid",
+                    "object": "model",
+                    "context_length": 32768,
+                    "pricing": {"prompt": "0.00000300", "completion": "0.00000450"},
+                },
+            ]
+        },
+    )
+
+    assert [route.model_id for route in routes] == ["Llama-Free-Instruct"]
+    assert routes[0].provider_name == "sambanova"
+    assert routes[0].context_window == 131072
+
+
 def test_catalog_payload_does_not_treat_generic_tools_as_web_search():
     provider = FakeProvider("openrouter")
     routes = routes_from_payload(

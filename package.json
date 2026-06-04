@@ -1,0 +1,28 @@
+{
+  "name": "freerouter-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/ui",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "dev": "powershell -ExecutionPolicy Bypass -File scripts/dev.ps1",
+    "desktop:dev": "powershell -ExecutionPolicy Bypass -File dev-desktop.ps1",
+    "dev:desktop:source": "npm run desktop:dev",
+    "dev:web": "npm --workspace @freerouter/ui run dev",
+    "dev:desktop": "npm --workspace @freerouter/desktop run dev",
+    "build:web": "npm --workspace @freerouter/ui run build",
+    "icons:sync": "python -m app.desktop_icon --sync-all",
+    "build:sidecar": "powershell -ExecutionPolicy Bypass -File scripts/build-sidecar.ps1",
+    "build:desktop": "npm run build:sidecar && npm --workspace @freerouter/desktop run build",
+    "desktop:rebuild": "powershell -ExecutionPolicy Bypass -File rebuild-desktop.ps1",
+    "rebuild:desktop": "npm run desktop:rebuild",
+    "check:desktop": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "typecheck:web": "npm --workspace @freerouter/ui run typecheck",
+    "test:web": "npm --workspace @freerouter/ui run test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

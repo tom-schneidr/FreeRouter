@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FreeRouter Architecture Roadmap</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #07111f;
+        --surface: #101b2e;
+        --surface-2: #142238;
+        --line: #24354d;
+        --text: #e5edf8;
+        --muted: #91a4bd;
+        --accent: #4f8cff;
+        --ok: #22c55e;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: radial-gradient(circle at 76% -10%, rgba(79,140,255,.16), transparent 34%), var(--bg);
+        color: var(--text);
+        font: 15px/1.6 "Segoe UI", Inter, system-ui, sans-serif;
+      }
+      main { width: min(1040px, calc(100vw - 32px)); margin: 0 auto; padding: 42px 0 64px; }
+      h1, h2, p { margin: 0; }
+      h1 { font-size: clamp(2rem, 4vw, 3.8rem); line-height: 1.02; letter-spacing: 0; }
+      h2 { margin-top: 30px; font-size: 1.15rem; }
+      p { color: var(--muted); margin-top: 10px; }
+      .lede { max-width: 760px; font-size: 1.05rem; }
+      .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 24px; }
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(16, 27, 46, .9);
+        padding: 18px;
+        min-width: 0;
+      }
+      .panel strong { display: block; color: var(--text); }
+      .panel span { display: block; color: var(--muted); margin-top: 6px; }
+      code, pre {
+        font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+        color: #c7d2fe;
+      }
+      pre {
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #050b15;
+        padding: 16px;
+      }
+      ol { margin: 12px 0 0; padding-left: 1.35rem; color: var(--muted); }
+      li + li { margin-top: 8px; }
+      .status { display: inline-flex; gap: 8px; align-items: center; margin-top: 18px; color: #bbf7d0; }
+      .status::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--ok); }
+      @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>FreeRouter Architecture Roadmap</h1>
+      <p class="lede">
+        FreeRouter is moving from a pragmatic Python-served HTML utility to a desktop-first product
+        architecture: FastAPI for the gateway core, React and TypeScript for the control plane, and
+        Tauri for a packaged desktop shell.
+      </p>
+      <div class="status">React, Tauri, sidecar packaging, and app-data runtime paths are now in place.</div>
+
+      <section class="grid" aria-label="Target architecture layers">
+        <div class="panel">
+          <strong>Gateway Core</strong>
+          <span>FastAPI keeps the OpenAI-compatible API, routing engine, provider adapters, quota state, and model catalog.</span>
+        </div>
+        <div class="panel">
+          <strong>Control Plane UI</strong>
+          <span>React, TypeScript, Vite, TanStack Query, and typed API clients replace Python string HTML pages.</span>
+        </div>
+        <div class="panel">
+          <strong>Desktop Shell</strong>
+          <span>Tauri owns windows, tray actions, dynamic localhost port selection, app data paths, and the bundled backend sidecar.</span>
+        </div>
+      </section>
+
+      <h2>Workspace Shape</h2>
+      <pre><code>apps/ui/          React + TypeScript + Vite frontend
+apps/desktop/     Tauri desktop shell
+app/               FastAPI backend, sidecar entrypoint, runtime path helpers
+docs/              User-facing HTML documentation
+scripts/           Development and packaging helpers</code></pre>
+
+      <h2>Build And Run</h2>
+      <pre><code>npm run dev            Start the backend and React control plane together
+npm run dev:web        Start only the React control plane during UI development
+npm run dev:desktop    Start the Tauri shell against the backend-served desktop app
+npm run build:web      Compile the React control plane into apps/ui/dist
+npm run check:desktop  Compile-check the Tauri shell
+npm run build:sidecar  Build dist-sidecar/freerouterd-*.exe with PyInstaller
+npm run build:desktop  Build the sidecar, React UI, and Tauri desktop bundle</code></pre>
+
+      <h2>Packaged Desktop Runtime</h2>
+      <p>
+        The installed desktop executable is more than a shortcut. It starts a bundled Python backend
+        sidecar, generates a desktop-only token, chooses an available localhost port, and opens the
+        React app served by that sidecar. Runtime files live under the platform app-data directory,
+        not inside the repository checkout.
+      </p>
+      <p>
+        During <code>tauri dev</code>, the desktop shell uses the fixed backend port <code>8000</code>
+        because Vite serves the React app and proxies API calls to a known target. Packaged builds use
+        a dynamic backend port and navigate the window directly to the sidecar-served app.
+      </p>
+
+      <h2>Migration Sequence</h2>
+      <ol>
+        <li>Keep the current backend working while adding the React app at <code>/app-next</code>.</li>
+        <li>Move dashboard, models, providers, traffic, settings, backups, logs, and chat into React one surface at a time.</li>
+        <li>Replace legacy Python HTML pages once the React app reaches feature parity.</li>
+        <li>Package the backend as a sidecar and let Tauri control process lifecycle and app data paths.</li>
+        <li>Move runtime state out of the source tree and into platform app data.</li>
+      </ol>
+
+      <h2>Current Milestone</h2>
+      <p>
+        The desktop shell now uses Tauri with a bundled Python sidecar and serves the same
+        proven desktop control plane at <code>/app-next</code> that the legacy pywebview app used
+        at <code>/app</code>. The React workspace remains available for future UI work, but the
+        packaged desktop experience intentionally keeps feature parity with the original app.
+      </p>
+    </main>
+  </body>
+</html>

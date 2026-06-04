@@ -4,21 +4,66 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>FreeRouter Desktop QA Ledger</title>
+    <script>
+      (function () {
+        var key = "freerouter.theme";
+        var preference = "system";
+        var theme = "dark";
+        try {
+          preference = localStorage.getItem(key) || "system";
+          theme = preference === "light" || preference === "dark"
+            ? preference
+            : (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        } catch (_) {}
+        document.documentElement.dataset.theme = theme === "light" ? "light" : "dark";
+        document.documentElement.dataset.themePreference = preference === "light" || preference === "dark" ? preference : "system";
+      })();
+    </script>
     <style>
-      body { margin: 0; font: 15px/1.6 "Segoe UI", system-ui, sans-serif; background: #07111f; color: #e5edf8; }
+      :root, html[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #07111f;
+        --surface: #101b2e;
+        --line: #24354d;
+        --text: #e5edf8;
+        --muted: #a8b6ca;
+        --code: #bfdbfe;
+        --pass: #bbf7d0;
+        --watch: #fde68a;
+        --accent: #3b82f6;
+      }
+      html[data-theme="light"] {
+        color-scheme: light;
+        --bg: #f6f8fb;
+        --surface: #ffffff;
+        --line: #c9d6e8;
+        --text: #142033;
+        --muted: #5d7089;
+        --code: #1e40af;
+        --pass: #166534;
+        --watch: #92400e;
+        --accent: #2563eb;
+      }
+      body { margin: 0; font: 15px/1.6 "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }
       main { max-width: 920px; margin: 0 auto; padding: 40px 24px; }
+      .top-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
       h1 { margin: 0 0 12px; font-size: 28px; }
       h2 { margin-top: 28px; font-size: 18px; }
-      p, li { color: #a8b6ca; }
-      code { color: #bfdbfe; background: #101b2e; border: 1px solid #24354d; padding: 2px 6px; border-radius: 5px; }
-      .panel { border: 1px solid #24354d; background: #101b2e; border-radius: 8px; padding: 18px; margin-top: 16px; }
-      .pass { color: #bbf7d0; }
-      .watch { color: #fde68a; }
+      p, li { color: var(--muted); }
+      code { color: var(--code); background: var(--surface); border: 1px solid var(--line); padding: 2px 6px; border-radius: 5px; }
+      .panel { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 18px; margin-top: 16px; }
+      .pass { color: var(--pass); }
+      .watch { color: var(--watch); }
+      .theme-toggle { border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text); padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+      .theme-toggle:hover { border-color: var(--accent); }
     </style>
   </head>
   <body>
     <main>
-      <h1>FreeRouter Desktop QA Ledger</h1>
+      <div class="top-row">
+        <h1>FreeRouter Desktop QA Ledger</h1>
+        <button class="theme-toggle" type="button" id="themeToggle">Theme</button>
+      </div>
       <p>This ledger records verification for the local desktop app implementation.</p>
 
       <div class="panel">
@@ -75,5 +120,45 @@
         </ul>
       </div>
     </main>
+    <script>
+      (function () {
+        var key = "freerouter.theme";
+        var button = document.getElementById("themeToggle");
+        var media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
+        function normalize(preference) {
+          return preference === "light" || preference === "dark" ? preference : "system";
+        }
+        function resolve(preference) {
+          preference = normalize(preference);
+          if (preference === "light" || preference === "dark") return preference;
+          return media && media.matches ? "light" : "dark";
+        }
+        function next(preference) {
+          if (preference === "system") return "light";
+          if (preference === "light") return "dark";
+          return "system";
+        }
+        function setTheme(preference) {
+          preference = normalize(preference);
+          var theme = resolve(preference);
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.dataset.themePreference = preference;
+          try { localStorage.setItem(key, preference); } catch (_) {}
+          button.textContent = preference === "system" ? "System" : (theme === "dark" ? "Dark" : "Light");
+          button.setAttribute("aria-label", "Theme: " + preference + ". Switch to " + next(preference) + " mode.");
+        }
+        button.addEventListener("click", function () {
+          setTheme(next(document.documentElement.dataset.themePreference));
+        });
+        if (media) {
+          var onSystemThemeChange = function () {
+            if (document.documentElement.dataset.themePreference === "system") setTheme("system");
+          };
+          if (media.addEventListener) media.addEventListener("change", onSystemThemeChange);
+          else if (media.addListener) media.addListener(onSystemThemeChange);
+        }
+        setTheme(document.documentElement.dataset.themePreference);
+      })();
+    </script>
   </body>
 </html>

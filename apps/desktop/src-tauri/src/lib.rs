@@ -1,0 +1,387 @@
+use std::{
+    fs::{create_dir_all, OpenOptions},
+    io::Write,
+    net::{TcpListener, TcpStream, ToSocketAddrs},
+    path::PathBuf,
+    sync::Mutex,
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, RunEvent, WindowEvent,
+};
+use tauri_plugin_shell::{process::CommandEvent, process::CommandChild, ShellExt};
+use uuid::Uuid;
+
+const SIDECAR_NAME: &str = "freerouterd";
+const GATEWAY_HOST: &str = "127.0.0.1";
+const DEFAULT_GATEWAY_PORT: u16 = 8000;
+const SIDECAR_RESTART_EXIT_CODE: i32 = 42;
+const DESKTOP_APP_ROUTE: &str = "/app";
+
+struct AppRuntimeState {
+    sidecar: Mutex<Option<CommandChild>>,
+    gateway_port: u16,
+    desktop_token: String,
+    project_root: PathBuf,
+    manages_sidecar: bool,
+}
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            let dev_backend = std::env::var("FREEROUTER_DEV_BACKEND").ok().as_deref() == Some("1");
+            let token = std::env::var("FREEROUTER_DESKTOP_TOKEN")
+                .unwrap_or_else(|_| Uuid::new_v4().to_string());
+            let gateway_port = if dev_backend {
+                std::env::var("GATEWAY_PORT")
+                    .ok()
+                    .and_then(|value| value.parse::<u16>().ok())
+                    .unwrap_or(DEFAULT_GATEWAY_PORT)
+            } else {
+                select_gateway_port(GATEWAY_HOST)
+            };
+            let project_root = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| PathBuf::from("."));
+
+            app.manage(AppRuntimeState {
+                sidecar: Mutex::new(None),
+                gateway_port,
+                desktop_token: token.clone(),
+                project_root: project_root.clone(),
+                manages_sidecar: !dev_backend,
+            });
+
+            if dev_backend {
+                let _ = append_launcher_log(
+                    &project_root,
+                    &format!(
+                        "Using existing FreeRouter dev backend on {GATEWAY_HOST}:{gateway_port}."
+                    ),
+                );
+            } else {
+                start_sidecar(app.handle(), gateway_port, &token, &project_root);
+            }
+
+            let show = MenuItem::with_id(app, "show", "Show FreeRouter", true, None::<&str>)?;
+            let chat = MenuItem::with_id(app, "open_chat", "Chat", true, None::<&str>)?;
+            let models = MenuItem::with_id(app, "open_models", "Models", true, None::<&str>)?;
+            let copy_url =
+                MenuItem::with_id(app, "copy_url", "Copy base URL", true, None::<&str>)?;
+            let restart =
+                MenuItem::with_id(app, "restart", "Restart server", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(
+                app,
+                &[&show, &chat, &models, &copy_url, &restart, &quit],
+            )?;
+
+            let tray_icon = app
+                .default_window_icon()
+                .cloned()
+                .expect("Missing application icon");
+
+            TrayIconBuilder::new()
+                .icon(tray_icon)
+                .tooltip("FreeRouter")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "open_chat" => navigate_desktop_section(app, "chat"),
+                    "open_models" => navigate_desktop_section(app, "models"),
+                    "copy_url" => copy_base_url(app),
+                    "restart" => {
+                        restart_sidecar(app);
+                    }
+                    "quit" => {
+                        shutdown_sidecar(app);
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
+            let handle = app.handle().clone();
+            thread::spawn(move || {
+                if wait_for_port(GATEWAY_HOST, gateway_port, Duration::from_secs(20)) {
+                    let url = desktop_app_url(gateway_port, &token, None);
+                    let window_handle = handle.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        if let Some(window) = window_handle.get_webview_window("main") {
+                            let _ = window.navigate(url.parse().unwrap());
+                        }
+                    });
+                }
+            });
+
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building FreeRouter desktop shell")
+        .run(|app_handle, event| {
+            if matches!(event, RunEvent::Exit) {
+                shutdown_sidecar(app_handle);
+            }
+        });
+}
+
+fn start_sidecar(
+    app: &AppHandle,
+    gateway_port: u16,
+    token: &str,
+    project_root: &PathBuf,
+) {
+    let _ = append_launcher_log(
+        project_root,
+        &format!("Starting FreeRouter sidecar on {GATEWAY_HOST}:{gateway_port}."),
+    );
+
+    let gateway_port_arg = gateway_port.to_string();
+    let (rx, child) = app
+        .shell()
+        .sidecar(SIDECAR_NAME)
+        .expect("Failed to create sidecar command")
+        .args(["--host", GATEWAY_HOST, "--port", gateway_port_arg.as_str()])
+        .env("FREEROUTER_DESKTOP_TOKEN", token)
+        .env(
+            "FREEROUTER_APP_DATA_DIR",
+            project_root.to_string_lossy().as_ref(),
+        )
+        .env(
+            "FREEROUTER_DESKTOP_PROJECT_ROOT",
+            project_root.to_string_lossy().as_ref(),
+        )
+        .spawn()
+        .expect("Failed to spawn FreeRouter sidecar");
+
+    if let Some(state) = app.try_state::<AppRuntimeState>() {
+        *state.sidecar.lock().unwrap() = Some(child);
+    }
+
+    spawn_sidecar_monitor(app.clone(), rx, gateway_port, token.to_string(), project_root.clone());
+}
+
+fn spawn_sidecar_monitor(
+    app: AppHandle,
+    mut rx: tauri::async_runtime::Receiver<CommandEvent>,
+    gateway_port: u16,
+    token: String,
+    project_root: PathBuf,
+) {
+    thread::spawn(move || {
+        while let Some(event) = tauri::async_runtime::block_on(rx.recv()) {
+            match event {
+                CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
+                    append_sidecar_output(&project_root, &line);
+                }
+                CommandEvent::Terminated(payload) => {
+                    if payload.code == Some(SIDECAR_RESTART_EXIT_CODE) {
+                        let _ = append_launcher_log(
+                            &project_root,
+                            "Desktop restart requested by local app controls.",
+                        );
+                        let _ = start_sidecar(&app, gateway_port, &token, &project_root);
+                    } else {
+                        let _ = append_launcher_log(
+                            &project_root,
+                            &format!(
+                                "FreeRouter sidecar exited with code {:?}.",
+                                payload.code
+                            ),
+                        );
+                    }
+                    break;
+                }
+                CommandEvent::Error(message) => {
+                    let _ = append_launcher_log(&project_root, &format!("Sidecar error: {message}"));
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
+fn restart_sidecar(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppRuntimeState>() else {
+        return;
+    };
+
+    if !state.manages_sidecar {
+        let _ = append_launcher_log(
+            &state.project_root,
+            "Restart requested in dev backend mode; restart the dev script instead.",
+        );
+        return;
+    }
+
+    let gateway_port = state.gateway_port;
+    let token = state.desktop_token.clone();
+    let project_root = state.project_root.clone();
+
+    shutdown_sidecar(app);
+    thread::sleep(Duration::from_millis(350));
+    start_sidecar(app, gateway_port, &token, &project_root);
+}
+
+fn shutdown_sidecar(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppRuntimeState>() {
+        if let Some(child) = state.sidecar.lock().unwrap().take() {
+            let pid = child.pid();
+            let _ = child.kill();
+            force_kill_process_tree(pid);
+        }
+    }
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn navigate_desktop_section(app: &AppHandle, section: &str) {
+    let Some(state) = app.try_state::<AppRuntimeState>() else {
+        return;
+    };
+    let url = desktop_app_url(state.gateway_port, &state.desktop_token, Some(section));
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.navigate(url.parse().unwrap());
+        let _ = window.set_focus();
+    }
+}
+
+fn copy_base_url(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppRuntimeState>() else {
+        return;
+    };
+    let base_url = format!("http://{}:{}/v1", GATEWAY_HOST, state.gateway_port);
+    copy_text_to_clipboard(&base_url);
+}
+
+fn desktop_app_url(port: u16, token: &str, section: Option<&str>) -> String {
+    let mut url = format!(
+        "http://{}:{}{DESKTOP_APP_ROUTE}?desktop_token={token}",
+        GATEWAY_HOST, port
+    );
+    if let Some(section) = section {
+        url.push('#');
+        url.push_str(section);
+    }
+    url
+}
+
+fn copy_text_to_clipboard(text: &str) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let escaped = text.replace('\'', "''");
+        let _ = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("Set-Clipboard -Value '{escaped}'"),
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = text;
+    }
+}
+
+fn append_sidecar_output(project_root: &PathBuf, bytes: &[u8]) {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+    let _ = append_launcher_log(project_root, text.trim_end());
+}
+
+fn append_launcher_log(project_root: &PathBuf, message: &str) -> std::io::Result<()> {
+    let log_dir = project_root.join("data");
+    create_dir_all(&log_dir)?;
+    let log_path = log_dir.join("desktop-app.log");
+    let mut file = OpenOptions::new().create(true).append(true).open(log_path)?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    for line in message.lines() {
+        writeln!(file, "[{timestamp}] {line}")?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn force_kill_process_tree(pid: u32) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
+#[cfg(not(windows))]
+fn force_kill_process_tree(_pid: u32) {}
+
+fn select_gateway_port(host: &str) -> u16 {
+    if TcpListener::bind((host, DEFAULT_GATEWAY_PORT)).is_ok() {
+        return DEFAULT_GATEWAY_PORT;
+    }
+
+    TcpListener::bind((host, 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|address| address.port())
+        .unwrap_or(DEFAULT_GATEWAY_PORT)
+}
+
+fn wait_for_port(host: &str, port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let address = (host, port)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addresses| addresses.next());
+        if let Some(address) = address {
+            if TcpStream::connect_timeout(&address, Duration::from_millis(350)).is_ok() {
+                return true;
+            }
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    false
+}

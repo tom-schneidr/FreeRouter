@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.ui.theme import with_theme_support
+
 EMBED_HEAD_FRAGMENT = """
     <style id="fr-embed-styles">
       html.embed-mode, html.embed-mode body {
@@ -62,6 +64,7 @@ EMBED_HEAD_FRAGMENT = """
 
 
 def with_embed_support(html: str) -> str:
+    html = with_theme_support(html)
     if "fr-embed-styles" in html:
         return html
     if "</head>" in html:

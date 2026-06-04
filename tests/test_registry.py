@@ -35,6 +35,16 @@ def test_openrouter_adapter_has_required_headers():
     assert "X-Title" in headers
 
 
+def test_sambanova_adapter_uses_openai_compatible_api_settings():
+    settings = Settings(sambanova_api_key="sn-key")
+
+    adapters = {adapter.name: adapter for adapter in build_provider_adapters(settings)}
+
+    assert adapters["sambanova"].api_key == "sn-key"
+    assert adapters["sambanova"].base_url == "https://api.sambanova.ai/v1"
+    assert adapters["sambanova"].default_model == "Llama-4-Maverick-17B-128E-Instruct"
+
+
 def test_unconfigured_providers_report_not_configured():
     """Providers without API keys should report is_configured = False."""
     settings = Settings(
@@ -43,6 +53,7 @@ def test_unconfigured_providers_report_not_configured():
         gemini_api_key=None,
         nvidia_api_key=None,
         openrouter_api_key=None,
+        sambanova_api_key=None,
         _env_file=None,
     )
     adapters = build_provider_adapters(settings)

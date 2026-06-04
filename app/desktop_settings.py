@@ -26,6 +26,7 @@ DESKTOP_SETTINGS: tuple[DesktopSetting, ...] = (
     DesktopSetting("GEMINI_API_KEY", "Gemini API key", "Provider Keys", secret=True),
     DesktopSetting("NVIDIA_API_KEY", "NVIDIA API key", "Provider Keys", secret=True),
     DesktopSetting("OPENROUTER_API_KEY", "OpenRouter API key", "Provider Keys", secret=True),
+    DesktopSetting("SAMBANOVA_API_KEY", "SambaNova API key", "Provider Keys", secret=True),
     DesktopSetting("DATABASE_PATH", "SQLite database path", "Storage", default="./data/gateway.sqlite3"),
     DesktopSetting("MODEL_CATALOG_PATH", "Model catalog path", "Storage", default="./data/model_catalog.json"),
     DesktopSetting("REQUEST_TIMEOUT_SECONDS", "Provider timeout seconds", "Request Limits", kind="float", default="90"),
@@ -100,6 +101,28 @@ SETTINGS_BY_KEY = {setting.key: setting for setting in DESKTOP_SETTINGS}
 
 def project_env_path(project_root: Path) -> Path:
     return project_root / ".env"
+
+
+def migrate_settings_from_legacy_env(project_root: Path, candidates: list[Path]) -> bool:
+    path = project_env_path(project_root)
+    existing = read_env_values(path)
+
+    for candidate in candidates:
+        if candidate == path or not candidate.exists():
+            continue
+        legacy = read_env_values(candidate)
+        updates = {
+            setting.key: legacy[setting.key]
+            for setting in DESKTOP_SETTINGS
+            if setting.key in legacy and setting.key not in existing and legacy[setting.key].strip()
+        }
+        if not updates:
+            continue
+        project_root.mkdir(parents=True, exist_ok=True)
+        lines = _updated_env_lines(path, updates, existing)
+        path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+        return True
+    return False
 
 
 def read_env_values(path: Path) -> dict[str, str]:

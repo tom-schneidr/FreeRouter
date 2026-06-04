@@ -41,6 +41,7 @@ from app.live_monitor import APILiveMonitor
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS, ProviderError, build_provider_adapters
 from app.request_limiter import GatewayRequestLimiter
+from app.react_app import mount_react_app
 from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,
@@ -51,8 +52,10 @@ from app.router import (
 from app.settings import get_settings
 from app.state import StateManager
 from app.stream_route import stream_route_chat
+from app.ui.brand import FAVICON_LINK, FAVICON_PATH, LOGO_PATH, NAV_BRAND_CSS, inject_legacy_nav_branding, nav_brand_html
 from app.ui.docs_page import swagger_docs_html
 from app.ui.embed import with_embed_support
+from app.ui.theme import with_theme_support
 
 WEB_SEARCH_TOOL = {"type": "web_search_preview"}
 
@@ -135,6 +138,7 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url=None,
 )
+mount_react_app(app)
 
 
 def _monitor_trim(
@@ -211,12 +215,16 @@ def _content_parts_to_text(parts: list[Any]) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
-    return """
+    return with_theme_support(
+        """
     <!doctype html>
     <html lang="en">
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        """
+        + FAVICON_LINK
+        + """
         <title>FreeRouter - API Gateway</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -231,14 +239,16 @@ async def index() -> str:
           html, body { height: 100%; }
           body { font-family: var(--font); background: var(--bg-primary); color: var(--text); display: flex; flex-direction: column; }
           nav { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem; background: var(--bg-secondary); border-bottom: 1px solid var(--border); flex-shrink: 0; }
-          nav h1 { font-size: 1rem; font-weight: 700; background: linear-gradient(135deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
           nav a { color: var(--text-muted); text-decoration: none; font-size: 0.85rem; transition: color 0.2s; }
           nav a:hover { color: var(--text); }
           .nav-spacer { flex: 1; }
+        """
+        + NAV_BRAND_CSS
+        + """
           main { max-width: 800px; margin: 4rem auto; padding: 2rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
-          h2 { font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; color: #fff; }
+          h2 { font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; color: var(--heading); }
           p { color: var(--text-muted); line-height: 1.6; margin-bottom: 1.5rem; font-size: 0.95rem; }
-          code { background: var(--bg-primary); border: 1px solid var(--border); padding: 0.4rem 0.6rem; border-radius: 6px; font-family: monospace; color: #93c5fd; }
+          code { background: var(--code-inline-bg); border: 1px solid var(--border); padding: 0.4rem 0.6rem; border-radius: 6px; font-family: monospace; color: var(--code-text); }
           .links { display: grid; gap: 0.75rem; }
           .link-card { display: flex; align-items: center; gap: 1rem; padding: 1rem 1.25rem; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 8px; text-decoration: none; color: var(--text); transition: all 0.2s; }
           .link-card:hover { border-color: var(--accent); background: var(--accent-glow); transform: translateY(-1px); }
@@ -247,7 +257,9 @@ async def index() -> str:
       </head>
       <body>
         <nav>
-          <h1>FreeRouter</h1>
+          """
+        + nav_brand_html()
+        + """
           <span class="nav-spacer"></span>
           <a href="/">Home</a>
           <a href="/chat">Chat</a>
@@ -272,11 +284,22 @@ async def index() -> str:
       </body>
     </html>
     """
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> Response:
-    return Response(status_code=204)
+    return Response(content=FAVICON_PATH.read_bytes(), media_type="image/png")
+
+
+@app.get("/brand/favicon.png", include_in_schema=False)
+async def brand_favicon() -> Response:
+    return Response(content=FAVICON_PATH.read_bytes(), media_type="image/png")
+
+
+@app.get("/brand/logo.png", include_in_schema=False)
+async def brand_logo() -> Response:
+    return Response(content=LOGO_PATH.read_bytes(), media_type="image/png")
 
 
 @app.get("/docs", include_in_schema=False)
@@ -291,7 +314,7 @@ async def chat_page() -> str:
 
 @app.get("/app", response_class=HTMLResponse)
 async def desktop_app_page() -> str:
-    return DESKTOP_APP_HTML
+    return with_theme_support(DESKTOP_APP_HTML, nav=False)
 
 
 @app.get("/v1/desktop/capabilities")
@@ -546,7 +569,7 @@ async def _catalog_payload_with_health(
 
 @app.get("/status", response_class=HTMLResponse)
 async def provider_status_page() -> HTMLResponse:
-    return HTMLResponse(with_embed_support(r"""
+    return HTMLResponse(with_embed_support(inject_legacy_nav_branding(r"""
 <!doctype html>
 <html lang="en">
   <head>
@@ -569,7 +592,7 @@ async def provider_status_page() -> HTMLResponse:
       .muted { color: var(--text-muted); }
       .toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; margin: 1.5rem 0; }
       input, select, button { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text); padding: 0.55rem 0.75rem; font: inherit; font-size: 0.9rem; }
-      button { border: none; background: var(--accent); color: white; cursor: pointer; font-weight: 600; }
+      button { border: none; background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 600; }
       button:hover { background: #2563eb; }
       .filters { display: flex; flex-wrap: wrap; gap: 0.75rem; }
       .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin: 1.5rem 0; }
@@ -579,14 +602,14 @@ async def provider_status_page() -> HTMLResponse:
       .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-secondary); }
       table { width: 100%; border-collapse: collapse; min-width: 980px; }
       th, td { padding: 0.75rem 0.85rem; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.86rem; vertical-align: middle; }
-      th { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; background: rgba(15, 23, 42, 0.75); position: sticky; top: 0; z-index: 1; }
+      th { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; background: var(--table-head-bg); position: sticky; top: 0; z-index: 1; }
       tbody tr:hover { background: rgba(59,130,246,0.08); }
-      .model { font-weight: 700; color: #fff; }
+      .model { font-weight: 700; color: var(--heading); }
       .route { margin-top: 0.2rem; color: var(--text-muted); font-size: 0.76rem; }
       .provider { color: var(--green); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.72rem; font-weight: 700; }
-      .pill { display: inline-flex; align-items: center; padding: 0.22rem 0.5rem; border-radius: 999px; border: 1px solid rgba(34,197,94,0.45); color: #bbf7d0; background: rgba(34,197,94,0.12); font-size: 0.75rem; white-space: nowrap; }
-      .pill.warning { border-color: rgba(245,158,11,0.5); color: #fcd34d; background: rgba(245,158,11,0.12); }
-      .pill.error { border-color: rgba(239,68,68,0.5); color: #fecaca; background: rgba(239,68,68,0.12); }
+      .pill { display: inline-flex; align-items: center; padding: 0.22rem 0.5rem; border-radius: 999px; border: 1px solid var(--success-border); color: var(--success-text); background: var(--success-bg); font-size: 0.75rem; white-space: nowrap; }
+      .pill.warning { border-color: var(--warning-border); color: var(--warning-text); background: var(--warning-bg); }
+      .pill.error { border-color: var(--danger-border); color: var(--danger-text); background: var(--danger-bg); }
       .pill.neutral { border-color: var(--border); color: var(--text-muted); background: var(--bg-tertiary); }
       .details-row td { background: var(--bg-primary); padding: 0; }
       .details { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 0.7rem; padding: 1rem; }
@@ -612,7 +635,7 @@ async def provider_status_page() -> HTMLResponse:
     </nav>
     <main>
       <h2>Usage Stats</h2>
-      <p class="muted">Provider quotas, health state, and per-model usage tracked locally by FreeRouter. Click a column header to sort; Priority matches the waterfall order from the <a href="/models" style="color:#93c5fd">Models</a> page.</p>
+      <p class="muted">Provider quotas, health state, and per-model usage tracked locally by FreeRouter. Click a column header to sort; Priority matches the waterfall order from the <a href="/models" style="color:var(--link)">Models</a> page.</p>
       <section id="summaryCards" class="summary-grid"></section>
       <div class="toolbar">
         <div class="filters">
@@ -892,7 +915,7 @@ async def provider_status_page() -> HTMLResponse:
     </script>
   </body>
 </html>
-"""))
+""")))
 
 
 @app.get("/v1/providers/status")
@@ -1727,7 +1750,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
     )
 
 
-ROUTE_HEALTH_HTML = """
+ROUTE_HEALTH_HTML = inject_legacy_nav_branding("""
 <!doctype html>
 <html lang="en">
   <head>
@@ -1749,15 +1772,15 @@ ROUTE_HEALTH_HTML = """
       h2 { margin-bottom: 0.5rem; }
       .muted { color: var(--text-muted); }
       .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin: 1.5rem 0; }
-      button { border: none; border-radius: 8px; background: var(--accent); color: white; padding: 0.55rem 0.8rem; font: inherit; cursor: pointer; }
+      button { border: none; border-radius: 8px; background: var(--accent); color: var(--on-accent); padding: 0.55rem 0.8rem; font: inherit; cursor: pointer; }
       button.secondary { background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); }
       .grid { display: grid; gap: 0.75rem; }
       .card { display: grid; grid-template-columns: 1fr auto; gap: 1rem; padding: 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
       .provider { color: var(--green); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; font-weight: 700; }
       .model { margin-top: 0.25rem; color: var(--text-muted); font-size: 0.85rem; }
       .pill { align-self: start; padding: 0.25rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); color: var(--text-muted); font-size: 0.78rem; }
-      .pill.rate_limited { border-color: rgba(245,158,11,0.5); color: #fcd34d; background: rgba(245,158,11,0.12); }
-      .pill.potentially_outdated, .pill.too_slow { border-color: rgba(239,68,68,0.5); color: #fecaca; background: rgba(239,68,68,0.12); }
+      .pill.rate_limited { border-color: var(--warning-border); color: var(--warning-text); background: var(--warning-bg); }
+      .pill.potentially_outdated, .pill.too_slow { border-color: var(--danger-border); color: var(--danger-text); background: var(--danger-bg); }
       .empty { padding: 2rem; text-align: center; color: var(--text-muted); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
     </style>
   </head>
@@ -1810,10 +1833,10 @@ ROUTE_HEALTH_HTML = """
     </script>
   </body>
 </html>
-"""
+""")
 
 
-LIVE_API_HTML = r"""
+LIVE_API_HTML = inject_legacy_nav_branding(r"""
 <!doctype html>
 <html lang="en">
   <head>
@@ -1834,14 +1857,14 @@ LIVE_API_HTML = r"""
       main { max-width: 1280px; margin: auto; padding: 1.5rem; }
       .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 1rem; flex-wrap: wrap; }
       .badge { border: 1px solid var(--border); border-radius: 999px; padding: 0.2rem 0.6rem; color: var(--text-muted); background: var(--bg-tertiary); font-size: 0.78rem; }
-      .badge.live { border-color: rgba(34, 197, 94, 0.45); color: #bbf7d0; background: rgba(34, 197, 94, 0.14); }
+      .badge.live { border-color: var(--success-border); color: var(--success-text); background: var(--success-bg); }
       .table-wrap { border: 1px solid var(--border); border-radius: 12px; overflow: auto; background: var(--bg-secondary); }
       table { width: 100%; border-collapse: collapse; min-width: 980px; }
       th, td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.82rem; vertical-align: top; }
-      th { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; background: rgba(15, 23, 42, 0.75); position: sticky; top: 0; z-index: 1; }
+      th { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; background: var(--table-head-bg); position: sticky; top: 0; z-index: 1; }
       tr:hover { background: rgba(59, 130, 246, 0.08); }
       .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
-      code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #93c5fd; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--code-text); }
       .muted { color: var(--text-muted); }
       .expand-btn { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-tertiary); color: var(--text); font-size: 0.75rem; padding: 0.2rem 0.45rem; cursor: pointer; }
       .expand-btn:hover { background: var(--border); }
@@ -1856,27 +1879,27 @@ LIVE_API_HTML = r"""
       .details-wrap .md-body p:last-child { margin-bottom: 0; }
       .details-wrap .md-body h1, .details-wrap .md-body h2, .details-wrap .md-body h3,
       .details-wrap .md-body h4, .details-wrap .md-body h5, .details-wrap .md-body h6 {
-        margin: 0.6rem 0 0.35rem; font-weight: 600; color: #f8fafc;
+        margin: 0.6rem 0 0.35rem; font-weight: 600; color: var(--heading);
       }
       .details-wrap .md-body h1 { font-size: 1.05rem; }
       .details-wrap .md-body h2 { font-size: 0.98rem; }
       .details-wrap .md-body h3 { font-size: 0.92rem; }
       .details-wrap .md-body ul, .details-wrap .md-body ol { margin: 0.35rem 0 0.35rem 1.15rem; padding: 0; }
       .details-wrap .md-body li { margin: 0.15rem 0; }
-      .details-wrap .md-body a { color: #93c5fd; text-decoration: underline; text-underline-offset: 2px; }
+      .details-wrap .md-body a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
       .details-wrap .md-body pre { margin: 0.45rem 0; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border); background: var(--bg-primary); border-radius: 6px; padding: 0.55rem 0.65rem; font-size: 0.74rem; color: var(--text-muted); }
       .details-wrap .md-body .md-table-wrap { overflow-x: auto; max-width: 100%; margin: 0.35rem 0; }
       .details-wrap .md-body table.md-table { border-collapse: collapse; font-size: 0.85em; width: max-content; max-width: 100%; }
       .details-wrap .md-body table.md-table th,
       .details-wrap .md-body table.md-table td { border: 1px solid var(--border); padding: 0.3rem 0.45rem; vertical-align: top; }
-      .details-wrap .md-body table.md-table th { background: rgba(30, 41, 59, 0.65); font-weight: 600; color: var(--text); }
+      .details-wrap .md-body table.md-table th { background: var(--table-head-bg); font-weight: 600; color: var(--text); }
       .details-wrap pre { margin: 0; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border); background: var(--bg-secondary); border-radius: 8px; padding: 0.65rem; font-size: 0.75rem; color: var(--text-muted); }
       .details-wrap details { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.65rem; background: var(--bg-secondary); }
       .details-wrap details summary { cursor: pointer; color: var(--text-muted); font-size: 0.8rem; font-weight: 600; user-select: none; }
       .details-wrap details[open] summary { margin-bottom: 0.55rem; color: var(--text); }
       .details-wrap details .md-body { margin-top: 0; }
       .attempts { display: grid; gap: 0.45rem; position: relative; }
-      .attempt { position: relative; display: grid; grid-template-columns: 1.9rem 1fr auto; gap: 0.68rem; align-items: center; border: 1px solid rgba(148,163,184,0.16); background: linear-gradient(180deg, rgba(30,41,59,0.5), rgba(15,23,42,0.55)); border-radius: 10px; padding: 0.58rem 0.7rem; }
+      .attempt { position: relative; display: grid; grid-template-columns: 1.9rem 1fr auto; gap: 0.68rem; align-items: center; border: 1px solid var(--line-soft); background: var(--surface-alpha); border-radius: 10px; padding: 0.58rem 0.7rem; }
       .attempt::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 10px 0 0 10px; background: rgba(100,116,139,0.45); }
       .attempt.ok::before { background: rgba(34,197,94,0.7); }
       .attempt.warn::before { background: rgba(245,158,11,0.75); }
@@ -1885,13 +1908,13 @@ LIVE_API_HTML = r"""
       .attempt-main { display: grid; gap: 0.16rem; min-width: 0; }
       .attempt-title { color: var(--text); font-size: 0.81rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .attempt-sub { color: var(--text-muted); font-size: 0.73rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .attempt-sub .label { color: #93c5fd; opacity: 0.9; }
+      .attempt-sub .label { color: var(--link); opacity: 0.9; }
       .attempt-meta { display: inline-flex; gap: 0.35rem; align-items: center; }
-      .attempt-status { font-size: 0.67rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.12rem 0.44rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); background: rgba(15,23,42,0.55); white-space: nowrap; font-weight: 600; }
-      .attempt-status.selected, .attempt-status.done { color: #bbf7d0; border-color: rgba(34,197,94,0.45); background: rgba(34,197,94,0.12); }
-      .attempt-status.failed, .attempt-status.route_fail { color: #fecaca; border-color: rgba(239,68,68,0.45); background: rgba(239,68,68,0.12); }
-      .attempt-status.skipped, .attempt-status.route_skip { color: #fcd34d; border-color: rgba(245,158,11,0.45); background: rgba(245,158,11,0.12); }
-      .attempt-status.flagged, .attempt-status.route_flagged { color: #ddd6fe; border-color: rgba(167,139,250,0.5); background: rgba(167,139,250,0.14); }
+      .attempt-status { font-size: 0.67rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.12rem 0.44rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); background: var(--bg-tertiary); white-space: nowrap; font-weight: 600; }
+      .attempt-status.selected, .attempt-status.done { color: var(--success-text); border-color: var(--success-border); background: var(--success-bg); }
+      .attempt-status.failed, .attempt-status.route_fail { color: var(--danger-text); border-color: var(--danger-border); background: var(--danger-bg); }
+      .attempt-status.skipped, .attempt-status.route_skip { color: var(--warning-text); border-color: var(--warning-border); background: var(--warning-bg); }
+      .attempt-status.flagged, .attempt-status.route_flagged { color: var(--purple-text); border-color: var(--purple-border); background: var(--purple-bg); }
       .attempt-http { color: var(--text-muted); font-size: 0.7rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.1rem 0.38rem; white-space: nowrap; }
       .attempt-empty { color: var(--text-muted); font-size: 0.78rem; border: 1px dashed var(--border); border-radius: 8px; padding: 0.6rem; }
     </style>
@@ -2417,10 +2440,10 @@ LIVE_API_HTML = r"""
     </script>
   </body>
 </html>
-"""
+""")
 
 
-MODEL_CATALOG_HTML = """
+MODEL_CATALOG_HTML = inject_legacy_nav_branding("""
 <!doctype html>
 <html lang="en">
   <head>
@@ -2451,7 +2474,7 @@ MODEL_CATALOG_HTML = """
         padding: 0.55rem 0.75rem; font: inherit; font-size: 0.9rem; transition: border-color 0.2s;
       }
       input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; }
-      button { cursor: pointer; background: var(--accent); border: none; color: #fff; font-weight: 500; transition: background 0.2s; }
+      button { cursor: pointer; background: var(--accent); border: none; color: var(--on-accent); font-weight: 500; transition: background 0.2s; }
       button:hover { background: #2563eb; }
       button.secondary { background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); }
       button.secondary:hover { background: var(--border); }
@@ -2462,7 +2485,7 @@ MODEL_CATALOG_HTML = """
       .provider { text-transform: uppercase; color: var(--green); font-size: 0.75rem; letter-spacing: 0.05em; font-weight: 600; }
       .muted { color: var(--text-muted); }
       .pill { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--bg-tertiary); margin: 0.1rem; font-size: 0.75rem; border: 1px solid var(--border); }
-      .pill.warning { border-color: rgba(245, 158, 11, 0.45); color: #fcd34d; background: rgba(245, 158, 11, 0.12); }
+      .pill.warning { border-color: var(--warning-border); color: var(--warning-text); background: var(--warning-bg); }
       .body { border-top: 1px solid var(--border); padding: 1.25rem; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); background: var(--bg-primary); }
       label { display: grid; gap: 0.4rem; color: var(--text-muted); font-size: 0.85rem; font-weight: 500; }
       .meta { display: grid; gap: 0.35rem; color: var(--text-muted); font-size: 0.85rem; font-weight: 500; }
@@ -2471,7 +2494,7 @@ MODEL_CATALOG_HTML = """
       .filter-menu { position: relative; overflow: visible; }
       .filter-menu summary { display: flex; align-items: center; gap: 0.5rem; padding: 0.55rem 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-tertiary); cursor: pointer; user-select: none; }
       .filter-menu[open] summary { border-color: var(--accent); }
-      .filter-badge { display: none; min-width: 1.35rem; height: 1.35rem; padding: 0 0.35rem; border-radius: 999px; background: var(--accent); color: white; font-size: 0.75rem; align-items: center; justify-content: center; }
+      .filter-badge { display: none; min-width: 1.35rem; height: 1.35rem; padding: 0 0.35rem; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 0.75rem; align-items: center; justify-content: center; }
       .filter-badge.active { display: inline-flex; }
       .filter-panel { position: fixed; z-index: 5; top: 7rem; left: 50%; transform: translateX(-50%); width: min(44rem, calc(100vw - 2rem)); max-height: calc(100vh - 8rem); overflow: auto; display: grid; gap: 1rem; padding: 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); }
       .filter-section { display: grid; gap: 0.5rem; }
@@ -2479,16 +2502,16 @@ MODEL_CATALOG_HTML = """
       .filter-options { display: flex; gap: 0.5rem; flex-wrap: wrap; }
       .filter-option { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.55rem; border: 1px solid var(--border); border-radius: 999px; color: var(--text); background: var(--bg-primary); cursor: pointer; }
       .filter-option input { width: auto; padding: 0; accent-color: var(--accent); }
-      .filter-option:has(input:checked) { border-color: var(--accent); background: var(--accent-glow); color: #bfdbfe; }
+      .filter-option:has(input:checked) { border-color: var(--accent); background: var(--accent-glow); color: var(--link-strong); }
       .active-filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: -0.5rem; margin-bottom: 1rem; }
       .active-filter { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text); font-size: 0.8rem; }
       .active-filter button { padding: 0; border: none; background: transparent; color: var(--text-muted); font-weight: 700; }
       .active-filter button:hover { background: transparent; color: var(--text); }
       .summary-actions { display: inline-flex; gap: 0.5rem; align-items: center; justify-content: flex-end; }
       .state-label { font-size: 0.8rem; color: var(--text-muted); }
-      .toggle { min-width: 4.75rem; padding: 0.28rem 0.55rem; border-radius: 999px; font-size: 0.78rem; background: rgba(34, 197, 94, 0.12); border: 1px solid rgba(34, 197, 94, 0.35); color: #bbf7d0; }
+      .toggle { min-width: 4.75rem; padding: 0.28rem 0.55rem; border-radius: 999px; font-size: 0.78rem; background: var(--success-bg); border: 1px solid var(--success-border); color: var(--success-text); }
       .toggle:hover { background: rgba(34, 197, 94, 0.2); }
-      .toggle.disable { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.35); color: #fecaca; }
+      .toggle.disable { background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text); }
       .toggle.disable:hover { background: rgba(239, 68, 68, 0.18); }
       @media (max-width: 700px) {
         summary { grid-template-columns: 3rem 1fr; }
@@ -2497,16 +2520,16 @@ MODEL_CATALOG_HTML = """
       }
       textarea { min-height: 5rem; resize: vertical; }
       .status { min-height: 1.5rem; color: var(--green); font-size: 0.85rem; margin-bottom: 1rem; }
-      details.disabled { border-color: rgba(148, 163, 184, 0.25); }
+      details.disabled { border-color: var(--line-soft); }
       details.disabled summary > span:not(.summary-actions), details.disabled .body { opacity: 0.6; }
-      code { background: var(--bg-tertiary); border: 1px solid var(--border); padding: 0.1rem 0.35rem; border-radius: 0.35rem; color: #93c5fd; }
+      code { background: var(--code-inline-bg); border: 1px solid var(--border); padding: 0.1rem 0.35rem; border-radius: 0.35rem; color: var(--code-text); }
       details.dragging { opacity: 0.4; transform: scale(0.98); }
       details.drag-over { border-top: 2px solid var(--accent); }
       details[draggable="true"] summary { cursor: grab; }
       details[draggable="true"] summary:active { cursor: grabbing; }
       .update-count { display: none; margin-left: 0.35rem; min-width: 1.25rem; height: 1.25rem; padding: 0 0.35rem; border-radius: 999px; background: var(--amber); color: #111827; font-size: 0.72rem; align-items: center; justify-content: center; }
       .update-count.active { display: inline-flex; }
-      .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center; padding: 1rem; background: rgba(2, 6, 23, 0.72); }
+      .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center; padding: 1rem; background: var(--modal-backdrop); }
       .modal-backdrop.open { display: flex; }
       .modal { width: min(46rem, 100%); max-height: min(42rem, calc(100vh - 2rem)); overflow: auto; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45); }
       .modal-header, .modal-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border-bottom: 1px solid var(--border); }
@@ -3025,4 +3048,4 @@ MODEL_CATALOG_HTML = """
     </script>
   </body>
 </html>
-"""
+""")

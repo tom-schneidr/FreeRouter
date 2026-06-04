@@ -71,6 +71,7 @@ _PROVIDER_SCORES = {
     "groq": 90,  # 30 RPM, 14.4K RPD
     "cerebras": 80,  # 30 RPM, 1M TPD
     "nvidia": 70,  # Generous but undocumented limits
+    "sambanova": 65,  # OpenAI-compatible cloud API; account limits vary
     "openrouter": 60,  # Aggressive free tier rate limits
 }
 
