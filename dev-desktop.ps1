@@ -50,10 +50,30 @@ function Start-ChildProcess {
     return $process
 }
 
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) {
+        return $false
+    }
+    if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    try {
+        & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    return $true
+}
+
 function Stop-ChildProcess {
     param([System.Diagnostics.Process]$Process)
     if ($null -ne $Process -and -not $Process.HasExited) {
-        Stop-Process -Id $Process.Id -Force
+        Stop-ProcessTree -ProcessId $Process.Id
     }
 }
 
@@ -135,14 +155,23 @@ function Stop-PortOwners {
     }
     $owners = $rows | Select-Object -Unique
     foreach ($owner in $owners) {
-        try {
-            Stop-Process -Id ([int]$owner) -Force -ErrorAction Stop
+        if (Stop-ProcessTree -ProcessId ([int]$owner)) {
             Write-Host "Stopped existing listener on 127.0.0.1:$Port (PID $owner)."
         }
-        catch {
-            Write-Host "Could not stop listener PID $owner; it may have already exited."
+    }
+}
+
+function Stop-FreeRouterGatewayBackends {
+    param([int]$Port)
+
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.CommandLine -and $_.CommandLine -match "uvicorn.*app\.main:app|freerouterd"
+    } | ForEach-Object {
+        if ($_.CommandLine -like "*$Port*" -or $_.CommandLine -like "*FreeRouter*") {
+            Stop-ProcessTree -ProcessId $_.ProcessId
         }
     }
+    Stop-PortOwners -Port $Port
 }
 
 function Find-FreePort {
@@ -205,40 +234,25 @@ if (-not (Test-Path (Join-Path $ProjectRoot "node_modules"))) {
     Invoke-Checked "npm.cmd" @("install")
 }
 
-if (Test-FreeRouterHealth -Port $ApiPort) {
-    if ($ReplaceExisting) {
-        Stop-PortOwners -Port $ApiPort
+if (Test-FreeRouterHealth -Port $ApiPort -or (Test-PortOpen -Port $ApiPort)) {
+    if ($ReplaceExisting -or -not $PSBoundParameters.ContainsKey("ApiPort")) {
+        if (Test-FreeRouterHealth -Port $ApiPort) {
+            Write-Host "Stopping existing FreeRouter backend on 127.0.0.1:$ApiPort..."
+        }
+        else {
+            $owners = Get-PortOwnerSummary -Port $ApiPort
+            Write-Host "Port 127.0.0.1:$ApiPort is in use by: $owners. Attempting to free it..."
+        }
+        Stop-FreeRouterGatewayBackends -Port $ApiPort
         Start-Sleep -Seconds 1
     }
-    elseif ($PSBoundParameters.ContainsKey("ApiPort")) {
-        throw "FreeRouter is already running on 127.0.0.1:$ApiPort. Quit it first or choose a different -ApiPort."
+    elseif (Test-FreeRouterHealth -Port $ApiPort) {
+        throw "FreeRouter is already running on 127.0.0.1:$ApiPort. Quit it first or rerun with -ReplaceExisting."
     }
     else {
-        $fallbackPort = Find-FreePort -StartingPort $ApiPort
-        if ($null -eq $fallbackPort) {
-            throw "FreeRouter is already running on 127.0.0.1:$ApiPort, and no nearby free port was found."
-        }
-        Write-Host "FreeRouter is already running on 127.0.0.1:$ApiPort."
-        Write-Host "Starting this dev desktop session on http://127.0.0.1:$fallbackPort/v1 instead."
-        $ApiPort = $fallbackPort
-    }
-}
-if (Test-PortOpen -Port $ApiPort) {
-    $owners = Get-PortOwnerSummary -Port $ApiPort
-    if ($ReplaceExisting) {
-        Stop-PortOwners -Port $ApiPort
-        Start-Sleep -Seconds 1
-    }
-    elseif ($PSBoundParameters.ContainsKey("ApiPort")) {
+        $owners = Get-PortOwnerSummary -Port $ApiPort
         throw "Port 127.0.0.1:$ApiPort is already in use by: $owners. Quit those processes or choose a different -ApiPort."
     }
-    $fallbackPort = Find-FreePort -StartingPort $ApiPort
-    if ($null -eq $fallbackPort) {
-        throw "Port 127.0.0.1:$ApiPort is already in use by: $owners, and no nearby free port was found."
-    }
-    Write-Host "Port 127.0.0.1:$ApiPort is already in use by: $owners."
-    Write-Host "Starting this dev desktop session on http://127.0.0.1:$fallbackPort/v1 instead."
-    $ApiPort = $fallbackPort
 }
 
 Write-Host "Building React UI from current source..."
@@ -270,7 +284,10 @@ try {
     Invoke-Checked "npm.cmd" @("--workspace", "@freerouter/desktop", "run", "dev")
 }
 finally {
+    Write-Host "Stopping FreeRouter dev backend on 127.0.0.1:$ApiPort..."
+    Stop-ChildProcess $backendProcess
+    Stop-FreeRouterGatewayBackends -Port $ApiPort
     Remove-Item Env:\FREEROUTER_DEV_BACKEND -ErrorAction SilentlyContinue
     Remove-Item Env:\FREEROUTER_DESKTOP_TOKEN -ErrorAction SilentlyContinue
-    Stop-ChildProcess $backendProcess
+    Remove-Item Env:\GATEWAY_PORT -ErrorAction SilentlyContinue
 }

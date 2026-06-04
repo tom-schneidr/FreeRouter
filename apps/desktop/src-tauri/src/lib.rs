@@ -1,9 +1,12 @@
 use std::{
     fs::{create_dir_all, OpenOptions},
     io::Write,
-    net::{TcpListener, TcpStream, ToSocketAddrs},
+    net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -21,6 +24,7 @@ const GATEWAY_HOST: &str = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT: u16 = 8000;
 const SIDECAR_RESTART_EXIT_CODE: i32 = 42;
 const DESKTOP_APP_ROUTE: &str = "/app";
+const TRAY_ICON_ID: &str = "main";
 
 struct AppRuntimeState {
     sidecar: Mutex<Option<CommandChild>>,
@@ -28,6 +32,9 @@ struct AppRuntimeState {
     desktop_token: String,
     project_root: PathBuf,
     manages_sidecar: bool,
+    quitting: AtomicBool,
+    #[cfg(windows)]
+    sidecar_job: Mutex<Option<isize>>,
 }
 
 pub fn run() {
@@ -38,14 +45,7 @@ pub fn run() {
             let dev_backend = std::env::var("FREEROUTER_DEV_BACKEND").ok().as_deref() == Some("1");
             let token = std::env::var("FREEROUTER_DESKTOP_TOKEN")
                 .unwrap_or_else(|_| Uuid::new_v4().to_string());
-            let gateway_port = if dev_backend {
-                std::env::var("GATEWAY_PORT")
-                    .ok()
-                    .and_then(|value| value.parse::<u16>().ok())
-                    .unwrap_or(DEFAULT_GATEWAY_PORT)
-            } else {
-                select_gateway_port(GATEWAY_HOST)
-            };
+            let gateway_port = configured_gateway_port();
             let project_root = app
                 .path()
                 .app_data_dir()
@@ -57,6 +57,9 @@ pub fn run() {
                 desktop_token: token.clone(),
                 project_root: project_root.clone(),
                 manages_sidecar: !dev_backend,
+                quitting: AtomicBool::new(false),
+                #[cfg(windows)]
+                sidecar_job: Mutex::new(None),
             });
 
             if dev_backend {
@@ -67,10 +70,13 @@ pub fn run() {
                     ),
                 );
             } else {
+                reclaim_gateway_port(GATEWAY_HOST, gateway_port);
                 start_sidecar(app.handle(), gateway_port, &token, &project_root);
             }
 
             let show = MenuItem::with_id(app, "show", "Show FreeRouter", true, None::<&str>)?;
+            let hide_to_tray =
+                MenuItem::with_id(app, "hide_to_tray", "Hide to tray", true, None::<&str>)?;
             let chat = MenuItem::with_id(app, "open_chat", "Chat", true, None::<&str>)?;
             let models = MenuItem::with_id(app, "open_models", "Models", true, None::<&str>)?;
             let copy_url =
@@ -80,7 +86,7 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&show, &chat, &models, &copy_url, &restart, &quit],
+                &[&show, &hide_to_tray, &chat, &models, &copy_url, &restart, &quit],
             )?;
 
             let tray_icon = app
@@ -88,7 +94,7 @@ pub fn run() {
                 .cloned()
                 .expect("Missing application icon");
 
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id(TRAY_ICON_ID)
                 .icon(tray_icon)
                 .tooltip("FreeRouter")
                 .menu(&menu)
@@ -105,16 +111,14 @@ pub fn run() {
                 })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
+                    "hide_to_tray" => hide_main_window(app),
                     "open_chat" => navigate_desktop_section(app, "chat"),
                     "open_models" => navigate_desktop_section(app, "models"),
                     "copy_url" => copy_base_url(app),
                     "restart" => {
                         restart_sidecar(app);
                     }
-                    "quit" => {
-                        shutdown_sidecar(app);
-                        app.exit(0);
-                    }
+                    "quit" => quit_application(app),
                     _ => {}
                 })
                 .build(app)?;
@@ -137,14 +141,17 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                hide_main_window(window.app_handle());
             }
         })
         .build(tauri::generate_context!())
         .expect("error while building FreeRouter desktop shell")
         .run(|app_handle, event| {
-            if matches!(event, RunEvent::Exit) {
-                shutdown_sidecar(app_handle);
+            match event {
+                RunEvent::Exit | RunEvent::ExitRequested { .. } => {
+                    shutdown_gateway(app_handle);
+                }
+                _ => {}
             }
         });
 }
@@ -178,8 +185,13 @@ fn start_sidecar(
         .spawn()
         .expect("Failed to spawn FreeRouter sidecar");
 
+    let sidecar_pid = child.pid();
     if let Some(state) = app.try_state::<AppRuntimeState>() {
         *state.sidecar.lock().unwrap() = Some(child);
+        #[cfg(windows)]
+        if let Some(job) = create_kill_on_close_job(sidecar_pid) {
+            *state.sidecar_job.lock().unwrap() = Some(job);
+        }
     }
 
     spawn_sidecar_monitor(app.clone(), rx, gateway_port, token.to_string(), project_root.clone());
@@ -199,12 +211,20 @@ fn spawn_sidecar_monitor(
                     append_sidecar_output(&project_root, &line);
                 }
                 CommandEvent::Terminated(payload) => {
+                    let quitting = app
+                        .try_state::<AppRuntimeState>()
+                        .map(|state| state.quitting.load(Ordering::SeqCst))
+                        .unwrap_or(false);
+                    if quitting {
+                        break;
+                    }
                     if payload.code == Some(SIDECAR_RESTART_EXIT_CODE) {
                         let _ = append_launcher_log(
                             &project_root,
                             "Desktop restart requested by local app controls.",
                         );
-                        let _ = start_sidecar(&app, gateway_port, &token, &project_root);
+                        reclaim_gateway_port(GATEWAY_HOST, gateway_port);
+                        start_sidecar(&app, gateway_port, &token, &project_root);
                     } else {
                         let _ = append_launcher_log(
                             &project_root,
@@ -244,6 +264,7 @@ fn restart_sidecar(app: &AppHandle) {
 
     shutdown_sidecar(app);
     thread::sleep(Duration::from_millis(350));
+    reclaim_gateway_port(GATEWAY_HOST, gateway_port);
     start_sidecar(app, gateway_port, &token, &project_root);
 }
 
@@ -257,10 +278,43 @@ fn shutdown_sidecar(app: &AppHandle) {
     }
 }
 
+fn shutdown_gateway(app: &AppHandle) {
+    let gateway_port = app
+        .try_state::<AppRuntimeState>()
+        .map(|state| state.gateway_port)
+        .unwrap_or(DEFAULT_GATEWAY_PORT);
+    shutdown_sidecar(app);
+    stop_gateway_listeners(GATEWAY_HOST, gateway_port);
+}
+
+fn quit_application(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppRuntimeState>() {
+        if state.quitting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+    }
+    remove_tray_icon(app);
+    shutdown_gateway(app);
+    app.exit(0);
+}
+
+fn remove_tray_icon(app: &AppHandle) {
+    if let Some(tray) = app.tray_by_id(TRAY_ICON_ID) {
+        let _ = tray.set_visible(false);
+    }
+    let _ = app.remove_tray_by_id(TRAY_ICON_ID);
+}
+
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
+    }
+}
+
+fn hide_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
     }
 }
 
@@ -358,15 +412,105 @@ fn force_kill_process_tree(pid: u32) {
 #[cfg(not(windows))]
 fn force_kill_process_tree(_pid: u32) {}
 
-fn select_gateway_port(host: &str) -> u16 {
-    if TcpListener::bind((host, DEFAULT_GATEWAY_PORT)).is_ok() {
-        return DEFAULT_GATEWAY_PORT;
+#[cfg(windows)]
+fn create_kill_on_close_job(pid: u32) -> Option<isize> {
+    use std::mem::size_of;
+
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+    if pid == 0 {
+        return None;
     }
 
-    TcpListener::bind((host, 0))
-        .and_then(|listener| listener.local_addr())
-        .map(|address| address.port())
+    unsafe {
+        let job = CreateJobObjectW(None, None).ok()?;
+
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        windows::Win32::System::JobObjects::SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+        .ok()?;
+
+        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid).ok()?;
+
+        if AssignProcessToJobObject(job, process).is_err() {
+            let _ = CloseHandle(process);
+            let _ = CloseHandle(job);
+            return None;
+        }
+
+        let _ = CloseHandle(process);
+        Some(job.0 as isize)
+    }
+}
+
+fn configured_gateway_port() -> u16 {
+    std::env::var("GATEWAY_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(DEFAULT_GATEWAY_PORT)
+}
+
+fn reclaim_gateway_port(host: &str, port: u16) {
+    stop_gateway_listeners(host, port);
+    thread::sleep(Duration::from_millis(350));
+}
+
+fn listener_pids_on_port(host: &str, port: u16) -> Vec<u32> {
+    let mut pids = Vec::new();
+    let needle = format!("{host}:{port}");
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let output = match std::process::Command::new("netstat")
+            .args(["-ano"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => return pids,
+        };
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if !trimmed.contains("LISTENING") || !trimmed.contains(&needle) {
+                continue;
+            }
+            let Some(pid) = trimmed.split_whitespace().last().and_then(|value| value.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if pid > 0 && !pids.contains(&pid) {
+                pids.push(pid);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (host, port, needle);
+    }
+
+    pids
+}
+
+fn stop_gateway_listeners(host: &str, port: u16) {
+    for pid in listener_pids_on_port(host, port) {
+        force_kill_process_tree(pid);
+    }
 }
 
 fn wait_for_port(host: &str, port: u16, timeout: Duration) -> bool {

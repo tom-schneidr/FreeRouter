@@ -1043,6 +1043,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-shell",
  "uuid",
+ "windows",
 ]
 
 [[package]]

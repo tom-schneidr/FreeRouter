@@ -108,6 +108,7 @@ class FreeRouterDesktopApp:
 
         menu = pystray.Menu(
             pystray.MenuItem("Show FreeRouter", self._tray_show, default=True),
+            pystray.MenuItem("Hide to tray", self._tray_hide),
             pystray.MenuItem("Chat", lambda: self._tray_open("/app#chat")),
             pystray.MenuItem("Models", lambda: self._tray_open("/app#models")),
             pystray.MenuItem("Copy base URL", lambda: self.bridge.copy_base_url()),
@@ -128,6 +129,11 @@ class FreeRouterDesktopApp:
             return
         self.window.restore()
         self.window.show()
+
+    def _tray_hide(self) -> None:
+        if self.window is None:
+            return
+        self.window.hide()
 
     def _tray_open(self, path: str) -> None:
         if self.window is None:
