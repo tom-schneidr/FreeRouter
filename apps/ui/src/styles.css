@@ -120,35 +120,29 @@ button:hover {
 
 .brand {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   padding: 20px 18px;
   border-bottom: 1px solid var(--line-soft, rgba(148, 163, 184, 0.16));
 }
 
-.brand-mark {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  background: #2563eb;
-  box-shadow: 0 12px 28px var(--brand-shadow, rgba(37, 99, 235, 0.34));
-}
-
-.brand strong,
-.brand span {
+.brand-logo {
   display: block;
+  width: min(176px, 100%);
+  height: auto;
 }
 
-.brand strong {
-  font-size: 16px;
+.brand-icon {
+  display: none;
+  width: 42px;
+  height: 42px;
 }
 
-.brand span {
-  margin-top: 3px;
+.brand-subtitle {
   color: var(--muted, #91a4bd);
   font-size: 12px;
+  padding-left: 2px;
 }
 
 .nav-list {
@@ -789,7 +783,15 @@ td span {
     padding-inline: 0;
   }
 
-  .brand div:last-child,
+  .brand-logo {
+    display: none;
+  }
+
+  .brand-icon {
+    display: block;
+  }
+
+  .brand-subtitle,
   .nav-list span {
     display: none;
   }

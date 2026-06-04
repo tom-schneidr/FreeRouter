@@ -7,6 +7,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.ui.brand import FAVICON_LINK
+
 
 REACT_APP_ROUTE = "/app"
 REACT_APP_COMPAT_ROUTE = "/app-next"
@@ -58,7 +60,9 @@ def _react_index_response(dist: Path, request: Request) -> Response:
     if index_path.exists():
         return HTMLResponse(index_path.read_text(encoding="utf-8"))
     return HTMLResponse(
-        "<!doctype html><title>FreeRouter UI Missing</title>"
+        "<!doctype html><head>"
+        + FAVICON_LINK
+        + "</head><title>FreeRouter UI Missing</title>"
         "<main><h1>FreeRouter UI build missing</h1>"
         "<p>Run npm run build:web, then restart FreeRouter.</p></main>",
         status_code=503,

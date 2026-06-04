@@ -5,6 +5,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/png" href="/favicon.ico">
     <title>FreeRouter</title>
     <style>
       *, *::before, *::after { box-sizing: border-box; }
@@ -93,30 +94,28 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       }
       .brand {
         display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 18px 18px 16px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+        padding: 20px 18px 16px;
         border-bottom: 1px solid var(--line-soft);
       }
-      .brand-mark {
-        width: 34px;
-        height: 34px;
-        border-radius: 9px;
-        display: grid;
-        place-items: center;
-        background: #2563eb;
-        box-shadow: 0 10px 28px rgba(37,99,235,.3);
+      .brand-logo {
+        display: block;
+        width: min(176px, 100%);
+        height: auto;
       }
-      .brand-mark::before {
-        content: "";
-        width: 17px;
-        height: 14px;
-        border-left: 4px solid var(--link);
-        border-bottom: 4px solid #22c55e;
-        transform: skewX(-12deg);
+      .brand-icon {
+        display: none;
+        width: 42px;
+        height: 42px;
       }
-      .brand h1 { margin: 0; font-size: 16px; line-height: 1.1; }
-      .brand span { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+      .brand-subtitle {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        padding-left: 2px;
+      }
       .nav {
         display: grid;
         gap: 4px;
@@ -318,8 +317,9 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       }
       @media (max-width: 1180px) {
         .app { grid-template-columns: 74px minmax(0, 1fr); }
-        .brand div:last-child, .nav-label, .sidebar-footer { display: none; }
-        .brand { justify-content: center; padding-left: 0; padding-right: 0; }
+        .brand-logo, .brand-subtitle, .nav-label, .sidebar-footer { display: none; }
+        .brand-icon { display: block; }
+        .brand { justify-content: center; align-items: center; padding: 12px 0; }
         .nav button { justify-content: center; padding: 0; }
         .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .grid.cols-2 { grid-template-columns: 1fr; }
@@ -329,8 +329,9 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         html, body { overflow: hidden; }
         .app { display: grid; grid-template-columns: 74px minmax(0, 1fr); height: var(--app-height, 100%); min-height: 0; }
         .sidebar { position: relative; z-index: 4; min-height: 0; }
-        .brand { justify-content: center; padding: 12px 0; }
-        .brand div:last-child { display: none; }
+        .brand-logo, .brand-subtitle { display: none; }
+        .brand-icon { display: block; }
+        .brand { justify-content: center; align-items: center; padding: 12px 0; }
         .nav { display: grid; gap: 4px; overflow-y: auto; overflow-x: hidden; padding: 8px; align-content: start; }
         .nav button { width: 100%; min-width: 0; justify-content: center; padding: 0; }
         .main { display: grid; min-height: 0; overflow: hidden; }
@@ -345,11 +346,9 @@ DESKTOP_APP_HTML = r"""<!doctype html>
     <div class="app">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark" aria-hidden="true"></div>
-          <div>
-            <h1>FreeRouter</h1>
-            <span>Local AI gateway</span>
-          </div>
+          <img class="brand-icon" src="/brand/favicon.png" alt="FreeRouter">
+          <img class="brand-logo" src="/brand/logo.png" alt="FreeRouter">
+          <span class="brand-subtitle">Local AI gateway</span>
         </div>
         <nav class="nav" aria-label="App sections">
           <button data-section="dashboard" class="active"><span class="nav-icon">D</span><span class="nav-label">Dashboard</span></button>

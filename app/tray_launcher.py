@@ -12,7 +12,10 @@ from pathlib import Path
 from tkinter import messagebox
 
 import pystray
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageTk
+
+from app.desktop_icon import build_icon_image
+from app.ui.brand import LOGO_PATH
 
 APP_NAME = "FreeRouter"
 DEFAULT_HOST = "127.0.0.1"
@@ -42,6 +45,7 @@ class FreeRouterTrayApp:
         icon_image = self._build_icon_image()
         self.window_icon = ImageTk.PhotoImage(icon_image)
         self.root.iconphoto(True, self.window_icon)
+        self.header_logo = ImageTk.PhotoImage(Image.open(LOGO_PATH))
 
         self.status_var = tk.StringVar(value="Starting FreeRouter...")
         self._build_window()
@@ -60,10 +64,8 @@ class FreeRouterTrayApp:
 
         title = tk.Label(
             header,
-            text=APP_NAME,
+            image=self.header_logo,
             bg="#111827",
-            fg="#e2e8f0",
-            font=("Segoe UI", 15, "bold"),
         )
         title.pack(side=tk.LEFT)
 
@@ -237,13 +239,7 @@ class FreeRouterTrayApp:
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
 
     def _build_icon_image(self) -> Image.Image:
-        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        draw.rounded_rectangle((6, 6, 58, 58), radius=14, fill="#2563eb")
-        draw.rounded_rectangle((14, 16, 50, 48), radius=8, fill="#0f172a")
-        draw.line((20, 24, 30, 32, 20, 40), fill="#93c5fd", width=4, joint="curve")
-        draw.line((34, 40, 46, 40), fill="#22c55e", width=4)
-        return image
+        return build_icon_image(64)
 
     def _set_windows_app_id(self) -> None:
         if os.name != "nt":

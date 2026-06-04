@@ -7,6 +7,7 @@ $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RunScript = Join-Path $ProjectRoot "run.ps1"
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $TauriExe = Join-Path $ProjectRoot "apps\desktop\src-tauri\target\release\freerouter_desktop.exe"
+$IconSource = Join-Path $ProjectRoot "apps\desktop\src-tauri\icons\icon.ico"
 $IconPath = Join-Path $ProjectRoot "data\freerouter.ico"
 
 function New-FreeRouterShortcut {
@@ -21,7 +22,7 @@ function New-FreeRouterShortcut {
     $shortcut.WorkingDirectory = $ProjectRoot
     $shortcut.Description = "FreeRouter local desktop app"
     if (Test-Path $IconPath) {
-        $shortcut.IconLocation = $IconPath
+        $shortcut.IconLocation = "$IconPath,0"
     }
     $shortcut.Save()
 }
@@ -32,11 +33,26 @@ if (-not (Test-Path $Python)) {
     throw "Could not find python.exe in the local virtual environment."
 }
 
-if (-not (Test-Path $TauriExe)) {
-    Write-Host "FreeRouter desktop executable not found. Building Tauri shell and backend sidecar..."
+& $Python -m app.desktop_icon --sync-all
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not sync FreeRouter desktop icons."
+}
+
+$needsBuild = -not (Test-Path $TauriExe)
+if (-not $needsBuild -and (Test-Path $IconSource)) {
+    $needsBuild = (Get-Item $IconSource).LastWriteTimeUtc -gt (Get-Item $TauriExe).LastWriteTimeUtc
+}
+
+if ($needsBuild) {
+    Write-Host "FreeRouter desktop executable is missing or older than the app icon. Rebuilding..."
     Push-Location $ProjectRoot
     try {
-        & npm.cmd run build:desktop
+        if (Test-Path $TauriExe) {
+            & npm.cmd --workspace @freerouter/desktop run build
+        }
+        else {
+            & npm.cmd run build:desktop
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "Desktop build failed."
         }
@@ -48,11 +64,6 @@ if (-not (Test-Path $TauriExe)) {
 
 if (-not (Test-Path $TauriExe)) {
     throw "Expected desktop executable was not produced: $TauriExe"
-}
-
-& $Python -m app.desktop_icon --output $IconPath
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not create FreeRouter desktop icon."
 }
 
 $ProgramsDir = [Environment]::GetFolderPath("Programs")

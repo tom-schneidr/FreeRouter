@@ -52,6 +52,7 @@ from app.router import (
 from app.settings import get_settings
 from app.state import StateManager
 from app.stream_route import stream_route_chat
+from app.ui.brand import FAVICON_LINK, FAVICON_PATH, LOGO_PATH, NAV_BRAND_CSS, inject_legacy_nav_branding, nav_brand_html
 from app.ui.docs_page import swagger_docs_html
 from app.ui.embed import with_embed_support
 from app.ui.theme import with_theme_support
@@ -214,12 +215,16 @@ def _content_parts_to_text(parts: list[Any]) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
-    return with_theme_support("""
+    return with_theme_support(
+        """
     <!doctype html>
     <html lang="en">
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        """
+        + FAVICON_LINK
+        + """
         <title>FreeRouter - API Gateway</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -234,10 +239,12 @@ async def index() -> str:
           html, body { height: 100%; }
           body { font-family: var(--font); background: var(--bg-primary); color: var(--text); display: flex; flex-direction: column; }
           nav { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem; background: var(--bg-secondary); border-bottom: 1px solid var(--border); flex-shrink: 0; }
-          nav h1 { font-size: 1rem; font-weight: 700; background: linear-gradient(135deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
           nav a { color: var(--text-muted); text-decoration: none; font-size: 0.85rem; transition: color 0.2s; }
           nav a:hover { color: var(--text); }
           .nav-spacer { flex: 1; }
+        """
+        + NAV_BRAND_CSS
+        + """
           main { max-width: 800px; margin: 4rem auto; padding: 2rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
           h2 { font-size: 1.5rem; font-weight: 600; margin-bottom: 1.5rem; color: var(--heading); }
           p { color: var(--text-muted); line-height: 1.6; margin-bottom: 1.5rem; font-size: 0.95rem; }
@@ -250,7 +257,9 @@ async def index() -> str:
       </head>
       <body>
         <nav>
-          <h1>FreeRouter</h1>
+          """
+        + nav_brand_html()
+        + """
           <span class="nav-spacer"></span>
           <a href="/">Home</a>
           <a href="/chat">Chat</a>
@@ -274,12 +283,23 @@ async def index() -> str:
         </main>
       </body>
     </html>
-    """)
+    """
+    )
 
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> Response:
-    return Response(status_code=204)
+    return Response(content=FAVICON_PATH.read_bytes(), media_type="image/png")
+
+
+@app.get("/brand/favicon.png", include_in_schema=False)
+async def brand_favicon() -> Response:
+    return Response(content=FAVICON_PATH.read_bytes(), media_type="image/png")
+
+
+@app.get("/brand/logo.png", include_in_schema=False)
+async def brand_logo() -> Response:
+    return Response(content=LOGO_PATH.read_bytes(), media_type="image/png")
 
 
 @app.get("/docs", include_in_schema=False)
@@ -549,7 +569,7 @@ async def _catalog_payload_with_health(
 
 @app.get("/status", response_class=HTMLResponse)
 async def provider_status_page() -> HTMLResponse:
-    return HTMLResponse(with_embed_support(r"""
+    return HTMLResponse(with_embed_support(inject_legacy_nav_branding(r"""
 <!doctype html>
 <html lang="en">
   <head>
@@ -895,7 +915,7 @@ async def provider_status_page() -> HTMLResponse:
     </script>
   </body>
 </html>
-"""))
+""")))
 
 
 @app.get("/v1/providers/status")
@@ -1730,7 +1750,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
     )
 
 
-ROUTE_HEALTH_HTML = """
+ROUTE_HEALTH_HTML = inject_legacy_nav_branding("""
 <!doctype html>
 <html lang="en">
   <head>
@@ -1813,10 +1833,10 @@ ROUTE_HEALTH_HTML = """
     </script>
   </body>
 </html>
-"""
+""")
 
 
-LIVE_API_HTML = r"""
+LIVE_API_HTML = inject_legacy_nav_branding(r"""
 <!doctype html>
 <html lang="en">
   <head>
@@ -2420,10 +2440,10 @@ LIVE_API_HTML = r"""
     </script>
   </body>
 </html>
-"""
+""")
 
 
-MODEL_CATALOG_HTML = """
+MODEL_CATALOG_HTML = inject_legacy_nav_branding("""
 <!doctype html>
 <html lang="en">
   <head>
@@ -3028,4 +3048,4 @@ MODEL_CATALOG_HTML = """
     </script>
   </body>
 </html>
-"""
+""")

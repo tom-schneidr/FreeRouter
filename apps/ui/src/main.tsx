@@ -11,11 +11,12 @@ import {
   HeartPulse,
   MessageSquareText,
   RefreshCw,
-  Route,
   ScrollText,
   Settings,
   Upload,
 } from "lucide-react";
+import brandIcon from "./assets/brand/favicon.png";
+import brandLogo from "./assets/brand/logo.png";
 import "./styles.css";
 import "./theme.css";
 import { applyTheme, getThemePreference, initTheme, type ThemePreference } from "./theme";
@@ -231,13 +232,9 @@ function FreeRouterShell() {
     <div className="app-shell">
       <aside className="sidebar" aria-label="Primary navigation">
         <div className="brand">
-          <div className="brand-mark" aria-hidden="true">
-            <Route size={20} />
-          </div>
-          <div>
-            <strong>FreeRouter</strong>
-            <span>Local AI gateway</span>
-          </div>
+          <img className="brand-icon" src={brandIcon} alt="FreeRouter" />
+          <img className="brand-logo" src={brandLogo} alt="FreeRouter" />
+          <span className="brand-subtitle">Local AI gateway</span>
         </div>
         <nav className="nav-list">
           {NAV_ITEMS.map((item) => (

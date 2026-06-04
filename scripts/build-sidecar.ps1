@@ -31,6 +31,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Building FreeRouter sidecar..."
+& $VenvPython -m app.desktop_icon --sync-all
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not sync FreeRouter desktop icons."
+}
+
 & $VenvPython -m PyInstaller `
     --noconfirm `
     --clean `

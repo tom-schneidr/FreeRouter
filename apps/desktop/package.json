@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "npm run icons:sync --prefix ../..",
+    "prebuild": "npm run icons:sync --prefix ../..",
     "dev": "tauri dev",
     "build": "tauri build",
     "info": "tauri info"
