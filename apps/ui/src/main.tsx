@@ -44,16 +44,6 @@ type ProviderStatus = {
   tokens_used_today: number;
 };
 
-type LiveEvent = {
-  request_id?: string;
-  event_type?: string;
-  method?: string;
-  path?: string;
-  status?: string;
-  provider_name?: string;
-  route_id?: string;
-};
-
 type DesktopField = {
   key: string;
   label: string;
@@ -151,11 +141,9 @@ function FreeRouterShell() {
   const health = useGatewayQuery<GatewayHealth>("gateway-health", "/v1/gateway/health.json", 5000);
   const models = useGatewayQuery<{ data: ModelRoute[] }>("gateway-models", "/v1/gateway/models", 10000);
   const providers = useGatewayQuery<{ data: ProviderStatus[] }>("provider-status", "/v1/providers/status", 10000);
-  const live = useGatewayQuery<{ data: LiveEvent[] }>("live-traffic", "/v1/gateway/live/snapshot", 3000);
 
   const routes = models.data?.data ?? [];
   const providerRows = providers.data?.data ?? [];
-  const liveRows = live.data?.data ?? [];
   const baseUrl =
     desktopReady.data?.server?.base_url ?? `${window.location.origin}/v1`;
 
@@ -164,16 +152,6 @@ function FreeRouterShell() {
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
-
-  React.useEffect(() => {
-    if (activeSection === "dashboard") {
-      const timer = window.setInterval(() => {
-        queryClient.invalidateQueries({ queryKey: ["live-traffic"] });
-      }, 3000);
-      return () => window.clearInterval(timer);
-    }
-    return undefined;
-  }, [activeSection]);
 
   function selectSection(section: SectionId) {
     if (section !== "docs" && activeSection !== "docs") {
@@ -291,7 +269,6 @@ function FreeRouterShell() {
               routeCount={routes.length}
               flaggedRoutes={flaggedRoutes}
               providers={providerRows}
-              live={liveRows}
             />
           )}
           {Array.from(loadedEmbeds).map((sectionId) => {
@@ -393,14 +370,13 @@ function DashboardView(props: {
   routeCount: number;
   flaggedRoutes: number;
   providers: ProviderStatus[];
-  live: LiveEvent[];
 }) {
   return (
     <div className="section-stack">
       <div className="section-heading">
         <div>
           <h1>Dashboard</h1>
-          <p>Local gateway status, provider readiness, route health, and recent traffic in one place.</p>
+          <p>Local gateway status, provider readiness, and route health in one place.</p>
         </div>
       </div>
       <div className="metrics">
@@ -417,14 +393,9 @@ function DashboardView(props: {
           note={props.flaggedRoutes ? "Review route health" : "No active route flags"}
         />
       </div>
-      <div className="two-column">
-        <Panel title="Provider readiness">
-          <ProviderTable providers={props.providers} />
-        </Panel>
-        <Panel title="Recent traffic">
-          <TrafficTable live={props.live.slice(0, 6)} />
-        </Panel>
-      </div>
+      <Panel title="Provider readiness">
+        <ProviderTable providers={props.providers} />
+      </Panel>
     </div>
   );
 }
@@ -700,37 +671,6 @@ function ProviderTable({ providers }: { providers: ProviderStatus[] }) {
               </td>
               <td>{provider.requests_today}</td>
               <td>{provider.tokens_used_today}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function TrafficTable({ live }: { live: LiveEvent[] }) {
-  if (!live.length) return <EmptyState message="No traffic recorded in this session." />;
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Event</th>
-            <th>Status</th>
-            <th>Route</th>
-          </tr>
-        </thead>
-        <tbody>
-          {live.map((event, index) => (
-            <tr key={`${event.request_id ?? "event"}-${index}`}>
-              <td>
-                <strong>{event.method || event.path || event.event_type || "request"}</strong>
-                <span>{event.path || event.request_id || ""}</span>
-              </td>
-              <td>
-                <StatusPill tone="muted">{event.status || event.event_type || "event"}</StatusPill>
-              </td>
-              <td>{event.provider_name || event.route_id || ""}</td>
             </tr>
           ))}
         </tbody>

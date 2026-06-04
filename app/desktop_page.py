@@ -397,29 +397,18 @@ DESKTOP_APP_HTML = r"""<!doctype html>
             <div class="section-header">
               <div>
                 <h2>Dashboard</h2>
-                <p>Local gateway status, provider readiness, route health, and recent traffic in one place.</p>
+                <p>Local gateway status, provider readiness, and route health in one place.</p>
               </div>
             </div>
             <div id="dashboardMetrics" class="grid cols-4"></div>
-            <div class="grid cols-2" style="margin-top:12px">
-              <div class="panel pad">
-                <div class="section-header" style="margin-bottom:10px">
-                  <div>
-                    <h2 style="font-size:16px">Provider readiness</h2>
-                    <p>Configured providers and current local quota state.</p>
-                  </div>
+            <div class="panel pad" style="margin-top:12px">
+              <div class="section-header" style="margin-bottom:10px">
+                <div>
+                  <h2 style="font-size:16px">Provider readiness</h2>
+                  <p>Configured providers and current local quota state.</p>
                 </div>
-                <div id="dashboardProviders"></div>
               </div>
-              <div class="panel pad">
-                <div class="section-header" style="margin-bottom:10px">
-                  <div>
-                    <h2 style="font-size:16px">Recent traffic</h2>
-                    <p>Latest local requests observed by the gateway.</p>
-                  </div>
-                </div>
-                <div id="dashboardTraffic"></div>
-              </div>
+              <div id="dashboardProviders"></div>
             </div>
           </section>
 
@@ -495,7 +484,6 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         health: null,
         models: [],
         providers: [],
-        live: [],
         settings: null,
         activeSection: 'dashboard',
         previousSection: 'dashboard'
@@ -641,11 +629,10 @@ DESKTOP_APP_HTML = r"""<!doctype html>
 
       async function refreshAll() {
         setServerChrome('starting', 'Refreshing local gateway state...');
-        const [health, models, providers, live] = await Promise.allSettled([
+        const [health, models, providers] = await Promise.allSettled([
           fetchJson('/v1/gateway/health.json'),
           fetchJson('/v1/gateway/models'),
           fetchJson('/v1/providers/status'),
-          fetchJson('/v1/gateway/live/snapshot'),
         ]);
         if (health.status === 'fulfilled') {
           appState.health = health.value;
@@ -656,7 +643,6 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         }
         appState.models = models.status === 'fulfilled' ? models.value.data || [] : [];
         appState.providers = providers.status === 'fulfilled' ? providers.value.data || [] : [];
-        appState.live = live.status === 'fulfilled' ? live.value.data || [] : [];
         renderAll();
       }
 
@@ -688,13 +674,6 @@ DESKTOP_APP_HTML = r"""<!doctype html>
             provider.tokens_used_today,
           ])
         ) : empty('No provider state loaded yet.');
-
-        const rows = appState.live.slice(0, 6).map((event) => [
-          `<div class="cell-main"><strong>${escapeHtml(event.method || event.path || event.event_type || 'request')}</strong><small>${escapeHtml(event.path || event.request_id || '')}</small></div>`,
-          pill(event.status || event.event_type || 'event'),
-          escapeHtml(event.provider_name || event.route_id || ''),
-        ]);
-        $('dashboardTraffic').innerHTML = rows.length ? table(['Event', 'Status', 'Route'], rows) : empty('No traffic recorded in this session.');
       }
 
       function table(headers, rows) {
@@ -932,14 +911,6 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       selectSection((location.hash || '#dashboard').slice(1));
       detectDesktopBridge();
       refreshAll();
-      setInterval(() => {
-        if (appState.activeSection === 'dashboard') {
-          fetchJson('/v1/gateway/live/snapshot').then((payload) => {
-            appState.live = payload.data || [];
-            renderDashboard();
-          }).catch(() => {});
-        }
-      }, 3000);
     </script>
   </body>
 </html>
