@@ -590,11 +590,53 @@ async def provider_status_page() -> HTMLResponse:
       main { max-width: 1280px; margin: auto; padding: 2rem; }
       h2 { margin-bottom: 0.5rem; }
       .muted { color: var(--text-muted); }
-      .toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; margin: 1.5rem 0; }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 1rem;
+        margin: 1.5rem 0;
+      }
+      .toolbar-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.75rem;
+        margin-left: auto;
+        flex: 0 0 auto;
+      }
+      .toolbar-actions #summary {
+        text-align: right;
+        white-space: nowrap;
+      }
       input, select, button { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text); padding: 0.55rem 0.75rem; font: inherit; font-size: 0.9rem; }
       button { border: none; background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 600; }
       button:hover { background: #2563eb; }
-      .filters { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+      .filters {
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 0.75rem;
+        flex: 0 1 auto;
+        min-width: 0;
+      }
+      .filter-search {
+        flex: 0 0 auto;
+        width: 13rem;
+        max-width: 13rem;
+        min-width: 9rem;
+      }
+      .filter-selects {
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 0.75rem;
+        flex: 0 0 auto;
+      }
+      .filter-selects select {
+        width: 10.5rem;
+        min-width: 8.5rem;
+      }
       .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin: 1.5rem 0; }
       .summary-card { padding: 1rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
       .summary-card .label { color: var(--text-muted); font-size: 0.74rem; margin-bottom: 0.35rem; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -625,6 +667,227 @@ async def provider_status_page() -> HTMLResponse:
       th.sortable .sort-ind { margin-left: 0.35rem; color: var(--accent); font-size: 0.68rem; }
       th.sortable:not(.sorted) .sort-ind { color: var(--border); }
       .priority { color: var(--accent); font-size: 0.76rem; font-weight: 700; }
+      html.embed-mode main { overflow-x: hidden; padding: 0.65rem 0.85rem; }
+      html.embed-mode #summaryCards { display: none; }
+      html.embed-mode .toolbar {
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 0.45rem;
+        margin: 0.5rem 0;
+      }
+      html.embed-mode .toolbar-actions {
+        gap: 0.45rem;
+      }
+      html.embed-mode .toolbar-actions #summary {
+        font-size: 0.78rem;
+      }
+      html.embed-mode .toolbar-actions #reload {
+        padding: 0.38rem 0.65rem;
+        font-size: 0.82rem;
+      }
+      html.embed-mode .filters {
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 0.4rem;
+        flex: 0 1 auto;
+        min-width: 0;
+      }
+      html.embed-mode .filter-search {
+        flex: 0 0 auto;
+        width: 10.5rem;
+        max-width: 10.5rem;
+        min-width: 7.5rem;
+        padding: 0.38rem 0.5rem;
+        font-size: 0.82rem;
+      }
+      html.embed-mode .filter-selects {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 0.4rem;
+        flex: 0 0 auto;
+      }
+      html.embed-mode .filter-selects select {
+        width: 7.75rem;
+        min-width: 6.5rem;
+        padding: 0.38rem 0.45rem;
+        font-size: 0.82rem;
+      }
+      html.embed-mode h2 { font-size: 1.02rem; margin-bottom: 0.15rem; }
+      .lead-embed { display: none; }
+      html.embed-mode .lead-full { display: none; }
+      html.embed-mode .lead-embed { display: inline; }
+      html.embed-mode main > .muted {
+        display: block;
+        margin-bottom: 0.45rem;
+        font-size: 0.8rem;
+        line-height: 1.4;
+      }
+      html.embed-mode .usage-list {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--bg-secondary);
+        overflow: hidden;
+      }
+      html.embed-mode .usage-list-head,
+      html.embed-mode .usage-item-main {
+        display: grid;
+        grid-template-columns:
+          1.75rem
+          minmax(10rem, 1.45fr)
+          minmax(5.75rem, 0.8fr)
+          minmax(5.25rem, 0.85fr)
+          minmax(5.5rem, 0.85fr)
+          minmax(5.75rem, 0.9fr)
+          minmax(4.75rem, 0.75fr)
+          4.5rem;
+        gap: 0.45rem 0.7rem;
+        align-items: center;
+        padding: 0.48rem 0.65rem;
+      }
+      html.embed-mode .usage-list-head {
+        border-bottom: 1px solid var(--border);
+        background: var(--table-head-bg);
+        padding-block: 0.38rem;
+      }
+      html.embed-mode .usage-sort {
+        border: none;
+        background: transparent;
+        color: var(--text-muted);
+        min-height: 0;
+        padding: 0;
+        font-size: 0.74rem;
+        font-weight: 600;
+        line-height: 1.25;
+        cursor: pointer;
+        width: 100%;
+      }
+      html.embed-mode .usage-sort:hover {
+        background: transparent;
+        border: none;
+        color: var(--text);
+      }
+      html.embed-mode .usage-head-rank.usage-sort,
+      html.embed-mode .usage-head-model,
+      html.embed-mode .usage-head-health {
+        text-align: left;
+      }
+      html.embed-mode .usage-head-metric,
+      html.embed-mode .usage-metric-cell,
+      html.embed-mode .usage-health-cell {
+        text-align: right;
+        white-space: normal;
+      }
+      html.embed-mode .usage-sort.sorted { color: var(--text); }
+      html.embed-mode .usage-sort .sort-ind { margin-left: 0.2rem; font-size: 0.62rem; }
+      html.embed-mode .usage-item + .usage-item { border-top: 1px solid var(--line-soft, var(--border)); }
+      html.embed-mode .usage-item:hover .usage-item-main { background: var(--table-row-hover); }
+      html.embed-mode .usage-rank {
+        color: var(--accent);
+        font-size: 0.74rem;
+        font-weight: 700;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      html.embed-mode .usage-route { min-width: 0; }
+      html.embed-mode .usage-route-title strong {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.86rem;
+        line-height: 1.25;
+      }
+      html.embed-mode .usage-route-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        min-width: 0;
+        margin-top: 0.14rem;
+        color: var(--text-muted);
+        font-size: 0.7rem;
+        line-height: 1.2;
+      }
+      html.embed-mode .usage-route-meta .provider-tag {
+        flex: 0 0 auto;
+        color: var(--green);
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+      html.embed-mode .usage-route-id {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      html.embed-mode .usage-health-cell .pill {
+        margin-left: auto;
+        font-size: 0.68rem;
+        padding: 0.12rem 0.45rem;
+        white-space: nowrap;
+      }
+      html.embed-mode .usage-metric-value {
+        display: block;
+        font-size: 0.8rem;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      html.embed-mode .usage-sf {
+        font-variant-numeric: tabular-nums;
+      }
+      html.embed-mode .usage-failures-warn {
+        color: var(--warning-text, #fcd34d);
+        font-weight: 650;
+      }
+      html.embed-mode .usage-token-split {
+        display: grid;
+        gap: 0.08rem;
+        justify-items: end;
+        font-size: 0.74rem;
+        line-height: 1.15;
+      }
+      html.embed-mode .usage-token-split span {
+        font-variant-numeric: tabular-nums;
+      }
+      html.embed-mode .usage-token-split .usage-token-label {
+        color: var(--text-muted);
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      html.embed-mode .usage-expand {
+        justify-self: end;
+        min-width: 0;
+        width: auto;
+        min-height: 1.75rem;
+        padding: 0.2rem 0.45rem;
+        border-radius: 6px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        line-height: 1;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        color: var(--text);
+      }
+      html.embed-mode .usage-details {
+        padding: 0.55rem 0.65rem 0.65rem;
+        background: var(--bg-primary);
+        border-top: 1px solid var(--line-soft, var(--border));
+      }
+      html.embed-mode .usage-details .details {
+        padding: 0;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 0.45rem;
+      }
+      html.embed-mode .usage-details .stat {
+        padding: 0.5rem 0.55rem;
+      }
       @media (max-width: 720px) { main { padding: 1rem; } nav { flex-wrap: wrap; } .filters { width: 100%; } input, select { flex: 1; min-width: 12rem; } }
     </style>
   </head>
@@ -635,26 +898,35 @@ async def provider_status_page() -> HTMLResponse:
     </nav>
     <main>
       <h2>Usage Stats</h2>
-      <p class="muted">Provider quotas, health state, and per-model usage tracked locally by FreeRouter. Click a column header to sort; Priority matches the waterfall order from the <a href="/models" style="color:var(--link)">Models</a> page.</p>
+      <p class="muted">
+        <span class="lead-full">Provider quotas, health state, and per-model usage tracked locally by FreeRouter. Click a column header to sort; Priority matches the waterfall order from the <a href="/models" style="color:var(--link)">Models</a> page.</span>
+        <span class="lead-embed">Per-route usage, health, and token totals. Click a column header to sort.</span>
+      </p>
       <section id="summaryCards" class="summary-grid"></section>
       <div class="toolbar">
         <div class="filters">
-          <input id="search" type="search" placeholder="Search models or providers">
-          <select id="providerFilter"><option value="">All providers</option></select>
-          <select id="healthFilter">
-            <option value="">All health states</option>
-            <option value="active">Active</option>
-            <option value="rate_limited">Rate limited</option>
-            <option value="too_slow">Too slow</option>
-            <option value="potentially_outdated">Potentially outdated</option>
-          </select>
+          <input id="search" class="filter-search" type="search" placeholder="Search models or providers">
+          <div class="filter-selects">
+            <select id="providerFilter"><option value="">All providers</option></select>
+            <select id="healthFilter">
+              <option value="">All health states</option>
+              <option value="active">Active</option>
+              <option value="rate_limited">Rate limited</option>
+              <option value="too_slow">Too slow</option>
+              <option value="potentially_outdated">Potentially outdated</option>
+            </select>
+          </div>
         </div>
-        <span id="summary" class="muted">Loading...</span>
-        <button id="reload">Reload</button>
+        <div class="toolbar-actions">
+          <span id="summary" class="muted">Loading...</span>
+          <button id="reload">Reload</button>
+        </div>
       </div>
       <div id="tableRoot"></div>
     </main>
     <script>
+      const isEmbed = new URLSearchParams(location.search).get('embed') === '1';
+      const detailColSpan = 11;
       const tableRoot = document.getElementById('tableRoot');
       const cardsEl = document.getElementById('summaryCards');
       const summaryEl = document.getElementById('summary');
@@ -753,11 +1025,55 @@ async def provider_status_page() -> HTMLResponse:
       }
       const fmt = (value) => value == null ? 'Unknown' : Number(value).toLocaleString();
       const fmtDate = (value) => value ? new Date(Number(value) * 1000).toLocaleString() : 'Never';
+      const fmtCompact = (value) => {
+        const amount = Number(value || 0);
+        if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(1)}M`;
+        if (amount >= 10_000) return `${Math.round(amount / 1000)}k`;
+        if (amount >= 1000) return `${(amount / 1000).toFixed(1)}k`;
+        return String(amount);
+      };
+      const fmtRelative = (value) => {
+        if (!value) return 'Never';
+        const date = new Date(Number(value) * 1000);
+        const ageMs = Date.now() - date.getTime();
+        if (ageMs < 60_000) return 'Just now';
+        const minutes = Math.floor(ageMs / 60_000);
+        if (minutes < 60) return `${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}h ago`;
+        const days = Math.floor(hours / 24);
+        if (days < 7) return `${days}d ago`;
+        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      };
       const healthLabel = (value) => String(value || 'active').replace(/_/g, ' ');
+      const SORT_HINTS = {
+        rank: 'Sort by waterfall priority',
+        model: 'Sort by model name',
+        health: 'Sort by health state',
+        successes: 'Sort by successes',
+        failures: 'Sort by failures',
+        tokens: 'Sort by total tokens',
+        prompt: 'Sort by prompt tokens',
+        completion: 'Sort by completion tokens',
+        last_used: 'Sort by last used time',
+      };
+      function modelIdLeaf(modelId) {
+        const raw = String(modelId || '').trim();
+        if (!raw) return '';
+        return raw.includes('/') ? raw.split('/').filter(Boolean).pop() : raw;
+      }
       function healthPill(status) {
         if (status === 'active') return '<span class="pill">Active</span>';
         if (status === 'rate_limited') return '<span class="pill warning">Rate limited</span>';
+        if (status === 'too_slow') return '<span class="pill error">Too slow</span>';
+        if (status === 'potentially_outdated') return '<span class="pill error">Outdated</span>';
         return `<span class="pill error">${escapeHtml(healthLabel(status))}</span>`;
+      }
+      function formatSuccessFail(successes, failures) {
+        const ok = Number(successes || 0);
+        const fail = Number(failures || 0);
+        const failClass = fail > 0 ? ' usage-failures-warn' : '';
+        return `<span class="usage-sf"><span class="usage-ok">${fmtCompact(ok)} ok</span><span class="usage-sep"> · </span><span class="usage-fail${failClass}">${fmtCompact(fail)} fail</span></span>`;
       }
       function providerStatus(provider) {
         if (!provider?.configured) return 'Not configured';
@@ -774,6 +1090,10 @@ async def provider_status_page() -> HTMLResponse:
         const limitedRoutes = models.filter((model) => model.health?.status && model.health.status !== 'active').length;
         const providerRequests = providers.reduce((sum, provider) => sum + Number(provider.requests_today || 0), 0);
         const providerTokens = providers.reduce((sum, provider) => sum + Number(provider.tokens_used_today || 0), 0);
+        if (isEmbed) {
+          cardsEl.innerHTML = '';
+          return;
+        }
         cardsEl.innerHTML = `
           <div class="summary-card"><div class="label">Requests today</div><div class="value">${fmt(providerRequests)}</div></div>
           <div class="summary-card"><div class="label">Provider tokens today</div><div class="value">${fmt(providerTokens)}</div></div>
@@ -795,14 +1115,11 @@ async def provider_status_page() -> HTMLResponse:
         });
         return sortedModels(filtered);
       }
-      function detailRow(model) {
+      function detailStats(model) {
         const usage = model.usage || {};
         const health = model.health || {};
         const provider = providers.find((item) => item.name === model.provider_name);
         return `
-          <tr class="details-row">
-            <td colspan="11">
-              <div class="details">
                 ${stat('Route ID', model.route_id)}
                 ${stat('Model priority (rank)', model.rank ?? 'Unknown')}
                 ${stat('Enabled', model.enabled ? 'Yes' : 'No')}
@@ -818,9 +1135,82 @@ async def provider_status_page() -> HTMLResponse:
                 ${stat('Provider state', providerStatus(provider))}
                 ${stat('Provider requests today', fmt(provider?.requests_today || 0))}
                 ${stat('Provider cooldown until', fmtDate(provider?.cooldown_until))}
-              </div>
+        `;
+      }
+      function detailRow(model) {
+        return `
+          <tr class="details-row">
+            <td colspan="${detailColSpan}">
+              <div class="details">${detailStats(model)}</div>
             </td>
           </tr>
+        `;
+      }
+      function detailBlock(model) {
+        return `<div class="usage-details"><div class="details">${detailStats(model)}</div></div>`;
+      }
+      function usageListItem(model) {
+        const usage = model.usage || {};
+        const health = model.health || {};
+        const isExpanded = expanded.has(model.route_id);
+        const displayName = model.display_name || model.model_id;
+        const modelId = String(model.model_id || '');
+        const leafId = modelIdLeaf(modelId);
+        const successes = Number(usage.successes || 0);
+        const failures = Number(usage.failures || 0);
+        const promptTokens = Number(usage.prompt_tokens || 0);
+        const completionTokens = Number(usage.completion_tokens || 0);
+        const totalTokens = Number(usage.total_tokens || 0);
+        return `
+          <article class="usage-item">
+            <div class="usage-item-main">
+              <span class="usage-rank" title="Waterfall priority from Models page">#${escapeHtml(model.rank ?? '—')}</span>
+              <div class="usage-route">
+                <div class="usage-route-title">
+                  <strong title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</strong>
+                </div>
+                <div class="usage-route-meta">
+                  <span class="provider-tag">${escapeHtml(model.provider_name)}</span>
+                  <span class="usage-route-id" title="${escapeHtml(modelId)}">${escapeHtml(leafId)}</span>
+                </div>
+              </div>
+              <div class="usage-health-cell">${healthPill(health.status || 'active')}</div>
+              <div class="usage-metric-cell" title="${escapeHtml(fmt(successes))} successes · ${escapeHtml(fmt(failures))} failures">
+                <span class="usage-metric-value">${formatSuccessFail(successes, failures)}</span>
+              </div>
+              <div class="usage-metric-cell" title="${escapeHtml(fmt(totalTokens))} total tokens">
+                <span class="usage-metric-value">${fmtCompact(totalTokens)}</span>
+              </div>
+              <div class="usage-metric-cell" title="${escapeHtml(fmt(promptTokens))} prompt · ${escapeHtml(fmt(completionTokens))} completion">
+                <span class="usage-token-split">
+                  <span><span class="usage-token-label">in</span> ${fmtCompact(promptTokens)}</span>
+                  <span><span class="usage-token-label">out</span> ${fmtCompact(completionTokens)}</span>
+                </span>
+              </div>
+              <div class="usage-metric-cell" title="${escapeHtml(fmtDate(usage.last_used_at))}">
+                <span class="usage-metric-value">${fmtRelative(usage.last_used_at)}</span>
+              </div>
+              <button type="button" class="expand usage-expand" data-route-id="${escapeHtml(model.route_id)}" title="${isExpanded ? 'Hide route details' : 'Show route details'}" aria-expanded="${isExpanded}">${isExpanded ? 'Hide' : 'Details'}</button>
+            </div>
+            ${isExpanded ? detailBlock(model) : ''}
+          </article>
+        `;
+      }
+      function embedSortHeader(key, label, extraClass = '') {
+        const sorted = sortKey === key ? ' sorted' : '';
+        const hint = SORT_HINTS[key] || `Sort by ${label}`;
+        return `<button type="button" class="usage-sort${sorted} ${extraClass}" data-sort="${escapeHtml(key)}" title="${escapeHtml(hint)}">${escapeHtml(label)}<span class="sort-ind">${sortIndicator(key)}</span></button>`;
+      }
+      function usageListHead() {
+        return `
+            ${embedSortHeader('rank', 'Priority', 'usage-head-rank')}
+            ${embedSortHeader('model', 'Model route', 'usage-head-model')}
+            ${embedSortHeader('health', 'Health', 'usage-head-health')}
+            ${embedSortHeader('successes', 'Success / fail', 'usage-head-metric')}
+            ${embedSortHeader('tokens', 'Total tokens', 'usage-head-metric')}
+            ${embedSortHeader('prompt', 'Prompt / completion', 'usage-head-metric')}
+            ${embedSortHeader('last_used', 'Last used', 'usage-head-metric')}
+            <span class="usage-head-action" aria-hidden="true"></span>
         `;
       }
       function modelRow(model) {
@@ -847,19 +1237,8 @@ async def provider_status_page() -> HTMLResponse:
           ${isExpanded ? detailRow(model) : ''}
         `;
       }
-      function render() {
-        const models = filteredModels();
-        renderCards(allModels);
-        summaryEl.textContent = `${models.length} of ${allModels.length} model route${allModels.length === 1 ? '' : 's'} shown`;
-        if (!models.length) {
-          tableRoot.innerHTML = '<div class="empty">No model usage matches the current filters.</div>';
-          return;
-        }
-        tableRoot.innerHTML = `
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
+      function usageTableHead() {
+        return `
                   ${sortableHeader('rank', 'Priority', 'right')}
                   ${sortableHeader('model', 'Model')}
                   ${sortableHeader('provider', 'Provider')}
@@ -871,13 +1250,45 @@ async def provider_status_page() -> HTMLResponse:
                   ${sortableHeader('completion', 'Completion', 'right')}
                   ${sortableHeader('last_used', 'Last Used')}
                   <th>Details</th>
-                </tr>
-              </thead>
-              <tbody>${models.map(modelRow).join('')}</tbody>
-            </table>
-          </div>
         `;
-        tableRoot.querySelectorAll('th.sortable').forEach((header) => {
+      }
+      function embedSummaryLine(models) {
+        const totalTokens = models.reduce((sum, model) => sum + Number(model.usage?.total_tokens || 0), 0);
+        const providerRequests = providers.reduce((sum, provider) => sum + Number(provider.requests_today || 0), 0);
+        return `${fmtCompact(totalTokens)} tokens · ${fmtCompact(providerRequests)} requests`;
+      }
+      function render() {
+        const models = filteredModels();
+        renderCards(allModels);
+        summaryEl.textContent = isEmbed
+          ? embedSummaryLine(models)
+          : `${models.length} of ${allModels.length} model route${allModels.length === 1 ? '' : 's'} shown`;
+        if (!models.length) {
+          tableRoot.innerHTML = '<div class="empty">No model usage matches the current filters.</div>';
+          return;
+        }
+        if (isEmbed) {
+          tableRoot.innerHTML = `
+            <div class="usage-list">
+              <div class="usage-list-head">${usageListHead()}</div>
+              ${models.map(usageListItem).join('')}
+            </div>
+          `;
+        } else {
+          tableRoot.innerHTML = `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    ${usageTableHead()}
+                  </tr>
+                </thead>
+                <tbody>${models.map(modelRow).join('')}</tbody>
+              </table>
+            </div>
+          `;
+        }
+        tableRoot.querySelectorAll('th.sortable, .usage-sort').forEach((header) => {
           header.addEventListener('click', () => setSort(header.dataset.sort));
         });
         tableRoot.querySelectorAll('.expand').forEach((button) => {

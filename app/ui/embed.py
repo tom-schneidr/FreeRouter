@@ -36,17 +36,22 @@ EMBED_HEAD_FRAGMENT = """
         max-height: none;
         min-height: 0;
       }
-      html.embed-mode .table-wrap { max-width: 100%; }
-      html.embed-mode table { min-width: 0; width: 100%; }
-      html.embed-mode th, html.embed-mode td {
+      html.embed-mode main {
+        overflow-x: hidden;
+      }
+      html.embed-mode .table-wrap:not(.usage-wrap) {
+        max-width: 100%;
+      }
+      html.embed-mode table:not(.usage-table) {
+        min-width: 0;
+        width: 100%;
+      }
+      html.embed-mode table:not(.usage-table) th,
+      html.embed-mode table:not(.usage-table) td {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
         max-width: 12rem;
-      }
-      html.embed-mode th:last-child, html.embed-mode td:last-child,
-      html.embed-mode th:nth-last-child(2), html.embed-mode td:nth-last-child(2) {
-        max-width: 6rem;
       }
     </style>
     <script>
