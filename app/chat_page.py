@@ -105,7 +105,7 @@ CHAT_HTML = with_embed_support(r"""<!doctype html>
       display: flex; justify-content: space-between; }
     .route-group-header .req-id { color: var(--purple); font-weight: 500; }
     .route-event { padding: 0.5rem 0.85rem; font-size: 0.78rem; display: flex; align-items: center;
-      gap: 0.5rem; border-bottom: 1px solid rgba(45,58,79,0.5); }
+      gap: 0.5rem; border-bottom: 1px solid var(--line-soft, var(--border)); }
     .route-event.flagged { margin: 0.35rem; border: 1px solid rgba(245,158,11,0.45); border-radius: 10px;
       background: linear-gradient(135deg, rgba(245,158,11,0.16), rgba(167,139,250,0.08)); }
     .route-event:last-child { border-bottom: none; }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -123,6 +124,22 @@ def test_desktop_launch_command_targets_pythonw(tmp_path):
     assert command.arguments == "-m app.desktop_app"
     assert command.working_directory == str(tmp_path)
     assert command.icon_path == str(icon)
+
+
+def test_tauri_config_points_at_canonical_react_app():
+    config_path = Path("apps/desktop/src-tauri/tauri.conf.json")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert config["build"]["devUrl"] == "http://127.0.0.1:8000/app"
+    assert config["build"]["frontendDist"] == "../../ui/dist"
+    assert "../../../dist-sidecar/freerouterd" in config["bundle"]["externalBin"]
+
+
+def test_sidecar_build_packages_react_dist_assets():
+    script = Path("scripts/build-sidecar.ps1").read_text(encoding="utf-8")
+
+    assert "$ReactDist = Join-Path $ProjectRoot \"apps\\ui\\dist\"" in script
+    assert "--add-data \"$ReactDist;apps\\ui\\dist\"" in script
 
 
 def test_controller_falls_back_when_configured_port_is_busy(monkeypatch, tmp_path):

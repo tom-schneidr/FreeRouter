@@ -20,13 +20,14 @@ const SIDECAR_NAME: &str = "freerouterd";
 const GATEWAY_HOST: &str = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT: u16 = 8000;
 const SIDECAR_RESTART_EXIT_CODE: i32 = 42;
-const DESKTOP_APP_ROUTE: &str = "/app-next";
+const DESKTOP_APP_ROUTE: &str = "/app";
 
 struct AppRuntimeState {
     sidecar: Mutex<Option<CommandChild>>,
     gateway_port: u16,
     desktop_token: String,
     project_root: PathBuf,
+    manages_sidecar: bool,
 }
 
 pub fn run() {
@@ -34,8 +35,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let token = Uuid::new_v4().to_string();
-            let gateway_port = select_gateway_port(GATEWAY_HOST);
+            let dev_backend = std::env::var("FREEROUTER_DEV_BACKEND").ok().as_deref() == Some("1");
+            let token = std::env::var("FREEROUTER_DESKTOP_TOKEN")
+                .unwrap_or_else(|_| Uuid::new_v4().to_string());
+            let gateway_port = if dev_backend {
+                std::env::var("GATEWAY_PORT")
+                    .ok()
+                    .and_then(|value| value.parse::<u16>().ok())
+                    .unwrap_or(DEFAULT_GATEWAY_PORT)
+            } else {
+                select_gateway_port(GATEWAY_HOST)
+            };
             let project_root = app
                 .path()
                 .app_data_dir()
@@ -46,9 +56,19 @@ pub fn run() {
                 gateway_port,
                 desktop_token: token.clone(),
                 project_root: project_root.clone(),
+                manages_sidecar: !dev_backend,
             });
 
-            start_sidecar(app.handle(), gateway_port, &token, &project_root);
+            if dev_backend {
+                let _ = append_launcher_log(
+                    &project_root,
+                    &format!(
+                        "Using existing FreeRouter dev backend on {GATEWAY_HOST}:{gateway_port}."
+                    ),
+                );
+            } else {
+                start_sidecar(app.handle(), gateway_port, &token, &project_root);
+            }
 
             let show = MenuItem::with_id(app, "show", "Show FreeRouter", true, None::<&str>)?;
             let chat = MenuItem::with_id(app, "open_chat", "Chat", true, None::<&str>)?;
@@ -209,6 +229,14 @@ fn restart_sidecar(app: &AppHandle) {
     let Some(state) = app.try_state::<AppRuntimeState>() else {
         return;
     };
+
+    if !state.manages_sidecar {
+        let _ = append_launcher_log(
+            &state.project_root,
+            "Restart requested in dev backend mode; restart the dev script instead.",
+        );
+        return;
+    }
 
     let gateway_port = state.gateway_port;
     let token = state.desktop_token.clone();

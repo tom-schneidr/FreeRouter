@@ -5,7 +5,7 @@ const gatewayPort = process.env.GATEWAY_PORT || "8000";
 const gatewayTarget = process.env.FREEROUTER_API_TARGET || `http://127.0.0.1:${gatewayPort}`;
 
 export default defineConfig({
-  base: "/app-next/",
+  base: "/app/",
   plugins: [react()],
   server: {
     port: 5173,

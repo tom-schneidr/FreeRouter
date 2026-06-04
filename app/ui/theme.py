@@ -45,6 +45,9 @@ THEME_HEAD_FRAGMENT = f"""
         --text-muted: #94a3b8;
         --accent: #3b82f6;
         --accent-glow: rgba(59, 130, 246, 0.15);
+        --accent-border: rgba(79, 140, 255, 0.28);
+        --accent-panel: rgba(79, 140, 255, 0.16);
+        --accent-focus: rgba(79, 140, 255, 0.16);
         --green: #22c55e;
         --red: #ef4444;
         --amber: #f59e0b;
@@ -88,6 +91,7 @@ THEME_HEAD_FRAGMENT = f"""
         --table-row-hover: rgba(59, 130, 246, 0.08);
         --surface-alpha: rgba(16, 27, 46, 0.9);
         --empty-bg: rgba(8, 17, 31, 0.74);
+        --neutral-bg: rgba(148, 163, 184, 0.08);
         --code-bg: #050b15;
         --code-inline-bg: var(--bg-tertiary);
         --code-text: #c7d2fe;
@@ -118,6 +122,9 @@ THEME_HEAD_FRAGMENT = f"""
         --text-muted: #5d7089;
         --accent: #2563eb;
         --accent-glow: rgba(37, 99, 235, 0.1);
+        --accent-border: rgba(37, 99, 235, 0.24);
+        --accent-panel: rgba(37, 99, 235, 0.1);
+        --accent-focus: rgba(37, 99, 235, 0.14);
         --green: #15803d;
         --red: #dc2626;
         --amber: #b45309;
@@ -162,6 +169,7 @@ THEME_HEAD_FRAGMENT = f"""
         --table-row-hover: rgba(37, 99, 235, 0.08);
         --surface-alpha: rgba(255, 255, 255, 0.92);
         --empty-bg: rgba(255, 255, 255, 0.74);
+        --neutral-bg: rgba(15, 23, 42, 0.04);
         --code-bg: #eef3fb;
         --code-inline-bg: #eef3fb;
         --code-text: #1e40af;

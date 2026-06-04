@@ -65,14 +65,14 @@ button:hover {
   align-items: center;
   gap: 8px;
   width: fit-content;
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.12);
-  color: #fecaca;
+  border-color: var(--danger-border, rgba(239, 68, 68, 0.5));
+  background: var(--danger-bg, rgba(239, 68, 68, 0.12));
+  color: var(--danger-text, #fecaca);
   font-weight: 650;
 }
 
 .danger-action:hover {
-  background: rgba(239, 68, 68, 0.18);
+  background: var(--danger-bg, rgba(239, 68, 68, 0.18));
 }
 
 .danger-action:disabled {
@@ -89,15 +89,15 @@ button:hover {
 }
 
 .small-danger {
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.12);
-  color: #fecaca;
+  border-color: var(--danger-border, rgba(239, 68, 68, 0.5));
+  background: var(--danger-bg, rgba(239, 68, 68, 0.12));
+  color: var(--danger-text, #fecaca);
 }
 
 .small-success {
-  border-color: rgba(34, 197, 94, 0.45);
-  background: rgba(34, 197, 94, 0.12);
-  color: #bbf7d0;
+  border-color: var(--success-border, rgba(34, 197, 94, 0.45));
+  background: var(--success-bg, rgba(34, 197, 94, 0.12));
+  color: var(--success-text, #bbf7d0);
 }
 
 .app-shell {
@@ -105,7 +105,7 @@ button:hover {
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
   background:
-    radial-gradient(circle at 78% -14%, rgba(79, 140, 255, 0.16), transparent 34%),
+    radial-gradient(circle at 78% -14%, var(--accent-glow, rgba(79, 140, 255, 0.16)), transparent 34%),
     var(--bg-primary, #07111f);
 }
 
@@ -123,7 +123,7 @@ button:hover {
   align-items: center;
   gap: 12px;
   padding: 20px 18px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  border-bottom: 1px solid var(--line-soft, rgba(148, 163, 184, 0.16));
 }
 
 .brand-mark {
@@ -133,7 +133,7 @@ button:hover {
   display: grid;
   place-items: center;
   background: #2563eb;
-  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.34);
+  box-shadow: 0 12px 28px var(--brand-shadow, rgba(37, 99, 235, 0.34));
 }
 
 .brand strong,
@@ -147,7 +147,7 @@ button:hover {
 
 .brand span {
   margin-top: 3px;
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
   font-size: 12px;
 }
 
@@ -169,13 +169,13 @@ button:hover {
   min-height: 40px;
   border-color: transparent;
   background: transparent;
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
 }
 
 .nav-list button.active {
-  color: #ffffff;
-  background: rgba(79, 140, 255, 0.16);
-  border-color: rgba(79, 140, 255, 0.28);
+  color: var(--on-accent, #ffffff);
+  background: var(--accent-panel, rgba(79, 140, 255, 0.16));
+  border-color: var(--accent-border, rgba(79, 140, 255, 0.28));
 }
 
 .main {
@@ -271,7 +271,7 @@ button:hover {
 
 .sidebar-footer {
   padding: 12px;
-  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  border-top: 1px solid var(--line-soft, rgba(148, 163, 184, 0.16));
 }
 
 .base-url {
@@ -373,7 +373,7 @@ h1 {
 
 .section-heading p {
   margin-top: 7px;
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
   line-height: 1.5;
 }
 
@@ -402,10 +402,10 @@ h1 {
 .metric,
 .panel {
   min-width: 0;
-  border: 1px solid #24354d;
+  border: 1px solid var(--line, #24354d);
   border-radius: 8px;
-  background: rgba(16, 27, 46, 0.9);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
+  background: var(--surface-alpha, rgba(16, 27, 46, 0.9));
+  box-shadow: var(--shadow, 0 20px 60px rgba(0, 0, 0, 0.28));
 }
 
 .metric {
@@ -415,7 +415,7 @@ h1 {
 .metric span,
 .metric small {
   display: block;
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
 }
 
 .metric span {
@@ -467,10 +467,10 @@ h1 {
 
 .message {
   max-width: min(760px, 86%);
-  border: 1px solid #24354d;
+  border: 1px solid var(--line, #24354d);
   border-radius: 10px;
   padding: 10px 12px;
-  background: #142238;
+  background: var(--surface-2, #142238);
 }
 
 .message.user {
@@ -501,8 +501,8 @@ h1 {
 
 .typing {
   align-self: flex-start;
-  color: #91a4bd;
-  border: 1px dashed #24354d;
+  color: var(--muted, #91a4bd);
+  border: 1px dashed var(--line, #24354d);
   border-radius: 8px;
   padding: 10px 12px;
 }
@@ -512,7 +512,7 @@ h1 {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   padding-top: 12px;
-  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  border-top: 1px solid var(--line-soft, rgba(148, 163, 184, 0.16));
 }
 
 .composer textarea {
@@ -520,17 +520,17 @@ h1 {
   resize: vertical;
   min-height: 68px;
   max-height: 180px;
-  border: 1px solid #24354d;
+  border: 1px solid var(--line, #24354d);
   border-radius: 8px;
-  background: #08111f;
-  color: #e5edf8;
+  background: var(--input-bg, #08111f);
+  color: var(--text, #e5edf8);
   padding: 10px 12px;
   outline: none;
 }
 
 .composer textarea:focus {
-  border-color: #4f8cff;
-  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.16);
+  border-color: var(--accent, #4f8cff);
+  box-shadow: 0 0 0 3px var(--accent-focus, rgba(79, 140, 255, 0.16));
 }
 
 .form-grid {
@@ -551,7 +551,7 @@ h1 {
 }
 
 .field span {
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
   font-size: 12px;
 }
 
@@ -559,36 +559,36 @@ h1 {
 .field select {
   width: 100%;
   min-height: 38px;
-  border: 1px solid #24354d;
+  border: 1px solid var(--line, #24354d);
   border-radius: 7px;
-  background: #08111f;
-  color: #e5edf8;
+  background: var(--input-bg, #08111f);
+  color: var(--text, #e5edf8);
   padding: 8px 10px;
   outline: none;
 }
 
 .field input:focus,
 .field select:focus {
-  border-color: #4f8cff;
-  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.16);
+  border-color: var(--accent, #4f8cff);
+  box-shadow: 0 0 0 3px var(--accent-focus, rgba(79, 140, 255, 0.16));
 }
 
 .check-field {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
   font-size: 13px;
 }
 
 .check-field input {
   width: auto;
-  accent-color: #4f8cff;
+  accent-color: var(--accent, #4f8cff);
 }
 
 .panel-copy {
   margin-bottom: 14px;
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
   line-height: 1.55;
 }
 
@@ -602,27 +602,27 @@ h1 {
 
 .notice {
   margin-top: 12px;
-  border: 1px solid #24354d;
+  border: 1px solid var(--line, #24354d);
   border-radius: 8px;
   padding: 10px 12px;
-  background: rgba(148, 163, 184, 0.08);
-  color: #91a4bd;
+  background: var(--neutral-bg, rgba(148, 163, 184, 0.08));
+  color: var(--muted, #91a4bd);
 }
 
 .notice.ok {
-  border-color: rgba(34, 197, 94, 0.45);
-  background: rgba(34, 197, 94, 0.12);
-  color: #bbf7d0;
+  border-color: var(--success-border, rgba(34, 197, 94, 0.45));
+  background: var(--success-bg, rgba(34, 197, 94, 0.12));
+  color: var(--success-text, #bbf7d0);
 }
 
 .notice.bad {
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.12);
-  color: #fecaca;
+  border-color: var(--danger-border, rgba(239, 68, 68, 0.5));
+  background: var(--danger-bg, rgba(239, 68, 68, 0.12));
+  color: var(--danger-text, #fecaca);
 }
 
 .path-note {
-  color: #667892;
+  color: var(--subtle, #667892);
   font-size: 12px;
 }
 
@@ -631,17 +631,17 @@ h1 {
   overflow: auto;
   white-space: pre-wrap;
   margin: 0;
-  border: 1px solid #24354d;
+  border: 1px solid var(--line, #24354d);
   border-radius: 8px;
-  background: #050b15;
-  color: #c7d2fe;
+  background: var(--code-bg, #050b15);
+  color: var(--code-text, #c7d2fe);
   padding: 14px;
   font: 12px/1.45 Consolas, "Cascadia Mono", ui-monospace, monospace;
 }
 
 .table-wrap {
   overflow: auto;
-  border: 1px solid #24354d;
+  border: 1px solid var(--line, #24354d);
   border-radius: 8px;
 }
 
@@ -666,14 +666,14 @@ table {
 th,
 td {
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  border-bottom: 1px solid var(--line-soft, rgba(148, 163, 184, 0.16));
   text-align: left;
   font-size: 13px;
 }
 
 th {
-  color: #91a4bd;
-  background: #0d1728;
+  color: var(--muted, #91a4bd);
+  background: var(--table-head-solid, var(--table-head-bg, #0d1728));
   font-size: 11px;
   text-transform: uppercase;
 }
@@ -681,7 +681,7 @@ th {
 td span {
   display: block;
   margin-top: 3px;
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
   font-size: 12px;
 }
 
@@ -691,29 +691,29 @@ td span {
   min-height: 22px;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid #24354d;
-  color: #91a4bd;
-  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid var(--line, #24354d);
+  color: var(--muted, #91a4bd);
+  background: var(--neutral-bg, rgba(148, 163, 184, 0.08));
   font-size: 12px;
   white-space: nowrap;
 }
 
 .pill.ok {
-  color: #bbf7d0;
-  border-color: rgba(34, 197, 94, 0.45);
-  background: rgba(34, 197, 94, 0.12);
+  color: var(--success-text, #bbf7d0);
+  border-color: var(--success-border, rgba(34, 197, 94, 0.45));
+  background: var(--success-bg, rgba(34, 197, 94, 0.12));
 }
 
 .pill.warn {
-  color: #fcd34d;
-  border-color: rgba(245, 158, 11, 0.5);
-  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning-text, #fcd34d);
+  border-color: var(--warning-border, rgba(245, 158, 11, 0.5));
+  background: var(--warning-bg, rgba(245, 158, 11, 0.12));
 }
 
 .pill.bad {
-  color: #fecaca;
-  border-color: rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.12);
+  color: var(--danger-text, #fecaca);
+  border-color: var(--danger-border, rgba(239, 68, 68, 0.5));
+  background: var(--danger-bg, rgba(239, 68, 68, 0.12));
 }
 
 .event-list,
@@ -729,9 +729,9 @@ td span {
   justify-content: space-between;
   gap: 10px;
   padding: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border: 1px solid var(--line-soft, rgba(148, 163, 184, 0.16));
   border-radius: 7px;
-  background: rgba(8, 17, 31, 0.5);
+  background: var(--empty-bg, rgba(8, 17, 31, 0.5));
 }
 
 .event-row div,
@@ -749,7 +749,7 @@ td span {
 .event-row span,
 .route-card span {
   margin-top: 3px;
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
@@ -772,11 +772,11 @@ td span {
   place-items: center;
   min-height: 170px;
   padding: 24px;
-  color: #91a4bd;
+  color: var(--muted, #91a4bd);
   text-align: center;
-  border: 1px dashed #24354d;
+  border: 1px dashed var(--line, #24354d);
   border-radius: 8px;
-  background: rgba(8, 17, 31, 0.74);
+  background: var(--empty-bg, rgba(8, 17, 31, 0.74));
 }
 
 @media (max-width: 1080px) {

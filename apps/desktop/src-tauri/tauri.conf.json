@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "dev.freerouter.desktop",
   "build": {
-    "devUrl": "http://127.0.0.1:8000/app-next",
+    "devUrl": "http://127.0.0.1:8000/app",
     "beforeBuildCommand": "npm --workspace @freerouter/ui run build",
     "frontendDist": "../../ui/dist"
   },

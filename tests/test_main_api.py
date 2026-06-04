@@ -49,33 +49,19 @@ def test_desktop_app_page_is_served(tmp_path, monkeypatch):
         response = client.get("/app")
     assert response.status_code == 200
     assert "FreeRouter" in response.text
-    assert "fr-theme-styles" in response.text
-    assert "data-fr-theme-option" in response.text
-    assert "Appearance" in response.text
-    assert "freerouter.theme" in response.text
-    assert "data-theme-preference" in response.text
-    assert "System" in response.text
-    assert "section-dashboard" in response.text
-    assert "frame-chat" in response.text
-    assert "frame-models" in response.text
-    assert "frame-usage" in response.text
-    assert "frame-live" in response.text
-    assert "frame-docs" in response.text
-    assert "Desktop app required" in response.text
+    assert "root" in response.text
+    assert "/app/assets/" in response.text
 
 
 def test_react_app_route_is_served(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.get("/app-next", follow_redirects=False)
-    if response.status_code == 307:
-        assert response.headers["location"].startswith("/app")
-        return
     assert response.status_code == 200
     assert "FreeRouter" in response.text
     assert "root" in response.text
 
 
-def test_react_app_missing_build_redirects_to_classic_app(tmp_path):
+def test_react_app_missing_build_reports_missing_ui(tmp_path):
     from starlette.requests import Request
 
     from app.react_app import _react_index_response
@@ -84,7 +70,7 @@ def test_react_app_missing_build_redirects_to_classic_app(tmp_path):
     request = Request(
         {
             "type": "http",
-            "path": "/app-next",
+            "path": "/app",
             "query_string": b"desktop_token=token",
             "headers": [],
             "method": "GET",
@@ -92,8 +78,8 @@ def test_react_app_missing_build_redirects_to_classic_app(tmp_path):
     )
     response = _react_index_response(missing_dist, request)
 
-    assert response.status_code == 307
-    assert response.headers["location"] == "/app?desktop_token=token"
+    assert response.status_code == 503
+    assert "FreeRouter UI build missing" in response.body.decode("utf-8")
 
 
 def test_react_dist_path_can_resolve_pyinstaller_bundle(tmp_path, monkeypatch):
@@ -107,7 +93,7 @@ def test_react_dist_path_can_resolve_pyinstaller_bundle(tmp_path, monkeypatch):
     assert react_dist_path(Path("missing-source-root")) == bundled_dist
 
 
-def test_classic_pages_include_embed_support(tmp_path, monkeypatch):
+def test_embedded_legacy_routes_still_support_desktop_shell(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         for path in ("/chat", "/models", "/health", "/status", "/live"):
             response = client.get(path)
@@ -117,16 +103,6 @@ def test_classic_pages_include_embed_support(tmp_path, monkeypatch):
             assert "fr-theme-styles" in response.text
             assert "data-fr-theme-toggle" in response.text
             assert "data-theme-preference" in response.text
-
-
-def test_index_page_includes_theme_switch(tmp_path, monkeypatch):
-    with _client(tmp_path, monkeypatch) as client:
-        response = client.get("/")
-    assert response.status_code == 200
-    assert "fr-theme-styles" in response.text
-    assert "data-fr-theme-toggle" in response.text
-    assert "data-theme-preference" in response.text
-    assert "#f6f8fb" in response.text
 
 
 def test_docs_page_uses_dark_theme(tmp_path, monkeypatch):

@@ -20,11 +20,16 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         --muted: #91a4bd;
         --subtle: #667892;
         --accent: #4f8cff;
+        --accent-border: rgba(79, 140, 255, 0.28);
+        --accent-panel: rgba(79, 140, 255, 0.16);
+        --accent-focus: rgba(79, 140, 255, 0.16);
         --accent-2: #22c55e;
         --warn: #f59e0b;
         --danger: #ef4444;
         --radius: 8px;
         --shadow: 0 20px 60px rgba(0, 0, 0, .28);
+        --neutral-bg: rgba(148, 163, 184, .08);
+        --empty-bg: rgba(8, 17, 31, .74);
         --font: "Segoe UI", Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       }
       html, body {
@@ -68,7 +73,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         outline: none;
       }
       textarea { resize: vertical; min-height: 118px; line-height: 1.45; }
-      input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,140,255,.16); }
+      input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-focus); }
       a { color: var(--link); text-decoration: none; }
       .app {
         display: grid;
@@ -133,8 +138,8 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         background: transparent;
         color: var(--muted);
       }
-      .nav button:hover { color: var(--text); background: rgba(148,163,184,.08); }
-      .nav button.active { color: var(--on-accent); background: rgba(79,140,255,.16); border-color: rgba(79,140,255,.28); }
+      .nav button:hover { color: var(--text); background: var(--neutral-bg); }
+      .nav button.active { color: var(--on-accent); background: var(--accent-panel); border-color: var(--accent-border); }
       .nav-icon {
         width: 18px;
         height: 18px;
@@ -257,7 +262,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         border-radius: 999px;
         border: 1px solid var(--line);
         color: var(--muted);
-        background: rgba(148,163,184,.08);
+        background: var(--neutral-bg);
         font-size: 12px;
         white-space: nowrap;
       }
@@ -299,7 +304,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
       .chat-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; }
       .chat-output { min-height: 280px; max-height: 50vh; overflow: auto; padding: 14px; line-height: 1.6; }
       .route-list { max-height: 58vh; overflow: auto; display: grid; gap: 8px; }
-      .route-item { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 7px; background: rgba(8,17,31,.5); }
+      .route-item { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--empty-bg); }
       .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
       .qa-note { margin-top: 12px; color: var(--subtle); font-size: 12px; }
       .embed-section { padding: 0; max-width: none; overflow: hidden; }

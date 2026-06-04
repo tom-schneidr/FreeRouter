@@ -9,10 +9,14 @@ html[data-theme="dark"] {
   --text-muted: #94a3b8;
   --accent: #3b82f6;
   --accent-glow: rgba(59, 130, 246, 0.15);
+  --accent-border: rgba(79, 140, 255, 0.28);
+  --accent-panel: rgba(79, 140, 255, 0.16);
+  --accent-focus: rgba(79, 140, 255, 0.16);
   --bg: #07111f;
   --surface: #101b2e;
   --surface-2: #142238;
   --line: #24354d;
+  --line-soft: rgba(148, 163, 184, 0.16);
   --muted: #91a4bd;
   --subtle: #667892;
   --heading: #f8fafc;
@@ -21,9 +25,14 @@ html[data-theme="dark"] {
   --input-bg: #08111f;
   --sidebar-bg: #091321;
   --table-head-bg: rgba(15, 23, 42, 0.75);
+  --table-head-solid: #0d1728;
   --table-row-hover: rgba(59, 130, 246, 0.08);
   --surface-alpha: rgba(16, 27, 46, 0.9);
   --empty-bg: rgba(8, 17, 31, 0.74);
+  --neutral-bg: rgba(148, 163, 184, 0.08);
+  --brand-shadow: rgba(37, 99, 235, 0.34);
+  --code-bg: #050b15;
+  --code-text: #c7d2fe;
   --success-text: #bbf7d0;
   --success-bg: rgba(34, 197, 94, 0.12);
   --success-border: rgba(34, 197, 94, 0.45);
@@ -47,10 +56,14 @@ html[data-theme="light"] {
   --text-muted: #5d7089;
   --accent: #2563eb;
   --accent-glow: rgba(37, 99, 235, 0.1);
+  --accent-border: rgba(37, 99, 235, 0.24);
+  --accent-panel: rgba(37, 99, 235, 0.1);
+  --accent-focus: rgba(37, 99, 235, 0.14);
   --bg: #f6f8fb;
   --surface: #ffffff;
   --surface-2: #edf3fa;
   --line: #c9d6e8;
+  --line-soft: rgba(15, 23, 42, 0.08);
   --muted: #5d7089;
   --subtle: #7b8da5;
   --heading: #0f172a;
@@ -59,9 +72,14 @@ html[data-theme="light"] {
   --input-bg: #ffffff;
   --sidebar-bg: #f2f6fb;
   --table-head-bg: #edf3fa;
+  --table-head-solid: #edf3fa;
   --table-row-hover: rgba(37, 99, 235, 0.08);
   --surface-alpha: rgba(255, 255, 255, 0.92);
   --empty-bg: rgba(255, 255, 255, 0.74);
+  --neutral-bg: rgba(15, 23, 42, 0.04);
+  --brand-shadow: rgba(37, 99, 235, 0.18);
+  --code-bg: #eef3fb;
+  --code-text: #1e40af;
   --success-text: #166534;
   --success-bg: rgba(22, 163, 74, 0.1);
   --success-border: rgba(22, 101, 52, 0.28);
@@ -105,8 +123,8 @@ body,
 }
 
 .fr-theme-option.active {
-  border-color: rgba(79, 140, 255, 0.28);
-  background: rgba(79, 140, 255, 0.16);
+  border-color: var(--accent-border);
+  background: var(--accent-panel);
   color: var(--text);
 }
 
