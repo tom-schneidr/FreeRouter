@@ -30,6 +30,7 @@ html[data-theme="dark"] {
   --surface-alpha: rgba(16, 27, 46, 0.9);
   --empty-bg: rgba(8, 17, 31, 0.74);
   --neutral-bg: rgba(148, 163, 184, 0.08);
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.28);
   --brand-shadow: rgba(37, 99, 235, 0.34);
   --code-bg: #050b15;
   --code-text: #c7d2fe;
@@ -77,6 +78,7 @@ html[data-theme="light"] {
   --surface-alpha: rgba(255, 255, 255, 0.92);
   --empty-bg: rgba(255, 255, 255, 0.74);
   --neutral-bg: rgba(15, 23, 42, 0.04);
+  --shadow: none;
   --brand-shadow: rgba(37, 99, 235, 0.18);
   --code-bg: #eef3fb;
   --code-text: #1e40af;

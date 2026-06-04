@@ -144,7 +144,7 @@ THEME_HEAD_FRAGMENT = f"""
         --accent-2: #16a34a;
         --warn: #b45309;
         --danger: #dc2626;
-        --shadow: 0 14px 34px rgba(15, 23, 42, 0.1);
+        --shadow: none;
 
         --fr-bg: #f6f8fb;
         --fr-bg-soft: #edf3fa;
