@@ -132,7 +132,7 @@ DESKTOP_APP_HTML = r"""<!doctype html>
         margin-top: auto;
       }
       .nav.nav-settings {
-        padding: 8px 12px 0;
+        padding: 10px 12px;
         border-top: 1px solid var(--line-soft);
         flex: 0 0 auto;
       }
