@@ -101,11 +101,11 @@ async def waterfall_openai_stream(
                 model_id=route.model_id,
                 reason=attempt.reason,
             )
-                continue
+            continue
 
-            assert provider is not None
+        assert provider is not None
 
-            if skip_reason is not None:
+        if skip_reason is not None:
             attempt = ProviderAttempt(
                 provider.name,
                 "skipped",
