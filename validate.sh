@@ -15,7 +15,7 @@ npm run typecheck:web
 npm run test:web
 npm run build:web
 npm run check:desktop
-python scripts/check_import_boundaries.py
-python scripts/check_app_state_access.py
-python scripts/check_module_sizes.py
-python -m pyright app
+"$python_bin" scripts/check_import_boundaries.py
+"$python_bin" scripts/check_app_state_access.py
+"$python_bin" scripts/check_module_sizes.py
+"$python_bin" -m pyright

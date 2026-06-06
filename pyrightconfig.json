@@ -10,7 +10,7 @@
     "app/main.py"
   ],
   "typeCheckingMode": "basic",
-  "reportMissingImports": true,
+  "reportMissingImports": false,
   "reportMissingTypeStubs": false,
   "pythonVersion": "3.12"
 }

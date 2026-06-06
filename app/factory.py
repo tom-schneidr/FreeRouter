@@ -15,6 +15,7 @@ from app.endpoint_diagnosis import (
 from app.live_monitor import APILiveMonitor
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS, build_provider_adapters
+from app.providers.base import ProviderAdapter
 from app.request_limiter import GatewayRequestLimiter
 from app.router import WaterfallRouter
 from app.settings import Settings, get_settings
@@ -26,19 +27,25 @@ class CoreGatewayStack:
     settings: Settings
     gateway_state: StateManager
     model_catalog: ModelCatalog
+    providers: list[ProviderAdapter]
     http_client: httpx.AsyncClient
     waterfall_router: WaterfallRouter
 
 
-async def build_core_gateway_stack(settings: Settings | None = None) -> CoreGatewayStack:
+async def build_core_gateway_stack(
+    settings: Settings | None = None,
+    *,
+    state: StateManager | None = None,
+    model_catalog: ModelCatalog | None = None,
+) -> CoreGatewayStack:
     settings = settings or get_settings()
-    state = StateManager(
+    state = state or StateManager(
         settings.database_path,
         PROVIDER_QUOTAS,
         busy_timeout_ms=settings.sqlite_busy_timeout_ms,
     )
     await state.initialize()
-    model_catalog = ModelCatalog(settings.model_catalog_path)
+    model_catalog = model_catalog or ModelCatalog(settings.model_catalog_path)
     model_catalog.initialize()
     limits = httpx.Limits(
         max_connections=settings.http_max_connections,
@@ -61,6 +68,7 @@ async def build_core_gateway_stack(settings: Settings | None = None) -> CoreGate
         settings=settings,
         gateway_state=state,
         model_catalog=model_catalog,
+        providers=providers,
         http_client=http_client,
         waterfall_router=router,
     )
@@ -68,34 +76,34 @@ async def build_core_gateway_stack(settings: Settings | None = None) -> CoreGate
 
 async def build_app_services(settings: Settings | None = None) -> AppServices:
     stack = await build_core_gateway_stack(settings)
-    settings = stack.settings
-    providers = build_provider_adapters(settings)
+    resolved_settings = stack.settings
+    providers = stack.providers
     limiter = GatewayRequestLimiter(
-        settings.max_concurrent_requests,
-        settings.request_queue_timeout_seconds,
-        settings.request_queue_max_waiting_requests,
+        resolved_settings.max_concurrent_requests,
+        resolved_settings.request_queue_timeout_seconds,
+        resolved_settings.request_queue_max_waiting_requests,
     )
     monitor = APILiveMonitor(max_events=1000)
     diagnosis = EndpointDiagnosisService(
         providers,
         stack.model_catalog,
         stack.gateway_state,
-        request_timeout_seconds=settings.request_timeout_seconds,
+        request_timeout_seconds=resolved_settings.request_timeout_seconds,
         supervisor=EndpointSupervisor(
-            enabled=settings.endpoint_diagnosis_supervisor_enabled,
+            enabled=resolved_settings.endpoint_diagnosis_supervisor_enabled,
             providers=providers,
             catalog=stack.model_catalog,
             state=stack.gateway_state,
-            preferred_model=settings.endpoint_diagnosis_supervisor_model,
+            preferred_model=resolved_settings.endpoint_diagnosis_supervisor_model,
         ),
     )
     background: BackgroundEndpointDiagnosis | None = None
-    if settings.auto_endpoint_diagnosis_enabled:
+    if resolved_settings.auto_endpoint_diagnosis_enabled:
         background = BackgroundEndpointDiagnosis(
             diagnosis,
-            interval_seconds=settings.auto_endpoint_diagnosis_interval_seconds,
-            startup_delay_seconds=settings.auto_endpoint_diagnosis_startup_delay_seconds,
-            apply_safe_suggestions=settings.auto_endpoint_maintenance_enabled,
+            interval_seconds=resolved_settings.auto_endpoint_diagnosis_interval_seconds,
+            startup_delay_seconds=resolved_settings.auto_endpoint_diagnosis_startup_delay_seconds,
+            apply_safe_suggestions=resolved_settings.auto_endpoint_maintenance_enabled,
         )
         background.start()
     return AppServices(

@@ -39,6 +39,14 @@ async def test_build_app_services_includes_limiter_and_monitor(tmp_path, monkeyp
         assert isinstance(services, AppServices)
         assert services.request_limiter is not None
         assert services.live_monitor is not None
+        router_providers = {
+            provider.name: provider for provider in services.waterfall_router.providers
+        }
+        assert services.endpoint_diagnosis.providers
+        assert all(
+            router_providers[provider.name] is provider
+            for provider in services.endpoint_diagnosis.providers
+        )
     finally:
         await services.shutdown()
         get_settings.cache_clear()

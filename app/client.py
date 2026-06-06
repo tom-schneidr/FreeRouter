@@ -4,8 +4,11 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from app.factory import build_core_gateway_stack
+from app.model_catalog import ModelCatalog
+from app.providers import PROVIDER_QUOTAS
 from app.router import ChatStreamPart, RouteResult, WaterfallRouter
 from app.settings import get_settings
+from app.state import StateManager
 
 
 class UnifiedAIClient:
@@ -17,15 +20,23 @@ class UnifiedAIClient:
 
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.state = None
-        self.model_catalog = None
+        self.state = StateManager(
+            self.settings.database_path,
+            PROVIDER_QUOTAS,
+            busy_timeout_ms=self.settings.sqlite_busy_timeout_ms,
+        )
+        self.model_catalog = ModelCatalog(self.settings.model_catalog_path)
         self.router: WaterfallRouter | None = None
         self._http_client = None
         self._stack = None
 
     async def initialize(self) -> None:
         """Initialize the necessary async components like the state manager SQLite database."""
-        stack = await build_core_gateway_stack(self.settings)
+        stack = await build_core_gateway_stack(
+            self.settings,
+            state=self.state,
+            model_catalog=self.model_catalog,
+        )
         self._stack = stack
         self.state = stack.gateway_state
         self.model_catalog = stack.model_catalog
