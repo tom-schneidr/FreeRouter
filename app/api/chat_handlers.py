@@ -19,10 +19,13 @@ from app.codex_compat import (
 from app.live_monitor import APILiveMonitor
 from app.model_catalog import ModelCatalog
 from app.providers import ProviderError
+from app.request_requirements import RequestRequirements, with_extra_capabilities
 from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,
+    UnsupportedCapabilities,
     _split_sse_event_blocks,
+    unsupported_capabilities_error_body,
     validate_chat_completion_payload,
 )
 from app.settings import get_settings
@@ -234,7 +237,8 @@ async def _route_chat_completion_stream_request(
     *,
     payload: dict[str, Any],
     path: str,
-    required_tag: str | None = None,
+    requirements: RequestRequirements | None = None,
+    require_assistant_content: bool = False,
 ) -> Response:
     services = get_app_services(request)
     router = services.waterfall_router
@@ -291,8 +295,8 @@ async def _route_chat_completion_stream_request(
         try:
             async for part in router.iter_chat_completion_openai_stream(
                 payload,
-                required_tag=required_tag,
-                require_assistant_content=required_tag == "web-search",
+                requirements=requirements,
+                require_assistant_content=require_assistant_content,
             ):
                 if isinstance(part, RouteStreamDiag):
                     await _publish_route_stream_diag(monitor, request_id, part)
@@ -309,6 +313,20 @@ async def _route_chat_completion_stream_request(
                 else:
                     yield part
             completed = True
+        except UnsupportedCapabilities as exc:
+            error_body = unsupported_capabilities_error_body(exc)
+            await monitor.publish(
+                event_type="request_failed",
+                request_id=request_id,
+                payload={
+                    "status_code": 400,
+                    "reason": "unsupported_capabilities",
+                    "required_capabilities": error_body["error"]["required_capabilities"],
+                    "latency_ms": round((perf_counter() - started_at) * 1000),
+                },
+            )
+            yield "data: " + json.dumps(error_body) + "\n\n"
+            yield "data: [DONE]\n\n"
         except NoProviderAvailable as exc:
             await monitor.publish(
                 event_type="request_failed",
@@ -335,6 +353,7 @@ async def _route_chat_completion_stream_request(
                 )
                 + "\n\n"
             )
+            yield "data: [DONE]\n\n"
         except ValueError as exc:
             await monitor.publish(
                 event_type="request_failed",
@@ -376,7 +395,8 @@ async def _route_chat_completion_request(
     *,
     payload: dict[str, Any],
     path: str,
-    required_tag: str | None = None,
+    requirements: RequestRequirements | None = None,
+    require_assistant_content: bool = False,
 ) -> JSONResponse:
     services = get_app_services(request)
     router = services.waterfall_router
@@ -418,9 +438,22 @@ async def _route_chat_completion_request(
     try:
         result = await router.route_chat_completion(
             payload,
-            required_tag=required_tag,
-            require_assistant_content=required_tag == "web-search",
+            requirements=requirements,
+            require_assistant_content=require_assistant_content,
         )
+    except UnsupportedCapabilities as exc:
+        error_body = unsupported_capabilities_error_body(exc)
+        await monitor.publish(
+            event_type="request_failed",
+            request_id=request_id,
+            payload={
+                "status_code": 400,
+                "reason": "unsupported_capabilities",
+                "required_capabilities": error_body["error"]["required_capabilities"],
+                "latency_ms": round((perf_counter() - started_at) * 1000),
+            },
+        )
+        return JSONResponse(status_code=400, content=error_body)
     except ValueError as exc:
         await monitor.publish(
             event_type="request_failed",
@@ -579,6 +612,22 @@ async def _route_responses_stream_request(
                         },
                     },
                 )
+            yield responses_stream_done()
+        except UnsupportedCapabilities as exc:
+            error_body = unsupported_capabilities_error_body(exc)
+            yield response_stream_event(
+                "response.failed",
+                {
+                    "type": "response.failed",
+                    "sequence_number": mapper.sequence_number + 1,
+                    "response": {
+                        "id": response_id,
+                        "object": "response",
+                        "status": "failed",
+                        "error": error_body["error"],
+                    },
+                },
+            )
             yield responses_stream_done()
         except NoProviderAvailable as exc:
             yield response_stream_event(
