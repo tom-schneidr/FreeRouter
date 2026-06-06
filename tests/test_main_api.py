@@ -11,7 +11,7 @@ from app.main import (
     _payload_with_required_web_search,
     app,
 )
-from app.react_app import react_dist_path
+from app.react_app import mount_react_app, react_dist_path
 from app.request_limiter import GatewayRequestLimiter
 from app.settings import get_settings
 
@@ -44,8 +44,21 @@ def test_v1_models_includes_gateway_alias(tmp_path, monkeypatch):
     assert payload["data"][0]["id"] == "auto"
 
 
-def test_desktop_app_page_is_served(tmp_path, monkeypatch):
-    with _client(tmp_path, monkeypatch) as client:
+def test_desktop_app_page_is_served(tmp_path):
+    from fastapi import FastAPI
+
+    dist = tmp_path / "apps" / "ui" / "dist"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+    (dist / "index.html").write_text(
+        '<!doctype html><div id="root">FreeRouter</div><script src="/app/assets/app.js"></script>',
+        encoding="utf-8",
+    )
+    (assets / "app.js").write_text("", encoding="utf-8")
+    probe = FastAPI()
+    mount_react_app(probe, project_root=tmp_path)
+
+    with TestClient(probe) as client:
         response = client.get("/app")
     assert response.status_code == 200
     assert "FreeRouter" in response.text
