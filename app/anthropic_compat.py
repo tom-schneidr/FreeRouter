@@ -17,12 +17,10 @@ SUPPORTED_TOP_LEVEL_FIELDS = frozenset(
         "messages",
         "max_tokens",
         "system",
-        "metadata",
         "stop_sequences",
         "stream",
         "temperature",
         "top_p",
-        "top_k",
         "tools",
         "tool_choice",
     }

@@ -187,6 +187,19 @@ def test_messages_payload_rejects_unsupported_top_level_field():
         )
 
 
+def test_messages_payload_rejects_metadata_and_top_k():
+    for field, value in (("metadata", {"user_id": "abc"}), ("top_k", 5)):
+        with pytest.raises(ValueError, match=field):
+            messages_payload_to_chat(
+                {
+                    "model": "auto",
+                    "max_tokens": 10,
+                    field: value,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            )
+
+
 def test_messages_payload_rejects_unsupported_content_block():
     with pytest.raises(ValueError, match="document"):
         messages_payload_to_chat(
