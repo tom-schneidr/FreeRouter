@@ -46,4 +46,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
+      - name: Create sidecar placeholder for Tauri validation
+        run: |
+          mkdir -p dist-sidecar
+          touch dist-sidecar/freerouterd-x86_64-unknown-linux-gnu
       - run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
