@@ -7,8 +7,9 @@ from time import perf_counter
 from typing import Any
 
 from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 
+from app.api.limited_streaming_response import GatewayLimiterLease, LimitedStreamingResponse
 from app.app_services import get_app_services
 from app.codex_compat import (
     ResponsesStreamMapper,
@@ -265,32 +266,33 @@ async def _route_chat_completion_stream_request(
         },
     )
 
-    if not await limiter.acquire():
+    rejected_response = JSONResponse(
+        status_code=429,
+        content={
+            "error": {
+                "message": "Gateway is busy; retry shortly",
+                "type": "gateway_overloaded",
+                "code": "request_queue_timeout",
+            }
+        },
+        headers={"Retry-After": "1"},
+    )
+
+    async def on_rejected() -> None:
         await monitor.publish(
             event_type="request_rejected",
             request_id=request_id,
             payload={"status_code": 429, "reason": "request_queue_timeout"},
         )
-        return JSONResponse(
-            status_code=429,
-            content={
-                "error": {
-                    "message": "Gateway is busy; retry shortly",
-                    "type": "gateway_overloaded",
-                    "code": "request_queue_timeout",
-                }
-            },
-            headers={"Retry-After": "1"},
-        )
 
     settings = get_settings()
-    limiter_slot_held = True
+    lease = GatewayLimiterLease(limiter)
     selected_provider = ""
     selected_route = ""
     selected_model = ""
 
     async def openai_sse_stream():
-        nonlocal selected_provider, selected_route, selected_model, limiter_slot_held
+        nonlocal selected_provider, selected_route, selected_model
         completed = False
         try:
             async for part in router.iter_chat_completion_openai_stream(
@@ -306,10 +308,9 @@ async def _route_chat_completion_stream_request(
                         selected_model = part.model_id or ""
                         if (
                             settings.streaming_release_slot_after_route_selected
-                            and limiter_slot_held
+                            and lease.held
                         ):
-                            limiter.release()
-                            limiter_slot_held = False
+                            lease.release()
                 else:
                     yield part
             completed = True
@@ -367,9 +368,7 @@ async def _route_chat_completion_stream_request(
             )
             yield "data: " + json.dumps({"error": {"message": str(exc), "type": "invalid_request"}}) + "\n\n"
         finally:
-            if limiter_slot_held:
-                limiter.release()
-                limiter_slot_held = False
+            lease.release()
             if completed:
                 await monitor.publish(
                     event_type="request_completed",
@@ -383,8 +382,11 @@ async def _route_chat_completion_stream_request(
                     },
                 )
 
-    return StreamingResponse(
+    return LimitedStreamingResponse(
         openai_sse_stream(),
+        lease=lease,
+        rejected_response=rejected_response,
+        on_rejected=on_rejected,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -571,18 +573,18 @@ async def _route_responses_stream_request(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if not await limiter.acquire():
-        return JSONResponse(
-            status_code=429,
-            content={
-                "error": {
-                    "message": "Gateway is busy; retry shortly",
-                    "type": "gateway_overloaded",
-                    "code": "request_queue_timeout",
-                }
-            },
-            headers={"Retry-After": "1"},
-        )
+    lease = GatewayLimiterLease(limiter)
+    rejected_response = JSONResponse(
+        status_code=429,
+        content={
+            "error": {
+                "message": "Gateway is busy; retry shortly",
+                "type": "gateway_overloaded",
+                "code": "request_queue_timeout",
+            }
+        },
+        headers={"Retry-After": "1"},
+    )
 
     async def responses_sse_stream():
         carry = ""
@@ -669,10 +671,12 @@ async def _route_responses_stream_request(
             )
             yield responses_stream_done()
         finally:
-            limiter.release()
+            lease.release()
 
-    return StreamingResponse(
+    return LimitedStreamingResponse(
         responses_sse_stream(),
+        lease=lease,
+        rejected_response=rejected_response,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.api.chat_handlers import (
     _monitor_trim,
@@ -15,6 +15,7 @@ from app.api.chat_handlers import (
     _route_chat_completion_stream_request,
     _route_responses_stream_request,
 )
+from app.api.limited_streaming_response import GatewayLimiterLease, LimitedStreamingResponse
 from app.app_services import get_app_services
 from app.codex_compat import chat_body_to_response, responses_payload_to_chat
 from app.request_requirements import chat_request_requirements, with_extra_capabilities
@@ -133,29 +134,30 @@ async def chat_completions_stream_route(request: Request) -> Response:
             "request_payload": _monitor_trim(payload),
         },
     )
-    if not await limiter.acquire():
+    rejected_response = JSONResponse(
+        status_code=429,
+        content={
+            "error": {
+                "message": "Gateway is busy; retry shortly",
+                "type": "gateway_overloaded",
+                "code": "request_queue_timeout",
+            }
+        },
+        headers={"Retry-After": "1"},
+    )
+
+    async def on_rejected() -> None:
         await monitor.publish(
             event_type="request_rejected",
             request_id=request_id,
             payload={"status_code": 429, "reason": "request_queue_timeout"},
         )
-        return JSONResponse(
-            status_code=429,
-            content={
-                "error": {
-                    "message": "Gateway is busy; retry shortly",
-                    "type": "gateway_overloaded",
-                    "code": "request_queue_timeout",
-                }
-            },
-            headers={"Retry-After": "1"},
-        )
 
     stream_settings = get_settings()
-    limiter_slot_held = True
+    lease = GatewayLimiterLease(limiter)
 
     async def on_stream_event(event_payload: dict[str, Any]) -> None:
-        nonlocal done_published, limiter_slot_held
+        nonlocal done_published
         event_type = event_payload.get("type")
         if event_type == "usage":
             usage = event_payload.get("usage")
@@ -179,10 +181,9 @@ async def chat_completions_stream_route(request: Request) -> Response:
             )
             if (
                 stream_settings.streaming_release_slot_after_route_selected
-                and limiter_slot_held
+                and lease.held
             ):
-                limiter.release()
-                limiter_slot_held = False
+                lease.release()
             return
         if event_type in {"route_trying", "route_skip", "route_fail", "route_flagged"}:
             await monitor.publish(
@@ -249,7 +250,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
             done_published = True
 
     async def limited_stream():
-        nonlocal done_published, limiter_slot_held
+        nonlocal done_published
         try:
             async for chunk in stream_route_chat(
                 payload,
@@ -259,9 +260,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
             ):
                 yield chunk
         finally:
-            if limiter_slot_held:
-                limiter.release()
-                limiter_slot_held = False
+            lease.release()
             if not done_published:
                 await monitor.publish(
                     event_type="request_closed",
@@ -273,8 +272,11 @@ async def chat_completions_stream_route(request: Request) -> Response:
                     },
                 )
 
-    return StreamingResponse(
+    return LimitedStreamingResponse(
         limited_stream(),
+        lease=lease,
+        rejected_response=rejected_response,
+        on_rejected=on_rejected,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

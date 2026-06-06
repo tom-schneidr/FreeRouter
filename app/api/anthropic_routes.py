@@ -7,7 +7,7 @@ from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.anthropic_compat import (
     AnthropicStreamMapper,
@@ -17,6 +17,7 @@ from app.anthropic_compat import (
     messages_payload_to_chat,
 )
 from app.api.chat_handlers import _monitor_trim, _publish_route_stream_diag
+from app.api.limited_streaming_response import GatewayLimiterLease, LimitedStreamingResponse
 from app.app_services import get_app_services
 from app.providers import ProviderError
 from app.request_requirements import chat_request_requirements
@@ -108,15 +109,6 @@ async def messages(request: Request) -> Response:
         },
     )
 
-    if not await limiter.acquire():
-        await monitor.publish(
-            event_type="request_rejected",
-            request_id=request_id,
-            payload={"status_code": 429, "reason": "request_queue_timeout"},
-        )
-        body = anthropic_error_body("rate_limit_error", "Gateway is busy; retry shortly")
-        return JSONResponse(status_code=429, content=body, headers={"Retry-After": "1"})
-
     if stream:
         return await _route_anthropic_stream(
             request_id=request_id,
@@ -128,6 +120,15 @@ async def messages(request: Request) -> Response:
             requirements=requirements,
             requested_model=requested_model,
         )
+
+    if not await limiter.acquire():
+        await monitor.publish(
+            event_type="request_rejected",
+            request_id=request_id,
+            payload={"status_code": 429, "reason": "request_queue_timeout"},
+        )
+        body = anthropic_error_body("rate_limit_error", "Gateway is busy; retry shortly")
+        return JSONResponse(status_code=429, content=body, headers={"Retry-After": "1"})
 
     return await _route_anthropic_non_stream(
         request_id=request_id,
@@ -252,13 +253,13 @@ async def _route_anthropic_stream(
 ) -> Response:
     settings = get_settings()
     message_id = f"msg_{uuid.uuid4().hex}"
-    limiter_slot_held = True
+    lease = GatewayLimiterLease(limiter)
     selected_provider = ""
     selected_route = ""
     selected_model = ""
 
     async def anthropic_sse_stream():
-        nonlocal selected_provider, selected_route, selected_model, limiter_slot_held
+        nonlocal selected_provider, selected_route, selected_model
         carry = ""
         completed = False
         mapper = AnthropicStreamMapper(message_id=message_id, model=requested_model)
@@ -275,10 +276,9 @@ async def _route_anthropic_stream(
                         selected_model = part.model_id or ""
                         if (
                             settings.streaming_release_slot_after_route_selected
-                            and limiter_slot_held
+                            and lease.held
                         ):
-                            limiter.release()
-                            limiter_slot_held = False
+                            lease.release()
                     continue
                 carry += part
                 blocks, carry = _split_sse_event_blocks(carry)
@@ -345,9 +345,7 @@ async def _route_anthropic_stream(
             )
             yield anthropic_stream_event("error", body)
         finally:
-            if limiter_slot_held:
-                limiter.release()
-                limiter_slot_held = False
+            lease.release()
             if completed:
                 await monitor.publish(
                     event_type="request_completed",
@@ -361,8 +359,22 @@ async def _route_anthropic_stream(
                     },
                 )
 
-    return StreamingResponse(
+    async def on_rejected() -> None:
+        await monitor.publish(
+            event_type="request_rejected",
+            request_id=request_id,
+            payload={"status_code": 429, "reason": "request_queue_timeout"},
+        )
+
+    return LimitedStreamingResponse(
         anthropic_sse_stream(),
+        lease=lease,
+        rejected_response=JSONResponse(
+            status_code=429,
+            content=anthropic_error_body("rate_limit_error", "Gateway is busy; retry shortly"),
+            headers={"Retry-After": "1"},
+        ),
+        on_rejected=on_rejected,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
