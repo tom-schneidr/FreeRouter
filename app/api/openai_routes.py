@@ -15,9 +15,9 @@ from app.api.chat_handlers import (
     _route_chat_completion_stream_request,
     _route_responses_stream_request,
 )
-from app.request_requirements import chat_request_requirements, with_extra_capabilities
 from app.app_services import get_app_services
 from app.codex_compat import chat_body_to_response, responses_payload_to_chat
+from app.request_requirements import chat_request_requirements, with_extra_capabilities
 from app.settings import get_settings
 from app.stream_route import stream_route_chat
 

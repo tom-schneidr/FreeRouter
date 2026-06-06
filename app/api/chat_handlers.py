@@ -19,7 +19,7 @@ from app.codex_compat import (
 from app.live_monitor import APILiveMonitor
 from app.model_catalog import ModelCatalog
 from app.providers import ProviderError
-from app.request_requirements import RequestRequirements, with_extra_capabilities
+from app.request_requirements import RequestRequirements
 from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,

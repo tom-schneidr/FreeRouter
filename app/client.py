@@ -6,7 +6,7 @@ from typing import Any
 from app.factory import build_core_gateway_stack
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS
-from app.request_requirements import RequestRequirements, with_extra_capabilities
+from app.request_requirements import RequestRequirements
 from app.router import ChatStreamPart, RouteResult, WaterfallRouter
 from app.settings import get_settings
 from app.state import StateManager
