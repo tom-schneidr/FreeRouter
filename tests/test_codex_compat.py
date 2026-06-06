@@ -198,3 +198,105 @@ def test_responses_stream_mapper_emits_tool_call_item_on_done():
     assert '"type": "function_call"' in done_events
     assert '"call_id": "call_1"' in done_events
     assert '"arguments": "{\\"cmd\\":\\"pwd\\"}"' in done_events
+
+
+def test_responses_payload_to_chat_empty_or_invalid_input():
+    import pytest
+    with pytest.raises(ValueError, match="Responses payload must include non-empty 'input'"):
+        responses_payload_to_chat({"model": "auto", "input": []})
+
+    with pytest.raises(ValueError, match="Responses payload must include non-empty 'input'"):
+        responses_payload_to_chat({"model": "auto", "input": None})
+    with pytest.raises(ValueError, match="input\\[0\\] must be a string or object"):
+        responses_payload_to_chat({"model": "auto", "input": [123]})
+
+
+def test_responses_payload_to_chat_complex_inputs():
+    payload = responses_payload_to_chat(
+        {
+            "model": "gpt-4o",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "hello"},
+                        {"type": "input_image", "image_url": "data:image/png;base64,abc"},
+                        "just raw string in array",
+                    ]
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_99",
+                    "output": {"status": "success", "data": [1, 2, 3]},
+                }
+            ],
+            "max_tokens": 500,
+        }
+    )
+
+    assert payload["model"] == "gpt-4o"
+    assert payload["max_tokens"] == 500
+    assert len(payload["messages"]) == 2
+    assert payload["messages"][0]["role"] == "user"
+    assert payload["messages"][0]["content"] == [
+        {"type": "text", "text": "hello"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        {"type": "text", "text": "just raw string in array"},
+    ]
+    assert payload["messages"][1]["role"] == "tool"
+    assert payload["messages"][1]["tool_call_id"] == "call_99"
+    assert json.loads(payload["messages"][1]["content"]) == {"status": "success", "data": [1, 2, 3]}
+
+
+def test_chat_body_to_response_no_choices_or_empty():
+    response = chat_body_to_response(
+        {},
+        requested_model="auto",
+        response_id="resp_empty",
+    )
+    assert response["id"] == "resp_empty"
+    assert response["output_text"] == ""
+    assert len(response["output"]) == 1
+    assert response["output"][0]["type"] == "message"
+    assert response["output"][0]["content"] == []
+    assert response["usage"] is None
+
+
+def test_responses_stream_mapper_no_text_only_tools():
+    mapper = ResponsesStreamMapper(response_id="resp_tool_only")
+    block = "data: " + json.dumps(
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_x",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"location": "Sydney"}',
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+    )
+
+    events = mapper.events_from_openai_sse(block)
+    assert events == []
+
+    done_events = mapper.events_from_openai_sse("data: [DONE]")
+    done_str = "\n".join(done_events)
+
+    # Should not have message output items, only tool call item
+    assert "response.output_item.added" in done_str
+    assert "response.output_item.done" in done_str
+    assert "response.completed" in done_str
+    assert "get_weather" in done_str
+    assert "Sydney" in done_str
+    assert "output_index: 0" in done_str or '"output_index": 0' in done_str
