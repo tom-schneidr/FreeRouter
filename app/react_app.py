@@ -9,7 +9,6 @@ from fastapi.staticfiles import StaticFiles
 
 from app.ui.brand import FAVICON_LINK
 
-
 REACT_APP_ROUTE = "/app"
 
 

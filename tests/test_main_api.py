@@ -11,8 +11,8 @@ from app.main import (
     _payload_with_required_web_search,
     app,
 )
-from app.request_limiter import GatewayRequestLimiter
 from app.react_app import react_dist_path
+from app.request_limiter import GatewayRequestLimiter
 from app.settings import get_settings
 
 

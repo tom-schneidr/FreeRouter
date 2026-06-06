@@ -10,7 +10,13 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 
 from app.codex_compat import (
     ResponsesStreamMapper,
@@ -35,11 +41,12 @@ from app.endpoint_diagnosis import (
     EndpointDiagnosisService,
     EndpointSupervisor,
 )
+from app.legacy_pages import CHAT_HTML, LIVE_API_HTML, ROUTE_HEALTH_HTML, USAGE_STATS_HTML
 from app.live_monitor import APILiveMonitor
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS, ProviderError, build_provider_adapters
-from app.request_limiter import GatewayRequestLimiter
 from app.react_app import mount_react_app
+from app.request_limiter import GatewayRequestLimiter
 from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,
@@ -50,7 +57,6 @@ from app.router import (
 from app.settings import get_settings
 from app.state import StateManager
 from app.stream_route import stream_route_chat
-from app.legacy_pages import CHAT_HTML, LIVE_API_HTML, ROUTE_HEALTH_HTML, USAGE_STATS_HTML
 from app.ui.brand import FAVICON_PATH, LOGO_PATH
 from app.ui.docs_page import swagger_docs_html
 from app.ui.embed import with_embed_support
