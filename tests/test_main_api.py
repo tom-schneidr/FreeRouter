@@ -378,6 +378,35 @@ async def test_request_limiter_allows_waiting_request_after_release():
     limiter.release()
 
 
+def test_chat_completions_stream_exhausted_shape_is_stable(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+    assert response.status_code == 200
+    assert "data:" in response.text
+    assert '"code": "waterfall_exhausted"' in response.text
+    assert '"type": "provider_unavailable"' in response.text
+
+
+def test_responses_non_stream_exhausted_shape_is_stable(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/v1/responses",
+            json={"model": "auto", "input": "hello"},
+        )
+    assert response.status_code == 503
+    payload = response.json()
+    assert payload["error"]["code"] == "waterfall_exhausted"
+    assert payload["error"]["type"] == "provider_unavailable"
+    assert payload["error"]["attempts"]
+
+
 async def test_request_limiter_rejects_when_waiting_queue_is_full():
     limiter = GatewayRequestLimiter(
         max_concurrent_requests=1,

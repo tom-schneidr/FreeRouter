@@ -629,3 +629,121 @@ def test_stream_commit_reasoning_counts_for_substantive():
 def test_stream_commit_tool_calls_without_text():
     chunk = {"choices": [{"index": 0, "delta": {"tool_calls": [{"id": "x", "type": "function"}]}}]}
     assert _payload_commits_openai_stream(chunk, require_substantive_assistant=True)
+
+
+class FragmentedToolStreamProvider(FakeProvider):
+    """Yields two interleaved tool-call streams with fragmented JSON arguments."""
+
+    async def chat_completion_stream(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        target_model: str | None = None,
+    ) -> Any:
+        self.stream_calls += 1
+        self.target_model = target_model
+        if self.error:
+            raise self.error
+        chunks = [
+            {
+                "id": "chatcmpl-frag",
+                "object": "chat.completion.chunk",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "id": "call_a", "type": "function", "function": {"name": "alpha", "arguments": ""}},
+                                {"index": 1, "id": "call_b", "type": "function", "function": {"name": "beta", "arguments": ""}},
+                            ]
+                        },
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-frag",
+                "object": "chat.completion.chunk",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": '{"a":'}},
+                                {"index": 1, "function": {"arguments": '{"b":'}},
+                            ]
+                        },
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-frag",
+                "object": "chat.completion.chunk",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": '1}'}},
+                                {"index": 1, "function": {"arguments": '2}'}},
+                            ]
+                        },
+                    }
+                ],
+            },
+        ]
+        for chunk in chunks:
+            yield f"data: {json.dumps(chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+
+
+async def test_openai_stream_preserves_fragmented_dual_tool_call_bytes(tmp_path):
+    state = await _state(tmp_path)
+    provider = FragmentedToolStreamProvider("primary")
+    router = WaterfallRouter([provider], _catalog(tmp_path), state, request_timeout_seconds=5)
+
+    parts = [p async for p in router.iter_chat_completion_openai_stream(_payload())]
+    sse = "".join(p for p in parts if isinstance(p, str))
+
+    assert provider.stream_calls == 1
+    assert '"call_a"' in sse
+    assert '"call_b"' in sse
+    compact = sse.replace(" ", "")
+    assert '"arguments":"{\\"a\\":' in compact or '"arguments":"{"a":' in compact
+    assert '"arguments":"1}"' in compact
+    assert '"arguments":"{\\"b\\":' in compact or '"arguments":"{"b":' in compact
+    assert '"arguments":"2}"' in compact
+
+
+class PostCommitFailureStreamProvider(FakeProvider):
+    async def chat_completion_stream(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        target_model: str | None = None,
+    ) -> Any:
+        self.stream_calls += 1
+        self.target_model = target_model
+        chunk = json.dumps(
+            {
+                "id": "chatcmpl-commit",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": "partial"}}],
+            }
+        )
+        yield f"data: {chunk}\n\n"
+        raise httpx.ReadTimeout("mid-stream failure after commit")
+
+
+async def test_openai_stream_does_not_switch_providers_after_commit(tmp_path):
+    state = await _state(tmp_path)
+    primary = PostCommitFailureStreamProvider("primary")
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+
+    parts = [p async for p in router.iter_chat_completion_openai_stream(_payload())]
+    sse = "".join(p for p in parts if isinstance(p, str))
+
+    assert primary.stream_calls == 1
+    assert fallback.stream_calls == 0
+    assert "partial" in sse
+    assert "[DONE]" in sse

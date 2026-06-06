@@ -210,6 +210,85 @@ async def test_chat_completion_strips_stream_flag_for_non_streaming_requests():
         )
 
 
+async def test_chat_completion_forwards_multiple_tools_and_parallel_tool_calls():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        assert body["parallel_tool_calls"] is False
+        assert len(body["tools"]) == 2
+        assert body["tools"][0]["function"]["name"] == "alpha"
+        assert body["tools"][1]["function"]["name"] == "beta"
+        return httpx.Response(200, json={"id": "chat", "choices": [], "usage": {"total_tokens": 1}})
+
+    adapter = _adapter()
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        await adapter.chat_completion(
+            client,
+            {
+                "model": "friendly-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "parallel_tool_calls": False,
+                "tools": [
+                    {"type": "function", "function": {"name": "alpha", "parameters": {}}},
+                    {"type": "function", "function": {"name": "beta", "parameters": {}}},
+                ],
+            },
+        )
+
+
+async def test_chat_completion_forwards_multimodal_message_array():
+    image_part = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,abc"},
+    }
+    text_part = {"type": "text", "text": "describe"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        content = body["messages"][0]["content"]
+        assert content == [text_part, image_part]
+        return httpx.Response(200, json={"id": "chat", "choices": [], "usage": {"total_tokens": 1}})
+
+    adapter = _adapter()
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        await adapter.chat_completion(
+            client,
+            {
+                "model": "friendly-model",
+                "messages": [{"role": "user", "content": [text_part, image_part]}],
+            },
+        )
+
+
+async def test_chat_completion_forwards_response_format_and_reasoning_fields():
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "schema": {"type": "object"}},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        assert body["response_format"] == response_format
+        assert body["reasoning_effort"] == "high"
+        assert body["reasoning"] == {"effort": "medium"}
+        return httpx.Response(200, json={"id": "chat", "choices": [], "usage": {"total_tokens": 1}})
+
+    adapter = _adapter()
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        await adapter.chat_completion(
+            client,
+            {
+                "model": "friendly-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "response_format": response_format,
+                "reasoning_effort": "high",
+                "reasoning": {"effort": "medium"},
+            },
+        )
+
+
 async def test_chat_completion_stream_yields_lines_and_sets_stream_true():
     sse_body = (
         'data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n'
