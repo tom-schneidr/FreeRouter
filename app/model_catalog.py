@@ -13,6 +13,7 @@ CANONICAL_MODEL_TAGS = {
     "reasoning",
     "coding",
     "tool-use",
+    "json-schema",
     "web-search",
     "vision",
     "audio",
