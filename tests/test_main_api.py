@@ -160,6 +160,18 @@ def test_chat_completions_rejects_invalid_messages(tmp_path, monkeypatch):
     assert "non-empty 'messages'" in response.json()["detail"]
 
 
+def test_openai_routes_reject_malformed_json_without_internal_error(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        for path in ("/v1/chat/completions", "/v1/responses"):
+            response = client.post(
+                path,
+                content="{not-json",
+                headers={"Content-Type": "application/json"},
+            )
+            assert response.status_code == 400
+            assert response.json()["detail"] == "Request body must be valid JSON"
+
+
 def test_chat_completions_returns_503_when_all_providers_unconfigured(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.post(

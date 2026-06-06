@@ -278,6 +278,31 @@ def test_chat_body_to_anthropic_message_tool_calls():
     }
 
 
+def test_chat_body_to_anthropic_message_tool_calls_override_incorrect_stop_reason():
+    message = chat_body_to_anthropic_message(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_a",
+                                "type": "function",
+                                "function": {"name": "alpha", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+        requested_model="auto",
+    )
+    assert message["stop_reason"] == "tool_use"
+
+
 def test_anthropic_error_body_shape():
     body = anthropic_error_body("invalid_request_error", "bad request")
     assert body == {
@@ -372,6 +397,7 @@ def test_anthropic_stream_mapper_dual_tool_calls_with_fragmented_json():
     assert '"type":"content_block_start","index":2' not in compact
     assert '"partial_json":"{\\"a\\":' in compact or '"partial_json":"{"a":' in compact
     assert '"partial_json":"1}"' in compact
+    assert '"stop_reason":"tool_use"' in compact
     assert "message_stop" in compact
 
 

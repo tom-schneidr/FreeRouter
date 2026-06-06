@@ -191,6 +191,31 @@ async def test_chat_completion_raises_provider_error_for_http_failure():
     assert exc.value.status_code == 502
 
 
+async def test_chat_completion_raises_provider_error_for_2xx_error_payload():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "error": {
+                    "message": "upstream failed after accepting the request",
+                    "type": "InternalServerError",
+                    "code": 500,
+                }
+            },
+        )
+
+    adapter = _adapter()
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(ProviderError) as exc:
+            await adapter.chat_completion(
+                client,
+                {"model": "friendly-model", "messages": [{"role": "user", "content": "hello"}]},
+            )
+    assert exc.value.status_code == 500
+    assert "error payload" in str(exc.value)
+
+
 async def test_chat_completion_strips_stream_flag_for_non_streaming_requests():
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content.decode("utf-8"))

@@ -108,7 +108,12 @@ def chat_body_to_anthropic_message(
 
     content = _assistant_message_to_anthropic_content(message)
     finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
-    stop_reason = _FINISH_REASON_TO_STOP.get(str(finish_reason), "end_turn")
+    has_tool_use = any(block.get("type") == "tool_use" for block in content)
+    stop_reason = (
+        "tool_use"
+        if has_tool_use
+        else _FINISH_REASON_TO_STOP.get(str(finish_reason), "end_turn")
+    )
 
     return {
         "id": message_id or f"msg_{uuid.uuid4().hex}",
@@ -593,7 +598,11 @@ class AnthropicStreamMapper:
                     )
                 )
 
-        stop_reason = _FINISH_REASON_TO_STOP.get(self.finish_reason or "stop", "end_turn")
+        stop_reason = (
+            "tool_use"
+            if self.tool_blocks
+            else _FINISH_REASON_TO_STOP.get(self.finish_reason or "stop", "end_turn")
+        )
         usage = self.usage or {"input_tokens": 0, "output_tokens": 0}
         events.append(
             anthropic_stream_event(

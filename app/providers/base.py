@@ -172,6 +172,17 @@ class ProviderAdapter:
                 body=response.text,
             ) from exc
 
+        if isinstance(body, dict) and isinstance(body.get("error"), dict):
+            error = body["error"]
+            raw_code = error.get("code")
+            status_code = raw_code if isinstance(raw_code, int) else 502
+            raise ProviderError(
+                f"{self.name} returned an error payload with HTTP {response.status_code}",
+                status_code=status_code,
+                headers=response.headers,
+                body=response.text,
+            )
+
         return ProviderResponse(
             provider_name=self.name,
             status_code=response.status_code,

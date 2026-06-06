@@ -70,6 +70,17 @@ def test_openrouter_text_routes_are_web_search_capable():
     assert all("web-search" in route.tags for route in openrouter_text_routes)
 
 
+def test_groq_compound_routes_do_not_claim_function_tool_support():
+    compound_routes = [
+        route
+        for route in DEFAULT_MODEL_ROUTES
+        if route.provider_name == "groq" and route.model_id in {"groq/compound", "groq/compound-mini"}
+    ]
+    assert len(compound_routes) == 2
+    assert all("web-search" in route.tags for route in compound_routes)
+    assert all("tool-use" not in route.tags for route in compound_routes)
+
+
 def test_default_routes_are_text_input_text_output_only():
     assert DEFAULT_MODEL_ROUTES
     assert all(is_text_chat_route(route) for route in DEFAULT_MODEL_ROUTES)

@@ -26,7 +26,12 @@ router = APIRouter()
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> Response:
-    payload: dict[str, Any] = await request.json()
+    try:
+        payload: dict[str, Any] = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if payload.get("stream"):
         return await _route_chat_completion_stream_request(
             request,
@@ -42,7 +47,12 @@ async def chat_completions(request: Request) -> Response:
 
 @router.post("/v1/responses")
 async def responses(request: Request) -> Response:
-    responses_payload: dict[str, Any] = await request.json()
+    try:
+        responses_payload: dict[str, Any] = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+    if not isinstance(responses_payload, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     try:
         chat_payload = responses_payload_to_chat(responses_payload)
     except ValueError as exc:
