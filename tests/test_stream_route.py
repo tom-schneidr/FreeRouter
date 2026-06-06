@@ -225,3 +225,27 @@ async def test_stream_route_sse_does_not_call_sleep_between_chunks(monkeypatch, 
         c async for c in stream_route_chat(_payload(), router, chunk_replay_sleep_seconds=0.0)
     ]
     assert chunks
+
+
+async def test_stream_route_emits_error_for_unsupported_capabilities(tmp_path):
+    router = WaterfallRouter(
+        [FakeProvider("primary")],
+        _catalog(tmp_path),
+        await _state(tmp_path),
+        request_timeout_seconds=5,
+    )
+    payload = {
+        "model": "auto",
+        "messages": [{"role": "user", "content": "hello"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "answer", "schema": {"type": "object"}},
+        },
+    }
+
+    chunks = [chunk async for chunk in stream_route_chat(payload, router)]
+    joined = "".join(chunks)
+
+    assert '"type": "error"' in joined
+    assert '"code": "unsupported_capabilities"' in joined
+    assert '"json-schema"' in joined

@@ -10,6 +10,7 @@ from app.router import (
     _SSE_DONE,
     NoProviderAvailable,
     RouteStreamDiag,
+    UnsupportedCapabilities,
     WaterfallRouter,
     _delta_visible_text_from_chunk,
     _event_block_data_payload,
@@ -156,5 +157,14 @@ async def stream_route_chat(
             {
                 "type": "error",
                 "message": "All providers exhausted. No model could serve this request.",
+            }
+        )
+    except UnsupportedCapabilities as exc:
+        yield await emit(
+            {
+                "type": "error",
+                "message": str(exc),
+                "code": "unsupported_capabilities",
+                "required_capabilities": sorted(exc.required),
             }
         )
