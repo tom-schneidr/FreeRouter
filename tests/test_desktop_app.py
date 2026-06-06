@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.desktop_api import DESKTOP_PROJECT_ROOT_ENV, DESKTOP_TOKEN_ENV, desktop_capabilities
+from app.desktop_icon import _icons_equivalent
 from app.desktop_settings import (
     MASKED_SECRET,
     launcher_host_port,
@@ -15,6 +16,30 @@ from app.desktop_settings import (
     settings_payload,
     write_settings,
 )
+
+
+def test_icon_equivalence_ignores_image_container_metadata(tmp_path):
+    from PIL import Image
+
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    image = Image.new("RGBA", (16, 16), (20, 40, 60, 255))
+    image.save(first)
+    image.save(second, optimize=True)
+
+    assert first.read_bytes() != second.read_bytes()
+    assert _icons_equivalent(first, second)
+
+
+def test_icon_equivalence_detects_pixel_changes(tmp_path):
+    from PIL import Image
+
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    Image.new("RGBA", (16, 16), (20, 40, 60, 255)).save(first)
+    Image.new("RGBA", (16, 16), (21, 40, 60, 255)).save(second)
+
+    assert not _icons_equivalent(first, second)
 
 
 def test_desktop_settings_mask_secrets_and_preserve_existing_values(tmp_path):

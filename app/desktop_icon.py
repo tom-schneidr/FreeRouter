@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import filecmp
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from app.ui.brand import FAVICON_PATH, PROJECT_ROOT
 
@@ -54,23 +56,53 @@ def sync_tauri_icons(project_root: Path | None = None) -> Path:
     icons_dir = desktop_dir / "src-tauri" / "icons"
     icons_dir.mkdir(parents=True, exist_ok=True)
 
-    subprocess.run(
-        [
-            npx_executable(),
-            "tauri",
-            "icon",
-            str(FAVICON_PATH.resolve()),
-            "-o",
-            "src-tauri/icons",
-        ],
-        cwd=desktop_dir,
-        check=True,
-    )
+    with tempfile.TemporaryDirectory(prefix="freerouter-icons-") as temporary_directory:
+        generated_dir = Path(temporary_directory)
+        subprocess.run(
+            [
+                npx_executable(),
+                "tauri",
+                "icon",
+                str(FAVICON_PATH.resolve()),
+                "-o",
+                str(generated_dir),
+            ],
+            cwd=desktop_dir,
+            check=True,
+        )
+        _sync_generated_icons(generated_dir, icons_dir)
 
     tauri_icon = icons_dir / "icon.ico"
     if not tauri_icon.exists():
         raise FileNotFoundError(f"Tauri icon generation did not produce {tauri_icon}")
     return tauri_icon
+
+
+def _sync_generated_icons(generated_dir: Path, icons_dir: Path) -> None:
+    for generated in generated_dir.rglob("*"):
+        if not generated.is_file():
+            continue
+        target = icons_dir / generated.relative_to(generated_dir)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and _icons_equivalent(generated, target):
+            continue
+        shutil.copy2(generated, target)
+
+
+def _icons_equivalent(left: Path, right: Path) -> bool:
+    if filecmp.cmp(left, right, shallow=False):
+        return True
+    try:
+        with Image.open(left) as left_image, Image.open(right) as right_image:
+            if left_image.size != right_image.size:
+                return False
+            difference = ImageChops.difference(
+                left_image.convert("RGBA"),
+                right_image.convert("RGBA"),
+            )
+            return all(channel_max == 0 for _, channel_max in difference.getextrema())
+    except (OSError, ValueError):
+        return False
 
 
 def sync_icon_targets(project_root: Path | None = None) -> list[Path]:
