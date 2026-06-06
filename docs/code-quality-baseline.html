@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FreeRouter Code Quality Baseline</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #07111f;
+        --surface: #101b2e;
+        --line: #24354d;
+        --text: #e5edf8;
+        --muted: #91a4bd;
+        --accent: #4f8cff;
+        --ok: #22c55e;
+        --warn: #f59e0b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: radial-gradient(circle at 76% -10%, rgba(79,140,255,.16), transparent 34%), var(--bg);
+        color: var(--text);
+        font: 15px/1.6 "Segoe UI", Inter, system-ui, sans-serif;
+      }
+      main { width: min(1100px, calc(100vw - 32px)); margin: 0 auto; padding: 42px 0 64px; }
+      h1, h2, h3, p, table { margin: 0; }
+      h1 { font-size: clamp(1.8rem, 3.5vw, 2.8rem); line-height: 1.1; }
+      h2 { margin-top: 32px; font-size: 1.15rem; }
+      h3 { margin-top: 18px; font-size: 1rem; color: var(--text); }
+      p, li { color: var(--muted); margin-top: 8px; }
+      .lede { max-width: 820px; font-size: 1.02rem; margin-top: 12px; }
+      .meta { margin-top: 10px; font-size: 0.9rem; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        font-size: 0.92rem;
+      }
+      th, td {
+        border: 1px solid var(--line);
+        padding: 8px 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th { background: var(--surface); color: var(--text); }
+      code, pre {
+        font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+        color: #c7d2fe;
+      }
+      pre {
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #050b15;
+        padding: 14px;
+        margin-top: 10px;
+        font-size: 0.85rem;
+      }
+      .pass { color: var(--ok); }
+      .warn { color: var(--warn); }
+      ul { margin: 8px 0 0; padding-left: 1.35rem; }
+      li + li { margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Code Quality Baseline</h1>
+      <p class="lede">
+        Snapshot recorded at the start of the <code>refactor/code-quality-roadmap</code> branch.
+        Branch point: <code>main</code> at commit <code>a588d7d</code> (Strengthen project validation).
+      </p>
+      <p class="meta">Recorded: 2026-06-06</p>
+
+      <h2>Verification Commands</h2>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Result</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>python -m pip install -e ".[dev]"</code></td><td class="pass">OK</td><td>Python 3.13 on Windows dev machine</td></tr>
+          <tr><td><code>python -m pytest -p no:cacheprovider</code></td><td class="pass">164 passed</td><td>24.78s</td></tr>
+          <tr><td><code>python -m ruff check .</code></td><td class="pass">All checks passed</td><td></td></tr>
+          <tr><td><code>npm run typecheck:web</code></td><td class="pass">OK</td><td>tsc -b</td></tr>
+          <tr><td><code>npm run test:web</code></td><td class="pass">5 passed</td><td>Vitest</td></tr>
+          <tr><td><code>npm run build:web</code></td><td class="pass">OK</td><td>Vite production build</td></tr>
+          <tr><td><code>npm run check:desktop</code></td><td class="pass">OK</td><td>cargo check (Tauri)</td></tr>
+        </tbody>
+      </table>
+      <p>CI mirrors: Python pytest + ruff; frontend typecheck/test/build; desktop cargo check (<code>.github/workflows/ci.yml</code>).</p>
+      <p>No pyright/mypy configured at baseline. No module-size or import-boundary enforcement at baseline.</p>
+
+      <h2>Pre-existing Failures</h2>
+      <p class="pass">None observed in the full verification suite at baseline.</p>
+      <p>Informational: pip reported an available upgrade; RequestsDependencyWarning from urllib3/chardet version mismatch on the Windows Python install (not a test failure).</p>
+
+      <h2>API Surface Inventory</h2>
+      <table>
+        <thead><tr><th>Method</th><th>Path</th><th>Surface</th></tr></thead>
+        <tbody>
+          <tr><td>GET</td><td>/</td><td>Redirect to /app</td></tr>
+          <tr><td>GET</td><td>/app, /app/{path}</td><td>React control plane (react_app.py)</td></tr>
+          <tr><td>GET</td><td>/favicon.ico, /brand/*</td><td>Static brand assets</td></tr>
+          <tr><td>GET</td><td>/docs</td><td>Custom Swagger HTML</td></tr>
+          <tr><td>GET</td><td>/chat, /status, /health, /live</td><td>Legacy embed HTML (React iframes)</td></tr>
+          <tr><td>GET/POST</td><td>/v1/desktop/*</td><td>Desktop shell management</td></tr>
+          <tr><td>GET</td><td>/v1/gateway/health.json</td><td>Gateway health JSON</td></tr>
+          <tr><td>GET</td><td>/v1/models</td><td>OpenAI-compatible model list</td></tr>
+          <tr><td>GET/PUT/POST</td><td>/v1/gateway/models*</td><td>Catalog CRUD and ranking</td></tr>
+          <tr><td>GET/POST</td><td>/v1/gateway/endpoint-diagnosis*</td><td>Endpoint diagnosis</td></tr>
+          <tr><td>GET</td><td>/v1/providers/status</td><td>Provider and route usage</td></tr>
+          <tr><td>GET</td><td>/v1/gateway/live/*</td><td>Live monitor snapshot and SSE</td></tr>
+          <tr><td>POST</td><td>/v1/chat/completions</td><td>OpenAI chat (stream + non-stream)</td></tr>
+          <tr><td>POST</td><td>/v1/responses</td><td>Codex/OpenAI Responses API</td></tr>
+          <tr><td>POST</td><td>/v1/chat/completions/web-search</td><td>Web-search tagged routing</td></tr>
+          <tr><td>POST</td><td>/v1/chat/completions/stream-route</td><td>Custom route-progress SSE</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Application Construction Paths</h2>
+      <ul>
+        <li><strong>FastAPI server</strong> — <code>app/main.py</code> lifespan builds StateManager, ModelCatalog, providers, GatewayRequestLimiter, APILiveMonitor, httpx.AsyncClient, WaterfallRouter, EndpointDiagnosisService, optional BackgroundEndpointDiagnosis; stores each on <code>app.state</code>.</li>
+        <li><strong>Programmatic client</strong> — <code>app/client.py</code> UnifiedAIClient duplicates settings, state, catalog, and router construction without diagnosis, live monitor, or limiter.</li>
+        <li><strong>Desktop sidecar</strong> — Tauri launches packaged uvicorn via sidecar; desktop token env gates <code>/v1/desktop/*</code>.</li>
+        <li><strong>Tray launcher</strong> — <code>app/tray_launcher.py</code> opens browser to legacy /chat and /live pages.</li>
+      </ul>
+
+      <h2>Largest Source Modules (approximate lines)</h2>
+      <table>
+        <thead><tr><th>Lines</th><th>Module</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>1209</td><td>app/model_catalog.py</td><td>Catalog domain + file persistence + defaults</td></tr>
+          <tr><td>1203</td><td>app/main.py</td><td>Monolithic routes + chat handlers</td></tr>
+          <tr><td>1025</td><td>app/state.py</td><td>Quota rules + SQLite persistence</td></tr>
+          <tr><td>757</td><td>app/router.py</td><td>Waterfall routing + non-stream execution</td></tr>
+          <tr><td>648</td><td>app/endpoint_diagnosis.py</td><td>Diagnosis + AI supervisor</td></tr>
+          <tr><td>613</td><td>app/openai_stream_routing.py</td><td>Streaming waterfall execution</td></tr>
+          <tr><td>593</td><td>app/ui/theme.py</td><td>Legacy page theme sync</td></tr>
+          <tr><td>532</td><td>app/codex_compat.py</td><td>/v1/responses translation</td></tr>
+          <tr><td>150</td><td>app/stream_route.py</td><td>Custom SSE stream-route format</td></tr>
+        </tbody>
+      </table>
+
+      <h2>request.app.state.* Usage (baseline)</h2>
+      <p>All direct accesses live in <code>app/main.py</code> (35 occurrences):</p>
+      <ul>
+        <li><code>gateway_state</code> — catalog health payloads, provider status</li>
+        <li><code>model_catalog</code> — models and gateway model endpoints</li>
+        <li><code>waterfall_router</code> — chat completion routing</li>
+        <li><code>request_limiter</code> — concurrency gate on chat endpoints</li>
+        <li><code>live_monitor</code> — live snapshot/SSE and chat telemetry</li>
+        <li><code>endpoint_diagnosis</code>, <code>background_endpoint_diagnosis</code> — diagnosis endpoints</li>
+        <li><code>http_client</code> — set in lifespan but not read from routes at baseline</li>
+      </ul>
+
+      <h2>Architectural Dependency Concerns</h2>
+      <ul>
+        <li>Core gateway (<code>app/main.py</code>, <code>router.py</code>) imports UI modules (<code>app/ui/*</code>, <code>app/legacy_pages</code>) for HTML routes.</li>
+        <li>Duplicate service construction between <code>main.py</code> lifespan and <code>client.py</code>.</li>
+        <li>Streaming logic split across <code>openai_stream_routing.py</code>, <code>stream_route.py</code>, and large handlers in <code>main.py</code>.</li>
+        <li>Route selection policy duplicated between <code>router._iter_route_events_with_client</code> and <code>openai_stream_routing.waterfall_openai_stream</code>.</li>
+        <li><code>state.py</code> and <code>model_catalog.py</code> mix domain rules with persistence I/O.</li>
+        <li>No typed application container; route handlers cast untyped <code>app.state</code> attributes.</li>
+      </ul>
+
+      <h2>Roadmap Risks</h2>
+      <ul>
+        <li class="warn">Legacy HTML pages remain embedded in React (<code>LEGACY_EMBED_SECTIONS</code>); premature removal breaks Chat, Usage, Route Health, and Live Traffic.</li>
+        <li class="warn">Tray launcher still opens <code>/chat</code> and <code>/live</code> directly.</li>
+        <li class="warn">Large modules exceed soft targets (main 1203, state 1025, model_catalog 1209 lines).</li>
+        <li>Endpoint diagnosis auto-maintenance can mutate catalog; changes need characterization tests.</li>
+        <li>Streaming release-slot setting affects limiter lifecycle during long streams.</li>
+      </ul>
+    </main>
+  </body>
+</html>

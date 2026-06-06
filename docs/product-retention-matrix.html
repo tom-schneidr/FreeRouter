@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FreeRouter Product Retention Matrix</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #07111f;
+        --surface: #101b2e;
+        --line: #24354d;
+        --text: #e5edf8;
+        --muted: #91a4bd;
+        --retain: #22c55e;
+        --simplify: #4f8cff;
+        --remove: #ef4444;
+        --undecided: #f59e0b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.55 "Segoe UI", Inter, system-ui, sans-serif;
+      }
+      main { width: min(1200px, calc(100vw - 32px)); margin: 0 auto; padding: 36px 0 56px; }
+      h1 { font-size: 2rem; margin: 0; }
+      p { color: var(--muted); margin-top: 10px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 0.88rem; }
+      th, td { border: 1px solid var(--line); padding: 10px; vertical-align: top; }
+      th { background: var(--surface); position: sticky; top: 0; }
+      .retain { color: var(--retain); font-weight: 600; }
+      .simplify { color: var(--simplify); font-weight: 600; }
+      .remove { color: var(--remove); font-weight: 600; }
+      .undecided { color: var(--undecided); font-weight: 600; }
+      code { font-family: Consolas, ui-monospace, monospace; color: #c7d2fe; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Product Retention Matrix</h1>
+      <p>Evidence-based retention decisions for the code-quality roadmap. Default policy: retain when active consumers exist; remove only with proof of obsolescence.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Purpose</th>
+            <th>Active consumers</th>
+            <th>Dependencies</th>
+            <th>Test coverage</th>
+            <th>Decision</th>
+            <th>Removal consequences</th>
+            <th>Acceptance behavior to preserve</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Codex compatibility (<code>/v1/responses</code>)</td>
+            <td>Translate OpenAI Responses API payloads to chat completions and back; stream Codex-style SSE events.</td>
+            <td>README documents usage; <code>tests/test_codex_compat.py</code>, <code>test_main_api.py</code> responses tests.</td>
+            <td><code>app/codex_compat.py</code>, chat routing in main.</td>
+            <td>Strong unit + API tests.</td>
+            <td class="retain">Retain</td>
+            <td>Breaks Codex/Responses clients.</td>
+            <td>Payload mapping, streaming event sequence, error translation on waterfall exhaustion.</td>
+          </tr>
+          <tr>
+            <td>Endpoint diagnosis + AI supervisor</td>
+            <td>Probe routes, suggest catalog maintenance, optional background auto-apply.</td>
+            <td>Settings UI via React; <code>/v1/gateway/endpoint-diagnosis*</code>; background task in lifespan.</td>
+            <td><code>endpoint_diagnosis.py</code>, providers, catalog, state.</td>
+            <td><code>tests/test_endpoint_diagnosis.py</code></td>
+            <td class="simplify">Simplify (retain behavior)</td>
+            <td>Loss of automated route health maintenance.</td>
+            <td>Manual refresh/apply APIs, status reporting, safe auto-apply when enabled.</td>
+          </tr>
+          <tr>
+            <td>Python client library (<code>UnifiedAIClient</code>)</td>
+            <td>Programmatic routing without HTTP server.</td>
+            <td><code>app/client.py</code>, <code>ask_ai()</code> helper; <code>tests/test_client.py</code>.</td>
+            <td>Duplicates router/state/catalog construction.</td>
+            <td>Basic construction tests.</td>
+            <td class="retain">Retain</td>
+            <td>Breaks embedded scripts using ask_ai.</td>
+            <td>chat(), chat_stream(), initialize/aclose lifecycle.</td>
+          </tr>
+          <tr>
+            <td>Legacy embedded pages (<code>/chat</code>, <code>/status</code>, <code>/health</code>, <code>/live</code>)</td>
+            <td>Full-featured HTML UIs with embed mode for React iframes.</td>
+            <td>React <code>LEGACY_EMBED_SECTIONS</code>; tray opens /chat, /live; dev-desktop.ps1 checks /live?embed=1.</td>
+            <td><code>legacy_pages/*</code>, <code>ui/embed.py</code>, <code>ui/theme.py</code>, <code>ui/brand.py</code>.</td>
+            <td><code>test_embedded_legacy_routes_still_support_desktop_shell</code></td>
+            <td class="retain">Retain</td>
+            <td>React Chat/Usage/Health/Live sections break; tray shortcuts break.</td>
+            <td>200 HTML with embed styles; stream-route chat behavior; provider usage tables.</td>
+          </tr>
+          <tr>
+            <td>Legacy UI helpers (<code>theme.py</code>, <code>docs_page.py</code>, <code>embed.py</code>)</td>
+            <td>Theme sync, Swagger skin, embed CSS/JS injection.</td>
+            <td>Legacy pages, /docs, React embed tests.</td>
+            <td>Used by legacy_pages and main /docs route.</td>
+            <td><code>test_docs_page_uses_dark_theme</code>, embed route tests.</td>
+            <td class="retain">Retain</td>
+            <td>Broken theming in iframes and docs.</td>
+            <td>embed=1 layout, theme sync without floating controls in docs.</td>
+          </tr>
+          <tr>
+            <td>Tray application</td>
+            <td>System tray launcher with quick links.</td>
+            <td><code>run-tray.ps1</code>, <code>app/tray_launcher.py</code>.</td>
+            <td>Opens legacy /chat, /live URLs.</td>
+            <td>No dedicated tray tests.</td>
+            <td class="retain">Retain</td>
+            <td>Tray users lose quick access.</td>
+            <td>Open browser to gateway chat/live pages.</td>
+          </tr>
+          <tr>
+            <td>Backup/import</td>
+            <td>Export/import local state zip for desktop users.</td>
+            <td>React BackupsView; <code>/v1/desktop/backups/*</code>; shell scripts backup-local-state.*</td>
+            <td><code>local_backup.py</code>, desktop_api.</td>
+            <td><code>tests/test_local_backup.py</code>, desktop API tests.</td>
+            <td class="retain">Retain</td>
+            <td>Desktop backup UI non-functional.</td>
+            <td>Export path response, import with overwrite, upload import.</td>
+          </tr>
+          <tr>
+            <td><code>stream_route.py</code> (<code>/v1/chat/completions/stream-route</code>)</td>
+            <td>Custom JSON SSE with route progress + content deltas for legacy chat UI.</td>
+            <td>Legacy chat page fetch; live monitor hooks in main.</td>
+            <td><code>router.iter_chat_completion_openai_stream</code></td>
+            <td><code>tests/test_stream_route.py</code>, main API stream-route test.</td>
+            <td class="retain">Retain</td>
+            <td>Legacy chat streaming breaks.</td>
+            <td>Event types: route_trying, route_skip, route_fail, route_flagged, route_selected, content, done, error.</td>
+          </tr>
+          <tr>
+            <td><code>openai_stream_routing.py</code></td>
+            <td>OpenAI-compatible SSE waterfall with commit-on-first-chunk.</td>
+            <td><code>/v1/chat/completions</code> stream, <code>/v1/responses</code> stream, UnifiedAIClient.chat_stream.</td>
+            <td>Called from WaterfallRouter.iter_chat_completion_openai_stream.</td>
+            <td><code>tests/test_router.py</code>, streaming API tests.</td>
+            <td class="retain">Retain</td>
+            <td>Standard OpenAI streaming clients break.</td>
+            <td>Raw OpenAI SSE fragments + RouteStreamDiag; waterfall fallback on failures.</td>
+          </tr>
+          <tr>
+            <td>Removed standalone /models HTML</td>
+            <td>Former legacy models page.</td>
+            <td>React ModelsView replaces it; test expects 404 on /models.</td>
+            <td>Already removed.</td>
+            <td><code>test_removed_legacy_control_plane_routes_return_not_found</code></td>
+            <td class="remove">Already removed</td>
+            <td>N/A</td>
+            <td>/models returns 404; use /app#models.</td>
+          </tr>
+          <tr>
+            <td>React control plane (/app)</td>
+            <td>Primary dashboard, models, settings, backups, logs.</td>
+            <td>Root redirect, desktop shell, Tauri sidecar.</td>
+            <td>react_app.py, apps/ui build.</td>
+            <td>Desktop + main API tests for /app.</td>
+            <td class="retain">Retain</td>
+            <td>Product has no UI.</td>
+            <td>/app serves built index.html; hash navigation; desktop token headers.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 style="margin-top:28px;font-size:1.1rem;">Phase 4 outcome</h2>
+      <p>No legacy UI removal performed: embedded pages remain required by the React shell and tray launcher. Only previously removed routes (e.g. <code>/models</code>) stay deleted.</p>
+    </main>
+  </body>
+</html>

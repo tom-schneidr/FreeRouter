@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from app.catalog_store import load_catalog_json, save_catalog_json
 from app.model_ranking import compute_rank_score, rank_sort_key
 
 CANONICAL_MODEL_TAGS = {
@@ -1197,16 +1197,10 @@ class ModelCatalog:
         }
 
     def save(self) -> None:
-        with open(self.path, "w", encoding="utf-8") as handle:
-            json.dump([asdict(route) for route in self.all_routes()], handle, indent=2)
-            handle.write("\n")
+        save_catalog_json(self.path, [asdict(route) for route in self.all_routes()])
 
     def _load_routes(self) -> list[ModelRoute]:
-        with open(self.path, encoding="utf-8") as handle:
-            raw = json.load(handle)
-        if not isinstance(raw, list):
-            raise ValueError(f"Model catalog must be a JSON array: {self.path}")
-        return [self._route_from_dict(item) for item in raw]
+        return [self._route_from_dict(item) for item in load_catalog_json(self.path)]
 
     def _merge_new_defaults(self) -> None:
         defaults = {route.route_id: route for route in DEFAULT_MODEL_ROUTES}

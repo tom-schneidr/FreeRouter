@@ -1,0 +1,629 @@
+from __future__ import annotations
+
+import json
+import uuid
+from dataclasses import asdict
+from time import perf_counter
+from typing import Any
+
+from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+
+from app.app_services import get_app_services
+from app.codex_compat import (
+    ResponsesStreamMapper,
+    response_stream_event,
+    responses_stream_done,
+    responses_stream_start,
+)
+from app.live_monitor import APILiveMonitor
+from app.model_catalog import ModelCatalog
+from app.providers import ProviderError
+from app.router import (
+    NoProviderAvailable,
+    RouteStreamDiag,
+    _split_sse_event_blocks,
+    validate_chat_completion_payload,
+)
+from app.settings import get_settings
+from app.state import StateManager
+
+WEB_SEARCH_TOOL = {"type": "web_search_preview"}
+
+
+def _monitor_trim(
+    value: Any, *, max_string: int = 1200, max_items: int = 30, depth: int = 0
+) -> Any:
+    if depth >= 4:
+        return "<truncated-depth>"
+    if isinstance(value, str):
+        if len(value) <= max_string:
+            return value
+        return value[:max_string] + f"... <truncated {len(value) - max_string} chars>"
+    if isinstance(value, list):
+        items = [
+            _monitor_trim(item, max_string=max_string, max_items=max_items, depth=depth + 1)
+            for item in value[:max_items]
+        ]
+        if len(value) > max_items:
+            items.append(f"<truncated {len(value) - max_items} items>")
+        return items
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for idx, (k, v) in enumerate(value.items()):
+            if idx >= max_items:
+                out["__truncated__"] = f"{len(value) - max_items} keys omitted"
+                break
+            out[str(k)] = _monitor_trim(
+                v, max_string=max_string, max_items=max_items, depth=depth + 1
+            )
+        return out
+    return value
+
+
+def _assistant_text_from_response_body(body: Any) -> str:
+    if not isinstance(body, dict):
+        return ""
+    direct_content = body.get("content")
+    if isinstance(direct_content, str):
+        return direct_content
+    message = body.get("message")
+    if isinstance(message, dict):
+        message_content = message.get("content")
+        if isinstance(message_content, str):
+            return message_content
+        if isinstance(message_content, list):
+            return _content_parts_to_text(message_content)
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices:
+        first_choice = choices[0]
+        if isinstance(first_choice, dict):
+            choice_message = first_choice.get("message")
+            if isinstance(choice_message, dict):
+                message_content = choice_message.get("content")
+                if isinstance(message_content, str):
+                    return message_content
+                if isinstance(message_content, list):
+                    return _content_parts_to_text(message_content)
+            choice_text = first_choice.get("text")
+            if isinstance(choice_text, str):
+                return choice_text
+    return ""
+
+
+def _content_parts_to_text(parts: list[Any]) -> str:
+    text_parts: list[str] = []
+    for part in parts:
+        if isinstance(part, str):
+            text_parts.append(part)
+        elif isinstance(part, dict):
+            text = part.get("text") or part.get("content")
+            if isinstance(text, str):
+                text_parts.append(text)
+    return "\n".join(text_parts)
+
+
+def _payload_with_required_web_search(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object")
+    prepared = dict(payload)
+    tools = prepared.get("tools")
+    if not isinstance(tools, list):
+        tools = []
+    elif not _has_web_search_tool(tools):
+        tools = list(tools)
+    if not _has_web_search_tool(tools):
+        tools.append(dict(WEB_SEARCH_TOOL))
+    prepared["tools"] = tools
+    prepared["tool_choice"] = dict(WEB_SEARCH_TOOL)
+    return prepared
+
+
+def _has_web_search_tool(tools: list[Any]) -> bool:
+    return any(
+        isinstance(tool, dict) and tool.get("type") == WEB_SEARCH_TOOL["type"] for tool in tools
+    )
+
+
+async def _catalog_payload_with_health(
+    catalog: ModelCatalog, state: StateManager
+) -> dict[str, Any]:
+    payload = catalog.to_payload()
+    route_rows = [
+        (
+            route_payload["route_id"],
+            route_payload["provider_name"],
+            route_payload["model_id"],
+        )
+        for route_payload in payload["data"]
+    ]
+    health_map = await state.get_route_states_batch(route_rows)
+    for route_payload in payload["data"]:
+        route_state = health_map[route_payload["route_id"]]
+        route_payload["health"] = asdict(route_state)
+    return payload
+
+
+async def _publish_route_stream_diag(
+    monitor: APILiveMonitor,
+    request_id: str,
+    diag: RouteStreamDiag,
+) -> None:
+    if diag.event_type == "usage_summary":
+        if diag.usage:
+            await monitor.publish(
+                event_type="usage_update",
+                request_id=request_id,
+                payload={"usage": _monitor_trim(dict(diag.usage))},
+            )
+        return
+    if diag.event_type == "route_trying":
+        await monitor.publish(
+            event_type="route_attempt",
+            request_id=request_id,
+            payload={
+                "route_event": {
+                    "type": "route_trying",
+                    "provider_name": diag.provider_name,
+                    "route_id": diag.route_id,
+                    "model_id": diag.model_id,
+                }
+            },
+        )
+        return
+    if diag.event_type == "route_skipped":
+        await monitor.publish(
+            event_type="route_attempt",
+            request_id=request_id,
+            payload={
+                "route_event": {
+                    "type": "route_skip",
+                    "provider_name": diag.provider_name,
+                    "route_id": diag.route_id,
+                    "model_id": diag.model_id,
+                    "reason": diag.reason,
+                }
+            },
+        )
+        return
+    if diag.event_type == "route_failed":
+        await monitor.publish(
+            event_type="route_attempt",
+            request_id=request_id,
+            payload={
+                "route_event": {
+                    "type": "route_fail",
+                    "provider_name": diag.provider_name,
+                    "route_id": diag.route_id,
+                    "model_id": diag.model_id,
+                    "reason": diag.reason,
+                }
+            },
+        )
+        return
+    if diag.event_type == "route_flagged":
+        await monitor.publish(
+            event_type="route_attempt",
+            request_id=request_id,
+            payload={
+                "route_event": {
+                    "type": "route_flagged",
+                    "provider_name": diag.provider_name,
+                    "route_id": diag.route_id,
+                    "model_id": diag.model_id,
+                    "reason": diag.reason,
+                }
+            },
+        )
+        return
+    if diag.event_type == "route_selected":
+        await monitor.publish(
+            event_type="route_selected",
+            request_id=request_id,
+            payload={
+                "provider_name": diag.provider_name,
+                "route_id": diag.route_id,
+                "model_id": diag.model_id,
+            },
+        )
+        return
+
+
+async def _route_chat_completion_stream_request(
+    request: Request,
+    *,
+    payload: dict[str, Any],
+    path: str,
+    required_tag: str | None = None,
+) -> Response:
+    services = get_app_services(request)
+    router = services.waterfall_router
+    limiter = services.request_limiter
+    monitor = services.live_monitor
+    request_id = uuid.uuid4().hex[:12]
+    started_at = perf_counter()
+    client_ip = request.client.host if request.client else None
+
+    try:
+        validate_chat_completion_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await monitor.publish(
+        event_type="request_started",
+        request_id=request_id,
+        payload={
+            "path": path,
+            "stream": True,
+            "model": payload.get("model"),
+            "client_ip": client_ip,
+            "request_payload": _monitor_trim(payload),
+        },
+    )
+
+    if not await limiter.acquire():
+        await monitor.publish(
+            event_type="request_rejected",
+            request_id=request_id,
+            payload={"status_code": 429, "reason": "request_queue_timeout"},
+        )
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "message": "Gateway is busy; retry shortly",
+                    "type": "gateway_overloaded",
+                    "code": "request_queue_timeout",
+                }
+            },
+            headers={"Retry-After": "1"},
+        )
+
+    settings = get_settings()
+    limiter_slot_held = True
+    selected_provider = ""
+    selected_route = ""
+    selected_model = ""
+
+    async def openai_sse_stream():
+        nonlocal selected_provider, selected_route, selected_model, limiter_slot_held
+        completed = False
+        try:
+            async for part in router.iter_chat_completion_openai_stream(
+                payload,
+                required_tag=required_tag,
+                require_assistant_content=required_tag == "web-search",
+            ):
+                if isinstance(part, RouteStreamDiag):
+                    await _publish_route_stream_diag(monitor, request_id, part)
+                    if part.event_type == "route_selected":
+                        selected_provider = part.provider_name or ""
+                        selected_route = part.route_id or ""
+                        selected_model = part.model_id or ""
+                        if (
+                            settings.streaming_release_slot_after_route_selected
+                            and limiter_slot_held
+                        ):
+                            limiter.release()
+                            limiter_slot_held = False
+                else:
+                    yield part
+            completed = True
+        except NoProviderAvailable as exc:
+            await monitor.publish(
+                event_type="request_failed",
+                request_id=request_id,
+                payload={
+                    "status_code": 503,
+                    "reason": "waterfall_exhausted",
+                    "attempts": len(exc.attempts),
+                    "attempts_detail": [asdict(attempt) for attempt in exc.attempts],
+                    "latency_ms": round((perf_counter() - started_at) * 1000),
+                },
+            )
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "error": {
+                            "message": "No configured provider is currently available",
+                            "type": "provider_unavailable",
+                            "code": "waterfall_exhausted",
+                            "attempts": [asdict(attempt) for attempt in exc.attempts],
+                        }
+                    }
+                )
+                + "\n\n"
+            )
+        except ValueError as exc:
+            await monitor.publish(
+                event_type="request_failed",
+                request_id=request_id,
+                payload={
+                    "status_code": 400,
+                    "reason": "validation_error",
+                    "message": str(exc),
+                    "latency_ms": round((perf_counter() - started_at) * 1000),
+                },
+            )
+            yield "data: " + json.dumps({"error": {"message": str(exc), "type": "invalid_request"}}) + "\n\n"
+        finally:
+            if limiter_slot_held:
+                limiter.release()
+                limiter_slot_held = False
+            if completed:
+                await monitor.publish(
+                    event_type="request_completed",
+                    request_id=request_id,
+                    payload={
+                        "status_code": 200,
+                        "provider_name": selected_provider,
+                        "route_id": selected_route,
+                        "model_id": selected_model,
+                        "latency_ms": round((perf_counter() - started_at) * 1000),
+                    },
+                )
+
+    return StreamingResponse(
+        openai_sse_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _route_chat_completion_request(
+    request: Request,
+    *,
+    payload: dict[str, Any],
+    path: str,
+    required_tag: str | None = None,
+) -> JSONResponse:
+    services = get_app_services(request)
+    router = services.waterfall_router
+    limiter = services.request_limiter
+    monitor = services.live_monitor
+    request_id = uuid.uuid4().hex[:12]
+    started_at = perf_counter()
+    client_ip = request.client.host if request.client else None
+    await monitor.publish(
+        event_type="request_started",
+        request_id=request_id,
+        payload={
+            "path": path,
+            "stream": bool(payload.get("stream")),
+            "model": payload.get("model"),
+            "client_ip": client_ip,
+            "request_payload": _monitor_trim(payload),
+        },
+    )
+
+    if not await limiter.acquire():
+        await monitor.publish(
+            event_type="request_rejected",
+            request_id=request_id,
+            payload={"status_code": 429, "reason": "request_queue_timeout"},
+        )
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "message": "Gateway is busy; retry shortly",
+                    "type": "gateway_overloaded",
+                    "code": "request_queue_timeout",
+                }
+            },
+            headers={"Retry-After": "1"},
+        )
+
+    try:
+        result = await router.route_chat_completion(
+            payload,
+            required_tag=required_tag,
+            require_assistant_content=required_tag == "web-search",
+        )
+    except ValueError as exc:
+        await monitor.publish(
+            event_type="request_failed",
+            request_id=request_id,
+            payload={
+                "status_code": 400,
+                "reason": "validation_error",
+                "message": str(exc),
+                "response_body": {"detail": str(exc)},
+            },
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except NoProviderAvailable as exc:
+        await monitor.publish(
+            event_type="request_failed",
+            request_id=request_id,
+            payload={
+                "status_code": 503,
+                "reason": "waterfall_exhausted",
+                "attempts": len(exc.attempts),
+                "attempts_detail": [asdict(attempt) for attempt in exc.attempts],
+                "latency_ms": round((perf_counter() - started_at) * 1000),
+            },
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": {
+                    "message": "No configured provider is currently available",
+                    "type": "provider_unavailable",
+                    "code": "waterfall_exhausted",
+                    "attempts": [asdict(attempt) for attempt in exc.attempts],
+                }
+            },
+        )
+    except ProviderError as exc:
+        await monitor.publish(
+            event_type="request_failed",
+            request_id=request_id,
+            payload={
+                "status_code": exc.status_code or 502,
+                "reason": "provider_error",
+                "message": str(exc),
+                "response_body": _monitor_trim(
+                    {
+                        "error": {
+                            "message": str(exc),
+                            "status_code": exc.status_code,
+                            "body": exc.body,
+                        }
+                    }
+                ),
+                "latency_ms": round((perf_counter() - started_at) * 1000),
+            },
+        )
+        return JSONResponse(
+            status_code=exc.status_code or 502,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "provider_error",
+                    "code": exc.status_code,
+                    "body": exc.body,
+                }
+            },
+        )
+    finally:
+        limiter.release()
+
+    await monitor.publish(
+        event_type="request_completed",
+        request_id=request_id,
+        payload={
+            "status_code": 200,
+            "provider_name": result.provider_name,
+            "route_id": result.route_id,
+            "model_id": result.model_id,
+            "attempts": len(result.attempts),
+            "usage": _monitor_trim(
+                result.body.get("usage") if isinstance(result.body, dict) else None
+            ),
+            "attempts_detail": [asdict(attempt) for attempt in result.attempts],
+            "assistant_text": _monitor_trim(
+                _assistant_text_from_response_body(result.body),
+                max_string=8000,
+            ),
+            "response_body": _monitor_trim(result.body),
+            "latency_ms": round((perf_counter() - started_at) * 1000),
+        },
+    )
+    return JSONResponse(
+        content=result.body,
+        headers={
+            "X-Gateway-Provider": result.provider_name,
+            "X-Gateway-Route": result.route_id,
+            "X-Gateway-Model": result.model_id,
+            "X-Gateway-Attempts": json.dumps([asdict(attempt) for attempt in result.attempts]),
+        },
+    )
+
+
+async def _route_responses_stream_request(
+    request: Request,
+    *,
+    payload: dict[str, Any],
+    requested_model: Any,
+) -> Response:
+    services = get_app_services(request)
+    router = services.waterfall_router
+    limiter = services.request_limiter
+    response_id = f"resp_{uuid.uuid4().hex}"
+
+    try:
+        validate_chat_completion_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not await limiter.acquire():
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": {
+                    "message": "Gateway is busy; retry shortly",
+                    "type": "gateway_overloaded",
+                    "code": "request_queue_timeout",
+                }
+            },
+            headers={"Retry-After": "1"},
+        )
+
+    async def responses_sse_stream():
+        carry = ""
+        completed = False
+        mapper = ResponsesStreamMapper(response_id=response_id)
+        try:
+            yield responses_stream_start(response_id=response_id, model=requested_model)
+            async for part in router.iter_chat_completion_openai_stream(payload):
+                if isinstance(part, RouteStreamDiag):
+                    continue
+                carry += part
+                blocks, carry = _split_sse_event_blocks(carry)
+                for block in blocks:
+                    for event in mapper.events_from_openai_sse(block):
+                        yield event
+                        if "response.completed" in event:
+                            completed = True
+            if not completed:
+                yield response_stream_event(
+                    "response.completed",
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": response_id,
+                            "object": "response",
+                            "status": "completed",
+                        },
+                    },
+                )
+            yield responses_stream_done()
+        except NoProviderAvailable as exc:
+            yield response_stream_event(
+                "response.failed",
+                {
+                    "type": "response.failed",
+                    "sequence_number": mapper.sequence_number + 1,
+                    "response": {
+                        "id": response_id,
+                        "object": "response",
+                        "status": "failed",
+                        "error": {
+                            "message": "No configured provider is currently available",
+                            "type": "provider_unavailable",
+                            "code": "waterfall_exhausted",
+                            "attempts": [asdict(attempt) for attempt in exc.attempts],
+                        },
+                    },
+                },
+            )
+            yield responses_stream_done()
+        except (ProviderError, ValueError) as exc:
+            yield response_stream_event(
+                "response.failed",
+                {
+                    "type": "response.failed",
+                    "sequence_number": mapper.sequence_number + 1,
+                    "response": {
+                        "id": response_id,
+                        "object": "response",
+                        "status": "failed",
+                        "error": {
+                            "message": str(exc),
+                            "type": "provider_error",
+                            "code": getattr(exc, "status_code", None),
+                        },
+                    },
+                },
+            )
+            yield responses_stream_done()
+        finally:
+            limiter.release()
+
+    return StreamingResponse(
+        responses_sse_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

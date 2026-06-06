@@ -10,6 +10,11 @@ import httpx
 from app.model_catalog import ModelCatalog
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderAdapter, ProviderError, ProviderRateLimited, ProviderResponse
+from app.routing_policy import (
+    configured_provider_names,
+    enabled_routes_for_request,
+    static_route_skip_reason,
+)
 from app.state import Availability, StateManager
 
 
@@ -328,18 +333,14 @@ class WaterfallRouter:
         attempts: list[ProviderAttempt] = []
         rate_limit_probe_providers: set[str] = set()
 
-        routes_list = [
-            route
-            for route in self.model_catalog.enabled_routes(payload.get("model"))
-            if required_tag is None or required_tag in route.tags
-        ]
-        prefetch_provider_names = sorted(
-            {
-                route.provider_name
-                for route in routes_list
-                if route.provider_name in self.provider_by_name
-                and self.provider_by_name[route.provider_name].is_configured
-            }
+        routes_list = enabled_routes_for_request(
+            self.model_catalog,
+            requested_model=payload.get("model"),
+            required_tag=required_tag,
+        )
+        prefetch_provider_names = configured_provider_names(
+            routes_list,
+            self.provider_by_name,
         )
         provider_availability_prefetch: dict[str, Availability] = {}
         if prefetch_provider_names:
@@ -353,11 +354,16 @@ class WaterfallRouter:
 
         for route in routes_list:
             provider = self.provider_by_name.get(route.provider_name)
-            if provider is None:
+            skip_reason = static_route_skip_reason(
+                provider,
+                route,
+                estimated_prompt_tokens=estimated_prompt_tokens,
+            )
+            if skip_reason == "unknown_provider":
                 attempt = ProviderAttempt(
                     route.provider_name,
                     "skipped",
-                    "unknown_provider",
+                    skip_reason,
                     route_id=route.route_id,
                     model_id=route.model_id,
                 )
@@ -371,30 +377,13 @@ class WaterfallRouter:
                 )
                 continue
 
-            if not provider.is_configured:
-                attempt = ProviderAttempt(
-                    provider.name,
-                    "skipped",
-                    "missing_api_key",
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_skipped",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                )
-                continue
+            assert provider is not None
 
-            max_context_tokens = route.context_window or provider.max_context_tokens
-            if max_context_tokens is not None and estimated_prompt_tokens > max_context_tokens:
+            if skip_reason is not None:
                 attempt = ProviderAttempt(
                     provider.name,
                     "skipped",
-                    "context_window_exceeded",
+                    skip_reason,
                     route_id=route.route_id,
                     model_id=route.model_id,
                 )

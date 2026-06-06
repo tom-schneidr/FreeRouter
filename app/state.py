@@ -3,59 +3,23 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from time import time
 
 import aiosqlite
 
+from app.state_rules import provider_availability
+from app.state_rules import route_availability as route_availability_rule
+from app.state_types import Availability, ProviderQuota, ProviderState, RouteState
 
-@dataclass(frozen=True)
-class ProviderQuota:
-    """Static rate-limit configuration for a single provider."""
-
-    name: str
-    tokens_per_day: int | None
-    requests_per_day: int | None
-    requests_per_minute: int | None
-
-
-@dataclass(frozen=True)
-class ProviderState:
-    """Snapshot of a provider's current usage counters and cooldown status."""
-
-    provider_name: str
-    tokens_used_today: int
-    requests_today: int
-    requests_this_minute: int
-    minute_window_start: int
-    cooldown_until: int
-    day: str
-
-
-@dataclass(frozen=True)
-class Availability:
-    """Result of a quota availability check."""
-
-    available: bool
-    reason: str | None = None
-    retry_after_seconds: int | None = None
-
-
-@dataclass(frozen=True)
-class RouteState:
-    """Health state for one provider/model route."""
-
-    route_id: str
-    provider_name: str
-    model_id: str
-    status: str
-    status_reason: str | None
-    consecutive_failures: int
-    rate_limited_until: int
-    next_probe_at: int
-    updated_at: int
+__all__ = [
+    "Availability",
+    "ProviderQuota",
+    "ProviderState",
+    "RouteState",
+    "StateManager",
+]
 
 
 def _empty_route_usage(route_id: str) -> dict[str, int | str | None]:
@@ -198,10 +162,11 @@ class StateManager:
         await self._ensure_current_windows(provider_name)
         async with aiosqlite.connect(self.database_path) as db:
             row = await self._fetch_state(db, provider_name)
-        return self._availability_for_state(
+        return provider_availability(
             self.quotas[provider_name],
             self._row_to_state(row),
-            estimated_tokens,
+            estimated_tokens=estimated_tokens,
+            now=self._now(),
         )
 
     async def try_reserve_request(
@@ -346,9 +311,10 @@ class StateManager:
             await self._ensure_route_state_on_connection(db, route_id, provider_name, model_id)
             row = await self._fetch_route_state(db, route_id)
         state = self._row_to_route_state(row)
-        return self.route_availability_from_state(
+        return route_availability_rule(
             state,
             allow_rate_limit_probe=allow_rate_limit_probe,
+            now=self._now(),
         )
 
     def route_availability_from_state(
@@ -357,31 +323,11 @@ class StateManager:
         *,
         allow_rate_limit_probe: bool = False,
     ) -> Availability:
-        now = self._now()
-        if route_state.status == "potentially_outdated":
-            return Availability(available=False, reason="potentially_outdated")
-
-        if route_state.status in {"rate_limited", "too_slow"}:
-            retry_after = max(
-                1, max(route_state.rate_limited_until, route_state.next_probe_at) - now
-            )
-            if not allow_rate_limit_probe or route_state.next_probe_at > now:
-                reason = (
-                    "route_rate_limited"
-                    if route_state.status == "rate_limited"
-                    else "route_too_slow"
-                )
-                return Availability(
-                    available=False,
-                    reason=reason,
-                    retry_after_seconds=retry_after,
-                )
-            reason = (
-                "rate_limit_probe" if route_state.status == "rate_limited" else "too_slow_probe"
-            )
-            return Availability(available=True, reason=reason)
-
-        return Availability(available=True)
+        return route_availability_rule(
+            route_state,
+            allow_rate_limit_probe=allow_rate_limit_probe,
+            now=self._now(),
+        )
 
     async def get_route_state(
         self,
@@ -694,34 +640,12 @@ class StateManager:
         state: ProviderState,
         estimated_tokens: int = 0,
     ) -> Availability:
-        now = self._now()
-
-        if state.cooldown_until > now:
-            return Availability(
-                available=False,
-                reason="cooldown",
-                retry_after_seconds=state.cooldown_until - now,
-            )
-
-        if quota.tokens_per_day is not None:
-            if state.tokens_used_today + max(estimated_tokens, 0) > quota.tokens_per_day:
-                return Availability(available=False, reason="daily_token_limit")
-
-        if quota.requests_per_day is not None and state.requests_today >= quota.requests_per_day:
-            return Availability(available=False, reason="daily_request_limit")
-
-        if (
-            quota.requests_per_minute is not None
-            and state.requests_this_minute >= quota.requests_per_minute
-        ):
-            retry_after = max(1, 60 - (now - state.minute_window_start))
-            return Availability(
-                available=False,
-                reason="rpm_limit",
-                retry_after_seconds=retry_after,
-            )
-
-        return Availability(available=True)
+        return provider_availability(
+            quota,
+            state,
+            estimated_tokens=estimated_tokens,
+            now=self._now(),
+        )
 
     async def record_success(
         self,

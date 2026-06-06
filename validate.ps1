@@ -1,5 +1,7 @@
 param(
-    [switch]$NoLint
+    [switch]$NoLint,
+    [switch]$NoFrontend,
+    [switch]$NoDesktop
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,4 +19,18 @@ if (-not $NoLint) {
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+}
+
+if (-not $NoFrontend) {
+    & npm.cmd run typecheck:web
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & npm.cmd run test:web
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & npm.cmd run build:web
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+if (-not $NoDesktop) {
+    & npm.cmd run check:desktop
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

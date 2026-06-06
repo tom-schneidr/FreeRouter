@@ -11,3 +11,11 @@ pytest_temp="${pytest_root}/freerouter-pytest-$$"
 mkdir -p "$pytest_root"
 "$python_bin" -m pytest -p no:cacheprovider --basetemp "$pytest_temp"
 "$python_bin" -m ruff check .
+npm run typecheck:web
+npm run test:web
+npm run build:web
+npm run check:desktop
+"$python_bin" scripts/check_import_boundaries.py
+"$python_bin" scripts/check_app_state_access.py
+"$python_bin" scripts/check_module_sizes.py
+"$python_bin" -m pyright
