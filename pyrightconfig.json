@@ -1,0 +1,16 @@
+{
+  "include": [
+    "app/app_services.py",
+    "app/factory.py",
+    "app/routing_policy.py",
+    "app/state_rules.py",
+    "app/state_types.py",
+    "app/catalog_store.py",
+    "app/client.py",
+    "app/main.py"
+  ],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "pythonVersion": "3.12"
+}
