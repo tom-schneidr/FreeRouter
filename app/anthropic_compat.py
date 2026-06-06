@@ -58,7 +58,7 @@ def messages_payload_to_chat(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Request body must include a non-empty 'messages' array")
 
     max_tokens = payload.get("max_tokens")
-    if not isinstance(max_tokens, int) or max_tokens <= 0:
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens <= 0:
         raise ValueError("max_tokens must be a positive integer")
 
     chat_messages: list[dict[str, Any]] = []
@@ -512,9 +512,6 @@ class AnthropicStreamMapper:
                 },
             )
             if state["anthropic_index"] is None:
-                if self.text_block_index is None and not self.text_started:
-                    self.text_block_index = self._next_block_index
-                    self._next_block_index += 1
                 state["anthropic_index"] = self._next_block_index
                 self._next_block_index += 1
 

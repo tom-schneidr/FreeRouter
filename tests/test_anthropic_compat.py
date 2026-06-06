@@ -169,10 +169,15 @@ def test_messages_payload_rejects_empty_messages():
 
 
 def test_messages_payload_rejects_invalid_max_tokens():
-    with pytest.raises(ValueError, match="max_tokens"):
-        messages_payload_to_chat(
-            {"model": "auto", "max_tokens": 0, "messages": [{"role": "user", "content": "hi"}]}
-        )
+    for invalid in (0, -1, True, 1.5, "10"):
+        with pytest.raises(ValueError, match="max_tokens"):
+            messages_payload_to_chat(
+                {
+                    "model": "auto",
+                    "max_tokens": invalid,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            )
 
 
 def test_messages_payload_rejects_unsupported_top_level_field():
@@ -362,6 +367,9 @@ def test_anthropic_stream_mapper_dual_tool_calls_with_fragmented_json():
     compact = "".join(events).replace(" ", "")
     assert "tool_use" in compact
     assert "input_json_delta" in compact
+    assert '"type":"content_block_start","index":0' in compact
+    assert '"type":"content_block_start","index":1' in compact
+    assert '"type":"content_block_start","index":2' not in compact
     assert '"partial_json":"{\\"a\\":' in compact or '"partial_json":"{"a":' in compact
     assert '"partial_json":"1}"' in compact
     assert "message_stop" in compact

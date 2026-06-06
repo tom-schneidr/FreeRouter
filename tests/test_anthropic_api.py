@@ -100,6 +100,20 @@ def test_messages_rejects_missing_max_tokens(tmp_path, monkeypatch):
     assert payload["error"]["type"] == "invalid_request_error"
 
 
+def test_messages_rejects_boolean_max_tokens(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/v1/messages",
+            json={
+                "model": "auto",
+                "max_tokens": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+
+
 def test_messages_rejects_unsupported_field(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.post(
