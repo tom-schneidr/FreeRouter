@@ -20,6 +20,11 @@ from app.router import (
     estimate_prompt_tokens,
     validate_chat_completion_payload,
 )
+from app.routing_policy import (
+    configured_provider_names,
+    enabled_routes_for_request,
+    static_route_skip_reason,
+)
 from app.state import Availability, StateManager
 
 if TYPE_CHECKING:
@@ -57,19 +62,12 @@ async def waterfall_openai_stream(
     attempts: list[ProviderAttempt] = []
     rate_limit_probe_providers: set[str] = set()
 
-    routes_list = [
-        route
-        for route in model_catalog.enabled_routes(outbound_payload.get("model"))
-        if required_tag is None or required_tag in route.tags
-    ]
-    prefetch_provider_names = sorted(
-        {
-            route.provider_name
-            for route in routes_list
-            if route.provider_name in providers_by_name
-            and providers_by_name[route.provider_name].is_configured
-        }
+    routes_list = enabled_routes_for_request(
+        model_catalog,
+        requested_model=outbound_payload.get("model"),
+        required_tag=required_tag,
     )
+    prefetch_provider_names = configured_provider_names(routes_list, providers_by_name)
     provider_availability_prefetch: dict[str, Availability] = {}
     if prefetch_provider_names:
         provider_availability_prefetch = await state.snapshot_providers_availability(
@@ -82,11 +80,16 @@ async def waterfall_openai_stream(
 
     for route in routes_list:
         provider = providers_by_name.get(route.provider_name)
-        if provider is None:
+        skip_reason = static_route_skip_reason(
+            provider,
+            route,
+            estimated_prompt_tokens=estimated_prompt_tokens,
+        )
+        if skip_reason == "unknown_provider":
             attempt = ProviderAttempt(
                 route.provider_name,
                 "skipped",
-                "unknown_provider",
+                skip_reason,
                 route_id=route.route_id,
                 model_id=route.model_id,
             )
@@ -98,32 +101,15 @@ async def waterfall_openai_stream(
                 model_id=route.model_id,
                 reason=attempt.reason,
             )
-            continue
+                continue
 
-        if not provider.is_configured:
+            assert provider is not None
+
+            if skip_reason is not None:
             attempt = ProviderAttempt(
                 provider.name,
                 "skipped",
-                "missing_api_key",
-                route_id=route.route_id,
-                model_id=route.model_id,
-            )
-            attempts.append(attempt)
-            yield RouteStreamDiag(
-                event_type="route_skipped",
-                provider_name=provider.name,
-                route_id=route.route_id,
-                model_id=route.model_id,
-                reason=attempt.reason,
-            )
-            continue
-
-        max_context_tokens = route.context_window or provider.max_context_tokens
-        if max_context_tokens is not None and estimated_prompt_tokens > max_context_tokens:
-            attempt = ProviderAttempt(
-                provider.name,
-                "skipped",
-                "context_window_exceeded",
+                skip_reason,
                 route_id=route.route_id,
                 model_id=route.model_id,
             )
