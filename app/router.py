@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any
 
@@ -324,30 +325,36 @@ class WaterfallRouter:
         outbound = dict(payload)
         outbound["stream"] = True
         if self._http_client is not None:
-            async for part in waterfall_openai_stream(
-                providers_by_name=self.provider_by_name,
-                model_catalog=self.model_catalog,
-                state=self.state,
-                client=self._http_client,
-                payload=outbound,
-                requirements=requirements,
-                require_assistant_content=require_assistant_content,
-            ):
-                yield part
+            async with aclosing(
+                waterfall_openai_stream(
+                    providers_by_name=self.provider_by_name,
+                    model_catalog=self.model_catalog,
+                    state=self.state,
+                    client=self._http_client,
+                    payload=outbound,
+                    requirements=requirements,
+                    require_assistant_content=require_assistant_content,
+                )
+            ) as stream:
+                async for part in stream:
+                    yield part
             return
 
         timeout = httpx.Timeout(self.request_timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            async for part in waterfall_openai_stream(
-                providers_by_name=self.provider_by_name,
-                model_catalog=self.model_catalog,
-                state=self.state,
-                client=client,
-                payload=outbound,
-                requirements=requirements,
-                require_assistant_content=require_assistant_content,
-            ):
-                yield part
+            async with aclosing(
+                waterfall_openai_stream(
+                    providers_by_name=self.provider_by_name,
+                    model_catalog=self.model_catalog,
+                    state=self.state,
+                    client=client,
+                    payload=outbound,
+                    requirements=requirements,
+                    require_assistant_content=require_assistant_content,
+                )
+            ) as stream:
+                async for part in stream:
+                    yield part
 
     async def _iter_route_events_with_client(
         self,

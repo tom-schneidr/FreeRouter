@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -771,3 +772,149 @@ async def test_openai_stream_does_not_switch_providers_after_commit(tmp_path):
     assert fallback.stream_calls == 0
     assert "partial" in sse
     assert "[DONE]" in sse
+
+
+async def test_router_forwards_multiple_tool_calls_in_non_stream_response(tmp_path):
+    state = await _state(tmp_path)
+    response_body = {
+        "id": "chatcmpl-tools",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_a",
+                            "type": "function",
+                            "function": {"name": "alpha", "arguments": "{}"},
+                        },
+                        {
+                            "id": "call_b",
+                            "type": "function",
+                            "function": {"name": "beta", "arguments": "{}"},
+                        },
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"total_tokens": 4},
+    }
+    provider = FakeProvider("primary", response=response_body)
+    router = WaterfallRouter([provider], _catalog(tmp_path), state, request_timeout_seconds=5)
+
+    result = await router.route_chat_completion(_payload())
+
+    tool_calls = result.body["choices"][0]["message"]["tool_calls"]
+    assert [call["id"] for call in tool_calls] == ["call_a", "call_b"]
+    assert [call["function"]["name"] for call in tool_calls] == ["alpha", "beta"]
+
+
+async def test_router_excludes_non_vision_routes_for_image_payload(tmp_path):
+    state = await _state(tmp_path)
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes(
+        [
+            {
+                "route_id": "text-only",
+                "provider_name": "primary",
+                "model_id": "primary/model",
+                "display_name": "Text Only",
+                "rank": 1,
+                "enabled": True,
+                "tags": ["text"],
+            },
+            {
+                "route_id": "vision-capable",
+                "provider_name": "fallback",
+                "model_id": "fallback/model",
+                "display_name": "Vision",
+                "rank": 2,
+                "enabled": True,
+                "tags": ["text", "vision"],
+            },
+        ]
+    )
+    primary = FakeProvider("primary")
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter([primary, fallback], catalog, state, request_timeout_seconds=5)
+    payload = {
+        "model": "auto",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                ],
+            }
+        ],
+    }
+
+    result = await router.route_chat_completion(payload)
+
+    assert primary.calls == 0
+    assert fallback.calls == 1
+    assert result.provider_name == "fallback"
+
+
+async def test_openai_stream_tool_call_delta_commits_selected_route(tmp_path):
+    state = await _state(tmp_path)
+    provider = FragmentedToolStreamProvider("primary")
+    router = WaterfallRouter([provider], _catalog(tmp_path), state, request_timeout_seconds=5)
+
+    parts = [p async for p in router.iter_chat_completion_openai_stream(_payload())]
+    diags = [p for p in parts if isinstance(p, RouteStreamDiag)]
+
+    assert any(d.event_type == "route_selected" for d in diags)
+    assert provider.stream_calls == 1
+
+
+class TrackableCloseStreamProvider(FakeProvider):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.generator_closed = False
+
+    async def chat_completion_stream(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        target_model: str | None = None,
+    ) -> Any:
+        self.stream_calls += 1
+        self.target_model = target_model
+        try:
+            chunk = json.dumps(
+                {
+                    "id": "chatcmpl-close",
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {"content": "hello"}}],
+                }
+            )
+            yield f"data: {chunk}\n\n"
+            await asyncio.sleep(3600)
+            yield "data: [DONE]\n\n"
+        finally:
+            self.generator_closed = True
+
+
+async def test_openai_stream_closes_upstream_generator_on_consumer_exit(tmp_path):
+    state = await _state(tmp_path)
+    provider = TrackableCloseStreamProvider("primary")
+    router = WaterfallRouter([provider], _catalog(tmp_path), state, request_timeout_seconds=5)
+
+    agen = router.iter_chat_completion_openai_stream(_payload())
+    saw_sse = False
+    try:
+        async for part in agen:
+            if isinstance(part, str) and "hello" in part:
+                saw_sse = True
+                break
+    finally:
+        await agen.aclose()
+
+    assert saw_sse is True
+    assert provider.generator_closed is True

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -217,7 +218,6 @@ async def waterfall_openai_stream(
             model_id=route.model_id,
         )
 
-        agen = provider.chat_completion_stream(client, outbound_payload, route.model_id)
         carry = ""
         buffered_before_commit: list[str] = []
         committed = False
@@ -225,121 +225,124 @@ async def waterfall_openai_stream(
         last_status = 200
         stop_route_attempt = False
         try:
-            async for piece in agen:
-                carry += piece
-                blocks, carry = _split_sse_event_blocks(carry)
-                for event_block in blocks:
-                    pl = _event_block_data_payload(event_block)
-                    text = event_block + "\n\n"
-                    if isinstance(pl, dict):
-                        u = _usage_from_openai_chunk(pl)
-                        if u is not None:
-                            usage = u
+            async with aclosing(
+                provider.chat_completion_stream(client, outbound_payload, route.model_id)
+            ) as agen:
+                async for piece in agen:
+                    carry += piece
+                    blocks, carry = _split_sse_event_blocks(carry)
+                    for event_block in blocks:
+                        pl = _event_block_data_payload(event_block)
+                        text = event_block + "\n\n"
+                        if isinstance(pl, dict):
+                            u = _usage_from_openai_chunk(pl)
+                            if u is not None:
+                                usage = u
 
-                    if not committed:
-                        if pl is _SSE_DONE:
-                            attempt = ProviderAttempt(
-                                provider.name,
-                                "failed",
-                                "empty_stream",
-                                route_id=route.route_id,
-                                model_id=route.model_id,
-                            )
-                            attempts.append(attempt)
-                            yield RouteStreamDiag(
-                                event_type="route_failed",
-                                provider_name=provider.name,
-                                route_id=route.route_id,
-                                model_id=route.model_id,
-                                reason=attempt.reason,
-                            )
-                            stop_route_attempt = True
-                            break
-                        if isinstance(pl, dict) and "error" in pl:
-                            attempt = ProviderAttempt(
-                                provider.name,
-                                "failed",
-                                "provider_stream_error",
-                                route_id=route.route_id,
-                                model_id=route.model_id,
-                            )
-                            attempts.append(attempt)
-                            yield RouteStreamDiag(
-                                event_type="route_failed",
-                                provider_name=provider.name,
-                                route_id=route.route_id,
-                                model_id=route.model_id,
-                                reason=attempt.reason,
-                            )
-                            stop_route_attempt = True
-                            break
-                        if _payload_commits_openai_stream(
-                            pl,
-                            require_substantive_assistant=require_assistant_content,
-                        ):
-                            committed = True
-                            selected = ProviderAttempt(
-                                provider.name,
-                                "selected",
-                                route_id=route.route_id,
-                                model_id=route.model_id,
-                            )
-                            attempts.append(selected)
-                            yield RouteStreamDiag(
-                                event_type="route_selected",
-                                provider_name=provider.name,
-                                route_id=route.route_id,
-                                model_id=route.model_id,
-                            )
-                            for b in buffered_before_commit:
-                                yield b
-                            buffered_before_commit.clear()
-                            yield text
+                        if not committed:
+                            if pl is _SSE_DONE:
+                                attempt = ProviderAttempt(
+                                    provider.name,
+                                    "failed",
+                                    "empty_stream",
+                                    route_id=route.route_id,
+                                    model_id=route.model_id,
+                                )
+                                attempts.append(attempt)
+                                yield RouteStreamDiag(
+                                    event_type="route_failed",
+                                    provider_name=provider.name,
+                                    route_id=route.route_id,
+                                    model_id=route.model_id,
+                                    reason=attempt.reason,
+                                )
+                                stop_route_attempt = True
+                                break
+                            if isinstance(pl, dict) and "error" in pl:
+                                attempt = ProviderAttempt(
+                                    provider.name,
+                                    "failed",
+                                    "provider_stream_error",
+                                    route_id=route.route_id,
+                                    model_id=route.model_id,
+                                )
+                                attempts.append(attempt)
+                                yield RouteStreamDiag(
+                                    event_type="route_failed",
+                                    provider_name=provider.name,
+                                    route_id=route.route_id,
+                                    model_id=route.model_id,
+                                    reason=attempt.reason,
+                                )
+                                stop_route_attempt = True
+                                break
+                            if _payload_commits_openai_stream(
+                                pl,
+                                require_substantive_assistant=require_assistant_content,
+                            ):
+                                committed = True
+                                selected = ProviderAttempt(
+                                    provider.name,
+                                    "selected",
+                                    route_id=route.route_id,
+                                    model_id=route.model_id,
+                                )
+                                attempts.append(selected)
+                                yield RouteStreamDiag(
+                                    event_type="route_selected",
+                                    provider_name=provider.name,
+                                    route_id=route.route_id,
+                                    model_id=route.model_id,
+                                )
+                                for b in buffered_before_commit:
+                                    yield b
+                                buffered_before_commit.clear()
+                                yield text
+                            else:
+                                buffered_before_commit.append(text)
                         else:
-                            buffered_before_commit.append(text)
-                    else:
-                        if pl is _SSE_DONE:
-                            await state.record_route_success(
-                                route.route_id,
-                                provider.name,
-                                route.model_id,
-                                usage=usage,
-                                status_code=last_status,
-                            )
-                            await state.record_success(
-                                provider.name,
-                                usage=usage,
-                                headers={},
-                                status_code=last_status,
-                            )
-                            summary = _usage_summary_diag(usage)
-                            if summary is not None:
-                                yield summary
+                            if pl is _SSE_DONE:
+                                await state.record_route_success(
+                                    route.route_id,
+                                    provider.name,
+                                    route.model_id,
+                                    usage=usage,
+                                    status_code=last_status,
+                                )
+                                await state.record_success(
+                                    provider.name,
+                                    usage=usage,
+                                    headers={},
+                                    status_code=last_status,
+                                )
+                                summary = _usage_summary_diag(usage)
+                                if summary is not None:
+                                    yield summary
+                                yield text
+                                return
                             yield text
-                            return
-                        yield text
-                if stop_route_attempt:
-                    break
+                    if stop_route_attempt:
+                        break
 
-            if committed:
-                await state.record_route_success(
-                    route.route_id,
-                    provider.name,
-                    route.model_id,
-                    usage=usage,
-                    status_code=last_status,
-                )
-                await state.record_success(
-                    provider.name,
-                    usage=usage,
-                    headers={},
-                    status_code=last_status,
-                )
-                summary = _usage_summary_diag(usage)
-                if summary is not None:
-                    yield summary
-                yield "data: [DONE]\n\n"
-                return
+                if committed:
+                    await state.record_route_success(
+                        route.route_id,
+                        provider.name,
+                        route.model_id,
+                        usage=usage,
+                        status_code=last_status,
+                    )
+                    await state.record_success(
+                        provider.name,
+                        usage=usage,
+                        headers={},
+                        status_code=last_status,
+                    )
+                    summary = _usage_summary_diag(usage)
+                    if summary is not None:
+                        yield summary
+                    yield "data: [DONE]\n\n"
+                    return
         except ProviderRateLimited as exc:
             if committed:
                 await state.record_route_success(
@@ -626,7 +629,5 @@ async def waterfall_openai_stream(
                 status_code=exc.status_code,
             )
             continue
-        finally:
-            await agen.aclose()
 
     raise NoProviderAvailable(attempts)

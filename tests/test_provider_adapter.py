@@ -289,6 +289,73 @@ async def test_chat_completion_forwards_response_format_and_reasoning_fields():
         )
 
 
+async def test_chat_completion_returns_multiple_tool_calls_without_dropping_indices():
+    response_body = {
+        "id": "chatcmpl-tools",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_a",
+                            "type": "function",
+                            "function": {"name": "alpha", "arguments": "{}"},
+                        },
+                        {
+                            "id": "call_b",
+                            "type": "function",
+                            "function": {"name": "beta", "arguments": "{}"},
+                        },
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {"total_tokens": 4},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response_body)
+
+    adapter = _adapter()
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        response = await adapter.chat_completion(
+            client,
+            {"model": "friendly-model", "messages": [{"role": "user", "content": "hello"}]},
+        )
+    tool_calls = response.body["choices"][0]["message"]["tool_calls"]
+    assert [call["id"] for call in tool_calls] == ["call_a", "call_b"]
+
+
+async def test_chat_completion_forwards_json_schema_response_format_unchanged():
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "schema": {"type": "object", "properties": {"x": {"type": "string"}}}},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        assert body["response_format"] == response_format
+        return httpx.Response(200, json={"id": "chat", "choices": [], "usage": {"total_tokens": 1}})
+
+    adapter = _adapter()
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        await adapter.chat_completion(
+            client,
+            {
+                "model": "friendly-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "response_format": response_format,
+            },
+        )
+
+
 async def test_chat_completion_stream_yields_lines_and_sets_stream_true():
     sse_body = (
         'data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n'

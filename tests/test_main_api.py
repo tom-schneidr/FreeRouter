@@ -394,6 +394,70 @@ def test_chat_completions_stream_exhausted_shape_is_stable(tmp_path, monkeypatch
     assert '"type": "provider_unavailable"' in response.text
 
 
+def test_chat_completions_json_schema_without_capable_route_returns_400(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "schema": {"type": "object"}},
+                },
+            },
+        )
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error"]["code"] == "unsupported_capabilities"
+    assert payload["error"]["type"] == "invalid_request_error"
+    assert "json-schema" in payload["error"]["required_capabilities"]
+
+
+def test_chat_completions_stream_json_schema_without_capable_route_returns_sse_error(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "schema": {"type": "object"}},
+                },
+            },
+        )
+    assert response.status_code == 200
+    assert '"code": "unsupported_capabilities"' in response.text
+    assert "data: [DONE]" in response.text
+
+
+def test_chat_completions_gateway_errors_use_error_object_shape(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        exhausted = client.post(
+            "/v1/chat/completions",
+            json={"model": "auto", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        unsupported = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hello"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "schema": {"type": "object"}},
+                },
+            },
+        )
+    for response in (exhausted, unsupported):
+        payload = response.json()
+        assert "error" in payload
+        assert isinstance(payload["error"]["message"], str)
+        assert isinstance(payload["error"]["type"], str)
+        assert isinstance(payload["error"]["code"], str)
+
+
 def test_responses_non_stream_exhausted_shape_is_stable(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.post(
