@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api import (
+    anthropic_routes,
     catalog_routes,
     desktop_routes,
     diagnosis_routes,
@@ -53,3 +54,4 @@ app.include_router(monitoring_routes.router)
 app.include_router(catalog_routes.router)
 app.include_router(diagnosis_routes.router)
 app.include_router(openai_routes.router)
+app.include_router(anthropic_routes.router)
