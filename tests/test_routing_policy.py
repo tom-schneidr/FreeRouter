@@ -36,7 +36,7 @@ def test_static_route_skip_reason_flags_missing_api_key():
     ) == "missing_api_key"
 
 
-def test_enabled_routes_for_request_filters_by_tag(tmp_path):
+def test_enabled_routes_for_request_filters_by_single_capability(tmp_path):
     catalog = ModelCatalog(str(tmp_path / "catalog.json"))
     catalog._routes = [
         ModelRoute(
@@ -45,7 +45,7 @@ def test_enabled_routes_for_request_filters_by_tag(tmp_path):
             model_id="m1",
             display_name="A",
             rank=1,
-            tags=["web-search"],
+            tags=["text", "web-search"],
         ),
         ModelRoute(
             route_id="b",
@@ -56,7 +56,99 @@ def test_enabled_routes_for_request_filters_by_tag(tmp_path):
             tags=["text"],
         ),
     ]
-    routes = enabled_routes_for_request(catalog, requested_model="auto", required_tag="web-search")
+    routes = enabled_routes_for_request(
+        catalog,
+        requested_model="auto",
+        required_capabilities=frozenset({"text", "web-search"}),
+    )
+    assert [route.route_id for route in routes] == ["a"]
+
+
+def test_enabled_routes_for_request_filters_by_multiple_capabilities(tmp_path):
+    catalog = ModelCatalog(str(tmp_path / "catalog.json"))
+    catalog._routes = [
+        ModelRoute(
+            route_id="a",
+            provider_name="groq",
+            model_id="m1",
+            display_name="A",
+            rank=1,
+            tags=["text", "vision", "tool-use"],
+        ),
+        ModelRoute(
+            route_id="b",
+            provider_name="groq",
+            model_id="m2",
+            display_name="B",
+            rank=2,
+            tags=["text", "vision"],
+        ),
+        ModelRoute(
+            route_id="c",
+            provider_name="groq",
+            model_id="m3",
+            display_name="C",
+            rank=3,
+            tags=["text", "tool-use"],
+        ),
+    ]
+    routes = enabled_routes_for_request(
+        catalog,
+        requested_model="auto",
+        required_capabilities=frozenset({"text", "vision", "tool-use"}),
+    )
+    assert [route.route_id for route in routes] == ["a"]
+
+
+def test_enabled_routes_for_request_with_no_required_capabilities_returns_all_enabled(tmp_path):
+    catalog = ModelCatalog(str(tmp_path / "catalog.json"))
+    catalog._routes = [
+        ModelRoute(
+            route_id="a",
+            provider_name="groq",
+            model_id="m1",
+            display_name="A",
+            rank=1,
+            tags=["text"],
+        ),
+        ModelRoute(
+            route_id="b",
+            provider_name="groq",
+            model_id="m2",
+            display_name="B",
+            rank=2,
+            tags=["text", "vision"],
+        ),
+    ]
+    routes = enabled_routes_for_request(catalog, requested_model="auto")
+    assert [route.route_id for route in routes] == ["a", "b"]
+
+
+def test_enabled_routes_for_request_respects_explicit_model_selection(tmp_path):
+    catalog = ModelCatalog(str(tmp_path / "catalog.json"))
+    catalog._routes = [
+        ModelRoute(
+            route_id="a",
+            provider_name="groq",
+            model_id="m1",
+            display_name="A",
+            rank=1,
+            tags=["text", "json-schema"],
+        ),
+        ModelRoute(
+            route_id="b",
+            provider_name="groq",
+            model_id="m2",
+            display_name="B",
+            rank=2,
+            tags=["text"],
+        ),
+    ]
+    routes = enabled_routes_for_request(
+        catalog,
+        requested_model="a",
+        required_capabilities=frozenset({"text", "json-schema"}),
+    )
     assert [route.route_id for route in routes] == ["a"]
 
 

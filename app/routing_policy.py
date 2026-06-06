@@ -19,12 +19,13 @@ def enabled_routes_for_request(
     catalog: ModelCatalog,
     *,
     requested_model: Any,
-    required_tag: str | None,
+    required_capabilities: frozenset[str] | None = None,
 ) -> list[ModelRoute]:
+    required = required_capabilities or frozenset()
     return [
         route
         for route in catalog.enabled_routes(requested_model if isinstance(requested_model, str) else None)
-        if required_tag is None or required_tag in route.tags
+        if required.issubset(route.tags)
     ]
 
 

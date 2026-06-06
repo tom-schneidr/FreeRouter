@@ -15,6 +15,7 @@ from app.api.chat_handlers import (
     _route_chat_completion_stream_request,
     _route_responses_stream_request,
 )
+from app.request_requirements import chat_request_requirements, with_extra_capabilities
 from app.app_services import get_app_services
 from app.codex_compat import chat_body_to_response, responses_payload_to_chat
 from app.settings import get_settings
@@ -79,18 +80,24 @@ async def chat_completions_web_search(request: Request) -> Response:
         prepared_payload = _payload_with_required_web_search(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    web_search_requirements = with_extra_capabilities(
+        chat_request_requirements(prepared_payload),
+        "web-search",
+    )
     if prepared_payload.get("stream"):
         return await _route_chat_completion_stream_request(
             request,
             payload=prepared_payload,
             path="/v1/chat/completions/web-search",
-            required_tag="web-search",
+            requirements=web_search_requirements,
+            require_assistant_content=True,
         )
     return await _route_chat_completion_request(
         request,
         payload=prepared_payload,
         path="/v1/chat/completions/web-search",
-        required_tag="web-search",
+        requirements=web_search_requirements,
+        require_assistant_content=True,
     )
 
 

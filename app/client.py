@@ -6,6 +6,7 @@ from typing import Any
 from app.factory import build_core_gateway_stack
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS
+from app.request_requirements import RequestRequirements, with_extra_capabilities
 from app.router import ChatStreamPart, RouteResult, WaterfallRouter
 from app.settings import get_settings
 from app.state import StateManager
@@ -70,7 +71,7 @@ class UnifiedAIClient:
         self,
         messages: list[dict[str, str]],
         *,
-        required_tag: str | None = None,
+        requirements: RequestRequirements | None = None,
         require_assistant_content: bool = False,
         **kwargs: Any,
     ) -> AsyncIterator[ChatStreamPart]:
@@ -84,7 +85,7 @@ class UnifiedAIClient:
         payload["stream"] = True
         async for part in self.router.iter_chat_completion_openai_stream(
             payload,
-            required_tag=required_tag,
+            requirements=requirements,
             require_assistant_content=require_assistant_content,
         ):
             yield part

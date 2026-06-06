@@ -8,9 +8,15 @@ import pytest
 
 from app.model_catalog import ModelCatalog
 from app.providers.base import ProviderError, ProviderRateLimited, ProviderResponse
+from app.request_requirements import (
+    RequestRequirements,
+    chat_request_requirements,
+    with_extra_capabilities,
+)
 from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,
+    UnsupportedCapabilities,
     WaterfallRouter,
     _payload_commits_openai_stream,
 )
@@ -199,20 +205,38 @@ async def test_router_falls_back_on_request_too_large(tmp_path):
     assert [attempt.reason for attempt in result.attempts] == ["request_too_large", None]
 
 
-async def test_router_required_tag_only_tries_matching_routes(tmp_path):
+async def test_router_required_capabilities_only_tries_matching_routes(tmp_path):
     state = await _state(tmp_path)
     primary = FakeProvider("primary")
     fallback = FakeProvider("fallback")
     router = WaterfallRouter(
         [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
     )
+    requirements = with_extra_capabilities(chat_request_requirements(_payload()), "web-search")
 
-    result = await router.route_chat_completion(_payload(), required_tag="web-search")
+    result = await router.route_chat_completion(_payload(), requirements=requirements)
 
     assert primary.calls == 0
     assert fallback.calls == 1
     assert result.provider_name == "fallback"
     assert result.model_id == "fallback/model"
+
+
+async def test_router_raises_unsupported_capabilities_when_no_route_matches(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary")
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+    requirements = RequestRequirements(required_capabilities=frozenset({"text", "json-schema"}))
+
+    with pytest.raises(UnsupportedCapabilities) as exc_info:
+        await router.route_chat_completion(_payload(), requirements=requirements)
+
+    assert exc_info.value.required == frozenset({"text", "json-schema"})
+    assert primary.calls == 0
+    assert fallback.calls == 0
 
 
 async def test_router_can_require_non_empty_assistant_content(tmp_path):

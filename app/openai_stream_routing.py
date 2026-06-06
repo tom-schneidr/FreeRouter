@@ -8,11 +8,13 @@ import httpx
 
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderError, ProviderRateLimited
+from app.request_requirements import RequestRequirements, chat_request_requirements
 from app.router import (
     _SSE_DONE,
     NoProviderAvailable,
     ProviderAttempt,
     RouteStreamDiag,
+    UnsupportedCapabilities,
     _event_block_data_payload,
     _payload_commits_openai_stream,
     _split_sse_event_blocks,
@@ -47,7 +49,7 @@ async def waterfall_openai_stream(
     state: StateManager,
     client: httpx.AsyncClient,
     payload: dict[str, Any],
-    required_tag: str | None = None,
+    requirements: RequestRequirements | None = None,
     require_assistant_content: bool = False,
 ) -> Any:
     """Yield :class:`RouteStreamDiag` plus raw OpenAI ``text/event-stream`` fragments (``str``)."""
@@ -62,11 +64,19 @@ async def waterfall_openai_stream(
     attempts: list[ProviderAttempt] = []
     rate_limit_probe_providers: set[str] = set()
 
+    resolved_requirements = requirements or chat_request_requirements(outbound_payload)
+    required_capabilities = resolved_requirements.required_capabilities
+    requested_model = outbound_payload.get("model")
     routes_list = enabled_routes_for_request(
         model_catalog,
-        requested_model=outbound_payload.get("model"),
-        required_tag=required_tag,
+        requested_model=requested_model,
+        required_capabilities=required_capabilities,
     )
+    if not routes_list:
+        raise UnsupportedCapabilities(
+            required_capabilities,
+            requested_model if isinstance(requested_model, str) else None,
+        )
     prefetch_provider_names = configured_provider_names(routes_list, providers_by_name)
     provider_availability_prefetch: dict[str, Availability] = {}
     if prefetch_provider_names:

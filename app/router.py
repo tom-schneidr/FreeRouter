@@ -10,12 +10,43 @@ import httpx
 from app.model_catalog import ModelCatalog
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderAdapter, ProviderError, ProviderRateLimited, ProviderResponse
+from app.request_requirements import RequestRequirements, chat_request_requirements
 from app.routing_policy import (
     configured_provider_names,
     enabled_routes_for_request,
     static_route_skip_reason,
 )
 from app.state import Availability, StateManager
+
+
+class UnsupportedCapabilities(RuntimeError):
+    """Raised when no enabled route supports every required capability."""
+
+    def __init__(self, required: frozenset[str], requested_model: str | None) -> None:
+        self.required = required
+        self.requested_model = requested_model
+        caps = _display_capabilities(required)
+        super().__init__(
+            f"No enabled route supports all required capabilities: {', '.join(caps)}"
+        )
+
+
+def _display_capabilities(required: frozenset[str]) -> list[str]:
+    distinctive = sorted(cap for cap in required if cap != "text")
+    return distinctive if distinctive else sorted(required)
+
+
+def unsupported_capabilities_error_body(exc: UnsupportedCapabilities) -> dict[str, Any]:
+    caps = _display_capabilities(exc.required)
+    return {
+        "error": {
+            "message": str(exc),
+            "type": "invalid_request_error",
+            "code": "unsupported_capabilities",
+            "param": None,
+            "required_capabilities": caps,
+        }
+    }
 
 
 class NoProviderAvailable(RuntimeError):
@@ -218,7 +249,7 @@ class WaterfallRouter:
         self,
         payload: dict[str, Any],
         *,
-        required_tag: str | None = None,
+        requirements: RequestRequirements | None = None,
         require_assistant_content: bool = False,
     ) -> RouteResult:
         """Walk enabled routes in rank order, attempting each until one succeeds.
@@ -229,7 +260,7 @@ class WaterfallRouter:
         """
         async for event in self.iter_route_events(
             payload,
-            required_tag=required_tag,
+            requirements=requirements,
             require_assistant_content=require_assistant_content,
         ):
             if event.event_type != "route_selected":
@@ -250,7 +281,7 @@ class WaterfallRouter:
         self,
         payload: dict[str, Any],
         *,
-        required_tag: str | None = None,
+        requirements: RequestRequirements | None = None,
         require_assistant_content: bool = False,
     ) -> AsyncGenerator[RouteEvent, None]:
         """Yield structured route events while executing waterfall routing."""
@@ -264,7 +295,7 @@ class WaterfallRouter:
             async for event in self._iter_route_events_with_client(
                 payload,
                 self._http_client,
-                required_tag=required_tag,
+                requirements=requirements,
                 require_assistant_content=require_assistant_content,
             ):
                 yield event
@@ -275,7 +306,7 @@ class WaterfallRouter:
             async for event in self._iter_route_events_with_client(
                 payload,
                 client,
-                required_tag=required_tag,
+                requirements=requirements,
                 require_assistant_content=require_assistant_content,
             ):
                 yield event
@@ -284,7 +315,7 @@ class WaterfallRouter:
         self,
         payload: dict[str, Any],
         *,
-        required_tag: str | None = None,
+        requirements: RequestRequirements | None = None,
         require_assistant_content: bool = False,
     ) -> AsyncGenerator[ChatStreamPart, None]:
         """Stream OpenAI-compatible SSE; routing diagnostics as :class:`RouteStreamDiag`."""
@@ -299,7 +330,7 @@ class WaterfallRouter:
                 state=self.state,
                 client=self._http_client,
                 payload=outbound,
-                required_tag=required_tag,
+                requirements=requirements,
                 require_assistant_content=require_assistant_content,
             ):
                 yield part
@@ -313,7 +344,7 @@ class WaterfallRouter:
                 state=self.state,
                 client=client,
                 payload=outbound,
-                required_tag=required_tag,
+                requirements=requirements,
                 require_assistant_content=require_assistant_content,
             ):
                 yield part
@@ -323,7 +354,7 @@ class WaterfallRouter:
         payload: dict[str, Any],
         client: httpx.AsyncClient,
         *,
-        required_tag: str | None = None,
+        requirements: RequestRequirements | None = None,
         require_assistant_content: bool = False,
     ) -> AsyncGenerator[RouteEvent, None]:
         estimated_prompt_tokens = estimate_prompt_tokens(payload)
@@ -333,11 +364,19 @@ class WaterfallRouter:
         attempts: list[ProviderAttempt] = []
         rate_limit_probe_providers: set[str] = set()
 
+        resolved_requirements = requirements or chat_request_requirements(payload)
+        required_capabilities = resolved_requirements.required_capabilities
+        requested_model = payload.get("model")
         routes_list = enabled_routes_for_request(
             self.model_catalog,
-            requested_model=payload.get("model"),
-            required_tag=required_tag,
+            requested_model=requested_model,
+            required_capabilities=required_capabilities,
         )
+        if not routes_list:
+            raise UnsupportedCapabilities(
+                required_capabilities,
+                requested_model if isinstance(requested_model, str) else None,
+            )
         prefetch_provider_names = configured_provider_names(
             routes_list,
             self.provider_by_name,
