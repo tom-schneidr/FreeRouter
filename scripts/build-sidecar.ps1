@@ -12,12 +12,18 @@ $SpecDir = Join-Path $WorkDir "spec"
 $PyInstallerName = "freerouterd-$TargetTriple"
 $ExpectedExe = Join-Path $TargetDir "$PyInstallerName.exe"
 $ReactDist = Join-Path $ProjectRoot "apps\ui\dist"
+$InvalidModuleFiles = Get-ChildItem -LiteralPath (Join-Path $ProjectRoot "app") -Recurse -File -Filter "*.py" |
+    Where-Object { $_.BaseName -ne "__init__" -and $_.BaseName -notmatch '^[A-Za-z_][A-Za-z0-9_]*$' }
 
 if (-not (Test-Path $VenvPython)) {
     throw "Missing .venv. Run .\run.ps1 -InstallOnly -RuntimeOnly first."
 }
 if (-not (Test-Path (Join-Path $ReactDist "index.html"))) {
     throw "Missing React build output. Run npm run build:web before building the sidecar."
+}
+if ($InvalidModuleFiles) {
+    $InvalidPaths = ($InvalidModuleFiles | ForEach-Object { $_.FullName }) -join [Environment]::NewLine
+    Write-Warning "Excluding non-importable Python filenames from the sidecar build:`n$InvalidPaths"
 }
 
 New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
@@ -36,19 +42,28 @@ if ($LASTEXITCODE -ne 0) {
     throw "Could not sync FreeRouter desktop icons."
 }
 
-& $VenvPython -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --onefile `
-    --name $PyInstallerName `
-    --distpath $TargetDir `
-    --workpath $WorkDir `
-    --specpath $SpecDir `
-    --hidden-import app.main `
-    --hidden-import app.sidecar `
-    --collect-submodules app `
-    --add-data "$ReactDist;apps\ui\dist" `
-    (Join-Path $ProjectRoot "app\sidecar.py")
+$PyInstallerArgs = @(
+    "-m", "PyInstaller",
+    "--noconfirm",
+    "--clean",
+    "--onefile",
+    "--name", $PyInstallerName,
+    "--distpath", $TargetDir,
+    "--workpath", $WorkDir,
+    "--specpath", $SpecDir,
+    "--hidden-import", "app.main",
+    "--hidden-import", "app.sidecar",
+    "--collect-submodules", "app",
+    "--add-data", "$ReactDist;apps\ui\dist"
+)
+foreach ($InvalidModuleFile in $InvalidModuleFiles) {
+    $RelativeModulePath = [IO.Path]::GetRelativePath($ProjectRoot, $InvalidModuleFile.FullName)
+    $InvalidModuleName = [IO.Path]::ChangeExtension($RelativeModulePath, $null).Replace([IO.Path]::DirectorySeparatorChar, ".")
+    $PyInstallerArgs += @("--exclude-module", $InvalidModuleName)
+}
+$PyInstallerArgs += (Join-Path $ProjectRoot "app\sidecar.py")
+
+& $VenvPython @PyInstallerArgs
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller sidecar build failed."
 }

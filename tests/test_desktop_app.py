@@ -148,7 +148,7 @@ def test_sidecar_build_packages_react_dist_assets():
     script = Path("scripts/build-sidecar.ps1").read_text(encoding="utf-8")
 
     assert "$ReactDist = Join-Path $ProjectRoot \"apps\\ui\\dist\"" in script
-    assert "--add-data \"$ReactDist;apps\\ui\\dist\"" in script
+    assert '"--add-data", "$ReactDist;apps\\ui\\dist"' in script
 
 
 def test_desktop_api_requires_token(monkeypatch, tmp_path):
