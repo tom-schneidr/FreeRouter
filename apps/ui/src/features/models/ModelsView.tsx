@@ -47,6 +47,14 @@ function suggestionActionLabel(action: string) {
   );
 }
 
+export function shouldAutoOpenEndpointUpdates(
+  checkedAt: number | undefined,
+  suggestionCount: number,
+  lastAutoOpenedAt: number | null,
+) {
+  return Boolean(checkedAt && suggestionCount > 0 && checkedAt !== lastAutoOpenedAt);
+}
+
 export function ModelsView() {
   const [routes, setRoutes] = React.useState<ModelRoute[]>([]);
   const [search, setSearch] = React.useState("");
@@ -61,6 +69,7 @@ export function ModelsView() {
   const [endpointSuggestions, setEndpointSuggestions] = React.useState<EndpointSuggestion[]>([]);
   const [updateSummary, setUpdateSummary] = React.useState("Loading suggestions...");
   const [selectedSuggestions, setSelectedSuggestions] = React.useState<Set<string>>(() => new Set());
+  const lastAutoOpenedAt = React.useRef<number | null>(null);
 
   const catalog = useQuery({
     queryKey: ["gateway-models-catalog"],
@@ -256,13 +265,15 @@ export function ModelsView() {
 
   React.useEffect(() => {
     if (!diagnosis.data) return;
+    const checkedAt = diagnosis.data.last_report?.checked_at;
     const count = diagnosis.data.last_report?.suggestions?.length ?? 0;
-    if (count > 0 && !updateModalOpen) {
+    if (shouldAutoOpenEndpointUpdates(checkedAt, count, lastAutoOpenedAt.current)) {
+      lastAutoOpenedAt.current = checkedAt ?? null;
       const timer = window.setTimeout(() => openUpdateModal(), 1500);
       return () => window.clearTimeout(timer);
     }
     return undefined;
-  }, [diagnosis.data, updateModalOpen]);
+  }, [diagnosis.data]);
 
   return (
     <div className="section-stack models-view">
