@@ -192,17 +192,59 @@ def test_messages_payload_rejects_unsupported_top_level_field():
         )
 
 
-def test_messages_payload_rejects_metadata_and_top_k():
-    for field, value in (("metadata", {"user_id": "abc"}), ("top_k", 5)):
-        with pytest.raises(ValueError, match=field):
-            messages_payload_to_chat(
+def test_messages_payload_accepts_metadata_without_forwarding_it():
+    chat = messages_payload_to_chat(
+        {
+            "model": "auto",
+            "max_tokens": 10,
+            "metadata": {"user_id": "abc"},
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    )
+    assert "metadata" not in chat
+
+
+def test_messages_payload_rejects_top_k():
+    with pytest.raises(ValueError, match="top_k"):
+        messages_payload_to_chat(
+            {
+                "model": "auto",
+                "max_tokens": 10,
+                "top_k": 5,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+
+
+def test_messages_payload_orders_tool_results_before_follow_up_user_text():
+    chat = messages_payload_to_chat(
+        {
+            "model": "auto",
+            "max_tokens": 64,
+            "messages": [
                 {
-                    "model": "auto",
-                    "max_tokens": 10,
-                    field: value,
-                    "messages": [{"role": "user", "content": "hi"}],
-                }
-            )
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "lookup",
+                            "input": {"q": "x"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "found"},
+                        {"type": "text", "text": "Now summarize it."},
+                    ],
+                },
+            ],
+        }
+    )
+
+    assert [message["role"] for message in chat["messages"]] == ["assistant", "tool", "user"]
 
 
 def test_messages_payload_rejects_unsupported_content_block():
@@ -399,6 +441,56 @@ def test_anthropic_stream_mapper_dual_tool_calls_with_fragmented_json():
     assert '"partial_json":"1}"' in compact
     assert '"stop_reason":"tool_use"' in compact
     assert "message_stop" in compact
+
+
+def test_anthropic_stream_mapper_waits_for_tool_metadata_before_start():
+    mapper = AnthropicStreamMapper(message_id="msg_tools", model="auto")
+    arguments_first = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [{"index": 0, "function": {"arguments": '{"q"'}}]
+                }
+            }
+        ]
+    }
+    metadata_later = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_late",
+                            "function": {"name": "lookup", "arguments": ':"x"}'},
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+
+    first_events = mapper.events_from_openai_sse(f"data: {json.dumps(arguments_first)}")
+    later_events = mapper.events_from_openai_sse(f"data: {json.dumps(metadata_later)}")
+
+    assert not any("content_block_start" in event for event in first_events)
+    combined = "".join(later_events)
+    assert '"id":"call_late"' in combined
+    assert '"name":"lookup"' in combined
+    assert '"partial_json":"{\\"q\\"' in combined
+    assert '"partial_json":":\\"x\\"}"' in combined
+
+
+def test_anthropic_stream_mapper_ignores_incomplete_tool_call_for_stop_reason():
+    mapper = AnthropicStreamMapper(message_id="msg_tools", model="auto")
+    chunk = {"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]}
+    mapper.events_from_openai_sse(f"data: {json.dumps(chunk)}")
+
+    completed = "".join(mapper.events_from_openai_sse("data: [DONE]"))
+
+    assert '"stop_reason":"end_turn"' in completed
+    assert "tool_use" not in completed
 
 
 def test_anthropic_stream_event_format():

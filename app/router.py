@@ -859,10 +859,35 @@ def validate_chat_completion_payload(payload: dict[str, Any]) -> None:
     messages = payload.get("messages")
     if not isinstance(messages, list) or not messages:
         raise ValueError("Request body must include a non-empty 'messages' array")
+    valid_roles = {"system", "developer", "user", "assistant", "tool"}
     for index, message in enumerate(messages):
         if not isinstance(message, dict):
             raise ValueError(f"messages[{index}] must be an object")
-        if not isinstance(message.get("role"), str):
+        role = message.get("role")
+        if not isinstance(role, str):
             raise ValueError(f"messages[{index}].role must be a string")
+        if role not in valid_roles:
+            raise ValueError(
+                f"messages[{index}].role must be one of: assistant, developer, system, tool, user"
+            )
         if "content" not in message:
+            if role == "assistant" and isinstance(message.get("tool_calls"), list):
+                continue
             raise ValueError(f"messages[{index}].content is required")
+        content = message.get("content")
+        if content is None:
+            if role == "assistant" and isinstance(message.get("tool_calls"), list):
+                continue
+            raise ValueError(f"messages[{index}].content must be a string or array")
+        if isinstance(content, str):
+            continue
+        if isinstance(content, list):
+            for part_index, part in enumerate(content):
+                if isinstance(part, str):
+                    continue
+                if not isinstance(part, dict):
+                    raise ValueError(
+                        f"messages[{index}].content[{part_index}] must be a string or object"
+                    )
+            continue
+        raise ValueError(f"messages[{index}].content must be a string or array")

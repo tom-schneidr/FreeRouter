@@ -16,6 +16,7 @@ SUPPORTED_TOP_LEVEL_FIELDS = frozenset(
         "model",
         "messages",
         "max_tokens",
+        "metadata",
         "system",
         "stop_sequences",
         "stream",
@@ -244,10 +245,9 @@ def _user_blocks_to_chat_messages(blocks: list[Any], message_index: int) -> list
             continue
         raise ValueError(f"Unsupported user content block type: {block_type}")
 
-    out: list[dict[str, Any]] = []
+    out: list[dict[str, Any]] = list(tool_messages)
     if content_parts:
         out.append({"role": "user", "content": content_parts})
-    out.extend(tool_messages)
     if not out:
         raise ValueError(f"messages[{message_index}] must include at least one content block")
     return out
@@ -512,6 +512,7 @@ class AnthropicStreamMapper:
                     "anthropic_index": None,
                     "id": "",
                     "name": "",
+                    "pending_arguments": [],
                     "started": False,
                     "stopped": False,
                 },
@@ -528,7 +529,8 @@ class AnthropicStreamMapper:
                     state["name"] = function["name"]
                 arguments = function.get("arguments")
                 if isinstance(arguments, str) and arguments:
-                    if not state["started"]:
+                    state["pending_arguments"].append(arguments)
+                    if not state["started"] and state["id"] and state["name"]:
                         state["started"] = True
                         events.append(
                             anthropic_stream_event(
@@ -545,17 +547,34 @@ class AnthropicStreamMapper:
                                 },
                             )
                         )
-                    events.append(
-                        anthropic_stream_event(
-                            "content_block_delta",
-                            {
-                                "type": "content_block_delta",
-                                "index": state["anthropic_index"],
-                                "delta": {"type": "input_json_delta", "partial_json": arguments},
-                            },
+                        for pending in state["pending_arguments"]:
+                            events.append(
+                                anthropic_stream_event(
+                                    "content_block_delta",
+                                    {
+                                        "type": "content_block_delta",
+                                        "index": state["anthropic_index"],
+                                        "delta": {
+                                            "type": "input_json_delta",
+                                            "partial_json": pending,
+                                        },
+                                    },
+                                )
+                            )
+                        state["pending_arguments"].clear()
+                    elif state["started"]:
+                        events.append(
+                            anthropic_stream_event(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": state["anthropic_index"],
+                                    "delta": {"type": "input_json_delta", "partial_json": arguments},
+                                },
+                            )
                         )
-                    )
-                elif not state["started"] and (state["id"] or state["name"]):
+                        state["pending_arguments"].clear()
+                elif not state["started"] and state["id"] and state["name"]:
                     state["started"] = True
                     events.append(
                         anthropic_stream_event(
@@ -572,6 +591,21 @@ class AnthropicStreamMapper:
                             },
                         )
                     )
+                    for pending in state["pending_arguments"]:
+                        events.append(
+                            anthropic_stream_event(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": state["anthropic_index"],
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": pending,
+                                    },
+                                },
+                            )
+                        )
+                    state["pending_arguments"].clear()
         return events
 
     def _completion_events(self) -> list[str]:
@@ -600,7 +634,7 @@ class AnthropicStreamMapper:
 
         stop_reason = (
             "tool_use"
-            if self.tool_blocks
+            if any(state["started"] for state in self.tool_blocks.values())
             else _FINISH_REASON_TO_STOP.get(self.finish_reason or "stop", "end_turn")
         )
         usage = self.usage or {"input_tokens": 0, "output_tokens": 0}

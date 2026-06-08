@@ -7,7 +7,13 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$Python = if (Get-Command "python" -ErrorAction SilentlyContinue) { "python" } else { $VenvPython }
+$Python = if (Test-Path -LiteralPath $VenvPython) {
+    $VenvPython
+} elseif (Get-Command "python" -ErrorAction SilentlyContinue) {
+    "python"
+} else {
+    throw "Python was not found. Create .venv or add python to PATH."
+}
 
 & $Python -m pytest -p no:cacheprovider
 if ($LASTEXITCODE -ne 0) {

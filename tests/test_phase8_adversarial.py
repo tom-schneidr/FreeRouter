@@ -169,18 +169,11 @@ def test_validation_missing_content():
 
 # ─── 2. Invalid Roles & Unknown Blocks ───
 
-async def test_invalid_role_forwarded(tmp_path):
-    """An invalid role string (e.g. 'invalid_role') is accepted by validator if it is a string and forwarded."""
-    state = await _state(tmp_path)
-    primary = FakeAdversarialProvider("primary")
-    router = WaterfallRouter([primary], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+def test_invalid_role_rejected():
+    """Invalid role strings are rejected before any provider request is attempted."""
     payload = {"model": "auto", "messages": [{"role": "invalid_role", "content": "hello"}]}
-    validate_chat_completion_payload(payload)
-    
-    result = await router.route_chat_completion(payload)
-    assert result.provider_name == "primary"
-    assert primary.calls == 1
+    with pytest.raises(ValueError, match="messages\\[0\\].role must be one of"):
+        validate_chat_completion_payload(payload)
 
 
 async def test_unknown_blocks_forwarded_safely(tmp_path):

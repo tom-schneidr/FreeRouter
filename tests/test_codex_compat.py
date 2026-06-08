@@ -90,6 +90,32 @@ def test_responses_payload_to_chat_maps_function_call_outputs():
     ]
 
 
+def test_responses_payload_to_chat_maps_text_format_to_response_format():
+    payload = responses_payload_to_chat(
+        {
+            "model": "auto",
+            "input": "Return JSON.",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer",
+                    "schema": {"type": "object"},
+                    "strict": True,
+                }
+            },
+        }
+    )
+
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "answer",
+            "schema": {"type": "object"},
+            "strict": True,
+        },
+    }
+
+
 def test_chat_body_to_response_exposes_output_text_and_usage():
     response = chat_body_to_response(
         {
@@ -166,7 +192,7 @@ def test_responses_stream_delta_from_openai_sse_maps_text_delta():
     assert any('"delta": "hi"' in event for event in events)
 
 
-def test_responses_stream_mapper_emits_tool_call_item_on_done():
+def test_responses_stream_mapper_emits_tool_call_argument_deltas_and_done():
     mapper = ResponsesStreamMapper(response_id="resp_test")
     block = "data: " + json.dumps(
         {
@@ -191,9 +217,13 @@ def test_responses_stream_mapper_emits_tool_call_item_on_done():
         }
     )
 
-    assert mapper.events_from_openai_sse(block) == []
+    stream_events = "\n".join(mapper.events_from_openai_sse(block))
+    assert "response.output_item.added" in stream_events
+    assert "response.function_call_arguments.delta" in stream_events
+    assert '"delta": "{\\"cmd\\":\\"pwd\\"}"' in stream_events
     done_events = "\n".join(mapper.events_from_openai_sse("data: [DONE]"))
 
+    assert "response.function_call_arguments.done" in done_events
     assert "response.output_item.done" in done_events
     assert '"type": "function_call"' in done_events
     assert '"call_id": "call_1"' in done_events
@@ -288,13 +318,13 @@ def test_responses_stream_mapper_no_text_only_tools():
     )
 
     events = mapper.events_from_openai_sse(block)
-    assert events == []
+    assert any("response.function_call_arguments.delta" in event for event in events)
+    assert any("response.output_item.added" in event for event in events)
 
     done_events = mapper.events_from_openai_sse("data: [DONE]")
     done_str = "\n".join(done_events)
 
     # Should not have message output items, only tool call item
-    assert "response.output_item.added" in done_str
     assert "response.output_item.done" in done_str
     assert "response.completed" in done_str
     assert "get_weather" in done_str

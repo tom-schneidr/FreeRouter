@@ -55,6 +55,77 @@ def test_validate_chat_completion_payload_accepts_extra_fields():
     validate_chat_completion_payload(payload)
 
 
+def test_validate_chat_completion_payload_rejects_invalid_role():
+    payload = {
+        "model": "auto",
+        "messages": [{"role": "hacker", "content": "hello"}],
+    }
+
+    try:
+        validate_chat_completion_payload(payload)
+    except ValueError as exc:
+        assert "role" in str(exc)
+    else:
+        raise AssertionError("invalid role should be rejected")
+
+
+def test_validate_chat_completion_payload_rejects_invalid_content_shape():
+    payload = {
+        "model": "auto",
+        "messages": [{"role": "user", "content": {"text": "hello"}}],
+    }
+
+    try:
+        validate_chat_completion_payload(payload)
+    except ValueError as exc:
+        assert "content" in str(exc)
+    else:
+        raise AssertionError("object content should be rejected")
+
+
+def test_validate_chat_completion_payload_allows_assistant_tool_call_null_content():
+    payload = {
+        "model": "auto",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        ],
+    }
+
+    validate_chat_completion_payload(payload)
+
+
+def test_validate_chat_completion_payload_allows_assistant_tool_call_omitted_content():
+    payload = {
+        "model": "auto",
+        "messages": [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        ],
+    }
+
+    validate_chat_completion_payload(payload)
+
+
 async def test_provider_adapter_forwards_logprobs_and_extra_parameters():
     # Verify that the ProviderAdapter forwards logprobs and extra parameters untouched to the upstream provider
     def handler(request: httpx.Request) -> httpx.Response:

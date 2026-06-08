@@ -51,6 +51,9 @@ def responses_payload_to_chat(payload: dict[str, Any]) -> dict[str, Any]:
         chat_payload["tool_choice"] = _responses_tool_choice_to_chat_tool_choice(
             payload["tool_choice"]
         )
+    text = payload.get("text")
+    if isinstance(text, dict) and "format" in text:
+        chat_payload["response_format"] = _responses_text_format_to_chat(text["format"])
     return chat_payload
 
 
@@ -183,6 +186,7 @@ class ResponsesStreamMapper:
         return events
 
     def _tool_call_delta_events(self, payload: dict[str, Any]) -> list[str]:
+        events: list[str] = []
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices:
             return []
@@ -208,6 +212,8 @@ class ResponsesStreamMapper:
                     "id": chunk.get("id") if isinstance(chunk.get("id"), str) else "",
                     "name": "",
                     "arguments": "",
+                    "started": False,
+                    "output_index": None,
                 },
             )
             if isinstance(chunk.get("id"), str):
@@ -216,9 +222,50 @@ class ResponsesStreamMapper:
             if isinstance(function, dict):
                 if isinstance(function.get("name"), str):
                     state["name"] += function["name"]
-                if isinstance(function.get("arguments"), str):
-                    state["arguments"] += function["arguments"]
-        return []
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    state["arguments"] += arguments
+                    events.extend(self._function_call_argument_delta_events(index, state, arguments))
+        return events
+
+    def _function_call_argument_delta_events(
+        self,
+        index: int,
+        state: dict[str, Any],
+        arguments: str,
+    ) -> list[str]:
+        events: list[str] = []
+        if not state["started"]:
+            state["started"] = True
+            state["output_index"] = (1 if self.message_started else 0) + sum(
+                1
+                for call in self.tool_calls.values()
+                if call is not state and call.get("started")
+            )
+            item = _function_call_output_item(state)
+            events.append(
+                self._event(
+                    "response.output_item.added",
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": state["output_index"],
+                        "item": {**item, "status": "in_progress", "arguments": ""},
+                    },
+                )
+            )
+        if arguments:
+            events.append(
+                self._event(
+                    "response.function_call_arguments.delta",
+                    {
+                        "type": "response.function_call_arguments.delta",
+                        "item_id": state["id"],
+                        "output_index": state["output_index"],
+                        "delta": arguments,
+                    },
+                )
+            )
+        return events
 
     def _completion_events(self) -> list[str]:
         events: list[str] = []
@@ -274,14 +321,28 @@ class ResponsesStreamMapper:
         base_index = 1 if self.message_started else 0
         for offset, call in enumerate(self.tool_calls.values()):
             item = _function_call_output_item(call)
-            output_index = base_index + offset
+            output_index = call["output_index"]
+            if not isinstance(output_index, int):
+                output_index = base_index + offset
+            if not call["started"]:
+                events.append(
+                    self._event(
+                        "response.output_item.added",
+                        {
+                            "type": "response.output_item.added",
+                            "output_index": output_index,
+                            "item": {**item, "status": "in_progress"},
+                        },
+                    )
+                )
             events.append(
                 self._event(
-                    "response.output_item.added",
+                    "response.function_call_arguments.done",
                     {
-                        "type": "response.output_item.added",
+                        "type": "response.function_call_arguments.done",
+                        "item_id": item["id"],
                         "output_index": output_index,
-                        "item": {**item, "status": "in_progress"},
+                        "arguments": item["arguments"],
                     },
                 )
             )
@@ -543,6 +604,22 @@ def _responses_tool_choice_to_chat_tool_choice(tool_choice: Any) -> Any:
     if not isinstance(name, str):
         return tool_choice
     return {"type": "function", "function": {"name": name}}
+
+
+def _responses_text_format_to_chat(format_value: Any) -> Any:
+    if not isinstance(format_value, dict):
+        raise ValueError("text.format must be an object")
+    format_type = format_value.get("type")
+    if format_type in {"text", "json_object"}:
+        return dict(format_value)
+    if format_type == "json_schema":
+        schema = {
+            key: format_value[key]
+            for key in ("name", "description", "schema", "strict")
+            if key in format_value
+        }
+        return {"type": "json_schema", "json_schema": schema}
+    raise ValueError(f"Unsupported text.format type: {format_type}")
 
 
 def _responses_tool_output_to_text(output: Any) -> str:
