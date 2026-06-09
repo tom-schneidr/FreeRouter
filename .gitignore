@@ -12,6 +12,12 @@ __pycache__/
 venv/
 env/
 
+# Package-manager lockfiles (project deps are declared in pyproject.toml)
+uv.lock
+poetry.lock
+Pipfile.lock
+pdm.lock
+
 # Distribution / packaging
 *.egg-info/
 *.egg
