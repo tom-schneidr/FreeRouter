@@ -19,9 +19,10 @@ dist/
 build/
 *.whl
 
-# Testing
+# Testing (execution temp — safe to delete)
 .pytest_cache/
 .pytest-temp/
+.pytest-sandbox-temp/
 .pip-temp/
 data/pytest-temp/
 scratch-pytest/
