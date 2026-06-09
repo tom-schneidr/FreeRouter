@@ -17,7 +17,12 @@ from app.anthropic_compat import (
     messages_payload_to_chat,
 )
 from app.api.chat_handlers import _monitor_trim, _publish_route_stream_diag
-from app.api.limited_streaming_response import GatewayLimiterLease, LimitedStreamingResponse
+from app.api.gateway_headers import GatewayRouteInfo, GatewayRoutingContext, gateway_route_headers
+from app.api.gateway_response import normalize_openai_sse_stream
+from app.api.limited_streaming_response import (
+    GatewayLimiterLease,
+    RoutedLimitedStreamingResponse,
+)
 from app.app_services import get_app_services
 from app.providers import ProviderError
 from app.request_requirements import chat_request_requirements
@@ -232,11 +237,13 @@ async def _route_anthropic_non_stream(
     )
     return JSONResponse(
         content=anthropic_message,
-        headers={
-            "X-Gateway-Provider": result.provider_name,
-            "X-Gateway-Route": result.route_id,
-            "X-Gateway-Model": result.model_id,
-        },
+        headers=gateway_route_headers(
+            GatewayRouteInfo(
+                provider_name=result.provider_name,
+                route_id=result.route_id,
+                model_id=result.model_id,
+            )
+        ),
     )
 
 
@@ -254,6 +261,7 @@ async def _route_anthropic_stream(
     settings = get_settings()
     message_id = f"msg_{uuid.uuid4().hex}"
     lease = GatewayLimiterLease(limiter)
+    routing = GatewayRoutingContext()
     selected_provider = ""
     selected_route = ""
     selected_model = ""
@@ -264,9 +272,12 @@ async def _route_anthropic_stream(
         completed = False
         mapper = AnthropicStreamMapper(message_id=message_id, model=requested_model)
         try:
-            async for part in router.iter_chat_completion_openai_stream(
-                chat_payload,
-                requirements=requirements,
+            async for part in normalize_openai_sse_stream(
+                router.iter_chat_completion_openai_stream(
+                    chat_payload,
+                    requirements=requirements,
+                ),
+                requested_model,
             ):
                 if isinstance(part, RouteStreamDiag):
                     await _publish_route_stream_diag(monitor, request_id, part)
@@ -274,6 +285,7 @@ async def _route_anthropic_stream(
                         selected_provider = part.provider_name or ""
                         selected_route = part.route_id or ""
                         selected_model = part.model_id or ""
+                        routing.set(selected_provider, selected_route, selected_model)
                         if (
                             settings.streaming_release_slot_after_route_selected
                             and lease.held
@@ -366,9 +378,10 @@ async def _route_anthropic_stream(
             payload={"status_code": 429, "reason": "request_queue_timeout"},
         )
 
-    return LimitedStreamingResponse(
+    return RoutedLimitedStreamingResponse(
         anthropic_sse_stream(),
         lease=lease,
+        routing=routing,
         rejected_response=JSONResponse(
             status_code=429,
             content=anthropic_error_body("rate_limit_error", "Gateway is busy; retry shortly"),

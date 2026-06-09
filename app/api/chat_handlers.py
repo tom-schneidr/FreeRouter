@@ -9,7 +9,12 @@ from typing import Any
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from app.api.limited_streaming_response import GatewayLimiterLease, LimitedStreamingResponse
+from app.api.gateway_headers import GatewayRouteInfo, GatewayRoutingContext, gateway_route_headers
+from app.api.gateway_response import normalize_chat_completion_body, normalize_openai_sse_stream
+from app.api.limited_streaming_response import (
+    GatewayLimiterLease,
+    RoutedLimitedStreamingResponse,
+)
 from app.app_services import get_app_services
 from app.codex_compat import (
     ResponsesStreamMapper,
@@ -287,6 +292,7 @@ async def _route_chat_completion_stream_request(
 
     settings = get_settings()
     lease = GatewayLimiterLease(limiter)
+    routing = GatewayRoutingContext()
     selected_provider = ""
     selected_route = ""
     selected_model = ""
@@ -295,10 +301,13 @@ async def _route_chat_completion_stream_request(
         nonlocal selected_provider, selected_route, selected_model
         completed = False
         try:
-            async for part in router.iter_chat_completion_openai_stream(
-                payload,
-                requirements=requirements,
-                require_assistant_content=require_assistant_content,
+            async for part in normalize_openai_sse_stream(
+                router.iter_chat_completion_openai_stream(
+                    payload,
+                    requirements=requirements,
+                    require_assistant_content=require_assistant_content,
+                ),
+                payload.get("model"),
             ):
                 if isinstance(part, RouteStreamDiag):
                     await _publish_route_stream_diag(monitor, request_id, part)
@@ -306,6 +315,7 @@ async def _route_chat_completion_stream_request(
                         selected_provider = part.provider_name or ""
                         selected_route = part.route_id or ""
                         selected_model = part.model_id or ""
+                        routing.set(selected_provider, selected_route, selected_model)
                         if (
                             settings.streaming_release_slot_after_route_selected
                             and lease.held
@@ -382,9 +392,10 @@ async def _route_chat_completion_stream_request(
                     },
                 )
 
-    return LimitedStreamingResponse(
+    return RoutedLimitedStreamingResponse(
         openai_sse_stream(),
         lease=lease,
+        routing=routing,
         rejected_response=rejected_response,
         on_rejected=on_rejected,
         media_type="text/event-stream",
@@ -525,6 +536,7 @@ async def _route_chat_completion_request(
     finally:
         limiter.release()
 
+    response_body = normalize_chat_completion_body(result.body, payload.get("model"))
     await monitor.publish(
         event_type="request_completed",
         request_id=request_id,
@@ -535,25 +547,26 @@ async def _route_chat_completion_request(
             "model_id": result.model_id,
             "attempts": len(result.attempts),
             "usage": _monitor_trim(
-                result.body.get("usage") if isinstance(result.body, dict) else None
+                response_body.get("usage") if isinstance(response_body, dict) else None
             ),
             "attempts_detail": [asdict(attempt) for attempt in result.attempts],
             "assistant_text": _monitor_trim(
-                _assistant_text_from_response_body(result.body),
+                _assistant_text_from_response_body(response_body),
                 max_string=8000,
             ),
-            "response_body": _monitor_trim(result.body),
+            "response_body": _monitor_trim(response_body),
             "latency_ms": round((perf_counter() - started_at) * 1000),
         },
     )
     return JSONResponse(
-        content=result.body,
-        headers={
-            "X-Gateway-Provider": result.provider_name,
-            "X-Gateway-Route": result.route_id,
-            "X-Gateway-Model": result.model_id,
-            "X-Gateway-Attempts": json.dumps([asdict(attempt) for attempt in result.attempts]),
-        },
+        content=response_body,
+        headers=gateway_route_headers(
+            GatewayRouteInfo(
+                provider_name=result.provider_name,
+                route_id=result.route_id,
+                model_id=result.model_id,
+            )
+        ),
     )
 
 
@@ -574,6 +587,7 @@ async def _route_responses_stream_request(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     lease = GatewayLimiterLease(limiter)
+    routing = GatewayRoutingContext()
     rejected_response = JSONResponse(
         status_code=429,
         content={
@@ -592,8 +606,17 @@ async def _route_responses_stream_request(
         mapper = ResponsesStreamMapper(response_id=response_id)
         try:
             yield responses_stream_start(response_id=response_id, model=requested_model)
-            async for part in router.iter_chat_completion_openai_stream(payload):
+            async for part in normalize_openai_sse_stream(
+                router.iter_chat_completion_openai_stream(payload),
+                requested_model,
+            ):
                 if isinstance(part, RouteStreamDiag):
+                    if part.event_type == "route_selected":
+                        routing.set(
+                            part.provider_name or "",
+                            part.route_id or "",
+                            part.model_id or "",
+                        )
                     continue
                 carry += part
                 blocks, carry = _split_sse_event_blocks(carry)
@@ -673,9 +696,10 @@ async def _route_responses_stream_request(
         finally:
             lease.release()
 
-    return LimitedStreamingResponse(
+    return RoutedLimitedStreamingResponse(
         responses_sse_stream(),
         lease=lease,
+        routing=routing,
         rejected_response=rejected_response,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

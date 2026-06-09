@@ -6,6 +6,7 @@ import json
 import uuid
 from typing import Any
 
+from app.api.gateway_response import resolved_request_model
 from app.router import (
     _SSE_DONE,
     _event_block_data_payload,
@@ -121,7 +122,7 @@ def chat_body_to_anthropic_message(
         "type": "message",
         "role": "assistant",
         "content": content,
-        "model": requested_model or chat_body.get("model") or "auto",
+        "model": resolved_request_model(requested_model),
         "stop_reason": stop_reason,
         "stop_sequence": None,
         "usage": _anthropic_usage_from_chat(chat_body.get("usage")),
@@ -404,7 +405,7 @@ class AnthropicStreamMapper:
 
     def __init__(self, *, message_id: str, model: Any) -> None:
         self.message_id = message_id
-        self.model = model or "auto"
+        self.model = resolved_request_model(model)
         self.message_started = False
         self.text_block_index: int | None = None
         self.text_started = False

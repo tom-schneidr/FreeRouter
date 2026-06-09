@@ -5,6 +5,7 @@ import uuid
 from time import time
 from typing import Any
 
+from app.api.gateway_response import resolved_request_model
 from app.router import (
     _SSE_DONE,
     _delta_visible_text_from_chunk,
@@ -76,7 +77,7 @@ def chat_body_to_response(
         "incomplete_details": None,
         "instructions": None,
         "max_output_tokens": None,
-        "model": requested_model or chat_body.get("model") or "auto",
+        "model": resolved_request_model(requested_model),
         "output": output,
         "output_text": text,
         "parallel_tool_calls": True,
@@ -108,7 +109,7 @@ def responses_stream_start(*, response_id: str, model: Any) -> str:
                 "object": "response",
                 "created_at": int(time()),
                 "status": "in_progress",
-                "model": model or "auto",
+                "model": resolved_request_model(model),
                 "output": [],
             },
         },

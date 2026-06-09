@@ -24,6 +24,7 @@
         <tr><td>SSE payload</td><td>Raw OpenAI <code>data: {...}</code> chunks plus internal <code>RouteStreamDiag</code></td><td>Custom JSON events: route_trying, route_skip, content, done, error</td></tr>
         <tr><td>Routing policy</td><td><code>enabled_routes_for_request</code>, quota prefetch, static skip checks</td><td>Same via <code>WaterfallRouter.iter_chat_completion_openai_stream</code></td></tr>
         <tr><td>Live monitor</td><td>Translated in main openai handlers from RouteStreamDiag</td><td>Custom <code>on_emit</code> callback maps stream-route events</td></tr>
+        <tr><td>Gateway transparency</td><td colspan="2">Both surfaces emit the same <code>X-Gateway-Provider</code>, <code>X-Gateway-Route</code>, and <code>X-Gateway-Model</code> HTTP headers after route selection. SSE body formats still differ.</td></tr>
         <tr><td>Consolidation status</td><td>Execution remains separate due to protocol differences; shared policy lives in <code>routing_policy.py</code></td><td>Retained for legacy chat UI parity</td></tr>
       </tbody>
     </table>

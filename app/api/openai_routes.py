@@ -15,7 +15,8 @@ from app.api.chat_handlers import (
     _route_chat_completion_stream_request,
     _route_responses_stream_request,
 )
-from app.api.limited_streaming_response import GatewayLimiterLease, LimitedStreamingResponse
+from app.api.gateway_headers import GatewayRoutingContext
+from app.api.limited_streaming_response import GatewayLimiterLease, RoutedLimitedStreamingResponse
 from app.app_services import get_app_services
 from app.codex_compat import chat_body_to_response, responses_payload_to_chat
 from app.request_requirements import chat_request_requirements, with_extra_capabilities
@@ -155,6 +156,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
 
     stream_settings = get_settings()
     lease = GatewayLimiterLease(limiter)
+    routing = GatewayRoutingContext()
 
     async def on_stream_event(event_payload: dict[str, Any]) -> None:
         nonlocal done_published
@@ -169,6 +171,11 @@ async def chat_completions_stream_route(request: Request) -> Response:
                 )
             return
         if event_type == "route_selected":
+            routing.set(
+                str(event_payload.get("provider") or ""),
+                str(event_payload.get("route_id") or ""),
+                str(event_payload.get("model_id") or ""),
+            )
             await monitor.publish(
                 event_type="route_selected",
                 request_id=request_id,
@@ -272,9 +279,10 @@ async def chat_completions_stream_route(request: Request) -> Response:
                     },
                 )
 
-    return LimitedStreamingResponse(
+    return RoutedLimitedStreamingResponse(
         limited_stream(),
         lease=lease,
+        routing=routing,
         rejected_response=rejected_response,
         on_rejected=on_rejected,
         media_type="text/event-stream",

@@ -80,6 +80,36 @@ response.raise_for_status()
 print(response.json()["choices"][0]["message"]["content"])
 ```
 
+### Routing transparency
+
+When FreeRouter successfully routes a request, the response includes opt-in HTTP headers that
+identify which route answered. Standard OpenAI and Anthropic clients ignore these headers.
+Response bodies always echo your requested `model` (typically `auto`); assistant content and
+usage still come from the routed provider.
+
+| Header | Meaning |
+|--------|---------|
+| `X-Gateway-Provider` | Provider that answered (for example `groq`) |
+| `X-Gateway-Route` | Catalog route id (for example `groq-llama-3-3-70b`) |
+| `X-Gateway-Model` | Provider model id actually called |
+
+These headers are returned on all inference endpoints (`/v1/chat/completions`,
+`/v1/chat/completions/web-search`, `/v1/responses`, `/v1/messages`, and
+`/v1/chat/completions/stream-route`), including streaming requests. On streams, headers are sent
+once a route is selected and before the first response bytes.
+
+To inspect the routed model explicitly:
+
+```python
+response.raise_for_status()
+print(response.headers.get("X-Gateway-Route"))
+print(response.headers.get("X-Gateway-Model"))
+```
+
+The response body `model` field always echoes the value you requested (typically `auto`)
+across chat completions, responses, and messages. Use the headers to see which route
+actually answered.
+
 For requests that must use web search, call the dedicated web-search endpoint:
 
 ```text
@@ -375,9 +405,11 @@ POST /v1/chat/completions/web-search
 POST /v1/chat/completions/stream-route
 ```
 
-`/v1/chat/completions` returns the upstream provider JSON unchanged. Gateway diagnostics are
-returned as `X-Gateway-Provider`, `X-Gateway-Route`, `X-Gateway-Model`, and
-`X-Gateway-Attempts` headers.
+`/v1/chat/completions` returns provider completion content in the OpenAI shape, but the
+response `model` field always echoes your request (typically `auto`). When routing
+succeeds, gateway transparency headers are returned as `X-Gateway-Provider`,
+`X-Gateway-Route`, and `X-Gateway-Model` (including on streaming responses). The same
+body/header rules apply across all inference endpoints listed above.
 
 `/v1/chat/completions/web-search` is the same gateway response surface, but it always injects and
 requires web-search intent and only considers routes tagged `web-search`. Provider adapters may

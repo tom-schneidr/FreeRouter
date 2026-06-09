@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.api.gateway_response import normalize_chat_completion_body, normalize_openai_sse_stream
 from app.factory import build_core_gateway_stack
 from app.model_catalog import ModelCatalog
 from app.providers import PROVIDER_QUOTAS
@@ -65,7 +66,14 @@ class UnifiedAIClient:
         assert self.router is not None
 
         payload = {"messages": messages, "model": kwargs.pop("model", "auto"), **kwargs}
-        return await self.router.route_chat_completion(payload)
+        result = await self.router.route_chat_completion(payload)
+        return RouteResult(
+            normalize_chat_completion_body(result.body, payload.get("model")),
+            result.provider_name,
+            result.route_id,
+            result.model_id,
+            result.attempts,
+        )
 
     async def chat_stream(
         self,
@@ -83,10 +91,13 @@ class UnifiedAIClient:
         kwargs.pop("stream", None)
         payload = {"messages": messages, "model": kwargs.pop("model", "auto"), **kwargs}
         payload["stream"] = True
-        async for part in self.router.iter_chat_completion_openai_stream(
-            payload,
-            requirements=requirements,
-            require_assistant_content=require_assistant_content,
+        async for part in normalize_openai_sse_stream(
+            self.router.iter_chat_completion_openai_stream(
+                payload,
+                requirements=requirements,
+                require_assistant_content=require_assistant_content,
+            ),
+            payload.get("model"),
         ):
             yield part
 
