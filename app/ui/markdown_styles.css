@@ -1,0 +1,97 @@
+.md-body blockquote,
+.content-text blockquote {
+  margin: 0.45rem 0;
+  padding: 0.35rem 0 0.35rem 0.75rem;
+  border-left: 3px solid var(--border, #2d3a4f);
+  color: var(--text-muted, #94a3b8);
+}
+
+.md-body blockquote blockquote,
+.content-text blockquote blockquote {
+  margin-top: 0.35rem;
+}
+
+.md-body hr,
+.content-text hr {
+  border: none;
+  border-top: 1px solid var(--border, #2d3a4f);
+  margin: 0.65rem 0;
+}
+
+.md-body del,
+.md-body s,
+.content-text del,
+.content-text s {
+  text-decoration: line-through;
+}
+
+.md-body img,
+.content-text img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.35rem 0;
+  border-radius: 6px;
+}
+
+.md-body dl,
+.content-text dl {
+  margin: 0.45rem 0;
+}
+
+.md-body dt,
+.content-text dt {
+  font-weight: 600;
+  margin-top: 0.35rem;
+}
+
+.md-body dd,
+.content-text dd {
+  margin: 0.15rem 0 0.35rem 1rem;
+}
+
+.md-body .footnotes,
+.content-text .footnotes {
+  margin-top: 0.75rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--border, #2d3a4f);
+  font-size: 0.85em;
+  color: var(--text-muted, #94a3b8);
+}
+
+.md-body .footnotes ol,
+.content-text .footnotes ol {
+  margin: 0.35rem 0 0 1.15rem;
+  padding: 0;
+}
+
+.md-body .footnote-ref,
+.content-text .footnote-ref {
+  font-size: 0.75em;
+  line-height: 0;
+  vertical-align: super;
+}
+
+.md-body .footnote-ref a,
+.content-text .footnote-ref a {
+  text-decoration: none;
+  color: var(--link, #60a5fa);
+}
+
+.md-body .footnote-backref,
+.content-text .footnote-backref {
+  text-decoration: none;
+}
+
+.md-body .task-item,
+.content-text .task-item {
+  list-style: none;
+  margin-left: -1rem;
+}
+
+.md-body .task-checkbox,
+.content-text .task-checkbox {
+  display: inline-block;
+  width: 1rem;
+  margin-right: 0.25rem;
+}

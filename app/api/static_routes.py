@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
@@ -9,6 +11,7 @@ from app.ui.docs_page import swagger_docs_html
 from app.ui.embed import with_embed_support
 
 router = APIRouter()
+_UI_DIR = Path(__file__).resolve().parents[1] / "ui"
 
 
 @router.get("/", include_in_schema=False)
@@ -29,6 +32,22 @@ async def brand_favicon() -> Response:
 @router.get("/brand/logo.png", include_in_schema=False)
 async def brand_logo() -> Response:
     return Response(content=LOGO_PATH.read_bytes(), media_type="image/png")
+
+
+@router.get("/ui/markdown-renderer.js", include_in_schema=False)
+async def markdown_renderer_js() -> Response:
+    return Response(
+        content=(_UI_DIR / "markdown_renderer.js").read_bytes(),
+        media_type="application/javascript",
+    )
+
+
+@router.get("/ui/markdown-styles.css", include_in_schema=False)
+async def markdown_styles_css() -> Response:
+    return Response(
+        content=(_UI_DIR / "markdown_styles.css").read_bytes(),
+        media_type="text/css",
+    )
 
 
 @router.get("/docs", include_in_schema=False)

@@ -7,6 +7,9 @@ const gatewayTarget = process.env.FREEROUTER_API_TARGET || `http://127.0.0.1:${g
 export default defineConfig({
   base: "/app/",
   plugins: [react()],
+  test: {
+    setupFiles: ["./src/lib/markdown_setup.ts"],
+  },
   server: {
     port: 5173,
     strictPort: true,
