@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.api.gateway_headers import GatewayRouteInfo, GatewayRoutingContext, gateway_route_headers
 from app.api.gateway_response import normalize_chat_completion_body, normalize_openai_sse_stream
+from app.api.stream_monitor import StreamMonitorTracker, monitor_live_value
 from app.api.limited_streaming_response import (
     GatewayLimiterLease,
     RoutedLimitedStreamingResponse,
@@ -38,6 +39,10 @@ from app.settings import get_settings
 from app.state import StateManager
 
 WEB_SEARCH_TOOL = {"type": "web_search_preview"}
+
+
+def _live_monitor_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: monitor_live_value(value) for key, value in payload.items()}
 
 
 def _monitor_trim(
@@ -163,7 +168,7 @@ async def _publish_route_stream_diag(
             await monitor.publish(
                 event_type="usage_update",
                 request_id=request_id,
-                payload={"usage": _monitor_trim(dict(diag.usage))},
+                payload={"usage": monitor_live_value(dict(diag.usage))},
             )
         return
     if diag.event_type == "route_trying":
@@ -226,13 +231,26 @@ async def _publish_route_stream_diag(
         )
         return
     if diag.event_type == "route_selected":
+        selected_payload = {
+            "provider_name": diag.provider_name,
+            "route_id": diag.route_id,
+            "model_id": diag.model_id,
+        }
         await monitor.publish(
             event_type="route_selected",
             request_id=request_id,
+            payload=selected_payload,
+        )
+        await monitor.publish(
+            event_type="route_attempt",
+            request_id=request_id,
             payload={
-                "provider_name": diag.provider_name,
-                "route_id": diag.route_id,
-                "model_id": diag.model_id,
+                "route_event": {
+                    "type": "route_selected",
+                    "provider_name": diag.provider_name,
+                    "route_id": diag.route_id,
+                    "model_id": diag.model_id,
+                }
             },
         )
         return
@@ -267,7 +285,7 @@ async def _route_chat_completion_stream_request(
             "stream": True,
             "model": payload.get("model"),
             "client_ip": client_ip,
-            "request_payload": _monitor_trim(payload),
+            "request_payload": monitor_live_value(payload),
         },
     )
 
@@ -293,12 +311,9 @@ async def _route_chat_completion_stream_request(
     settings = get_settings()
     lease = GatewayLimiterLease(limiter)
     routing = GatewayRoutingContext()
-    selected_provider = ""
-    selected_route = ""
-    selected_model = ""
+    tracker = StreamMonitorTracker(requested_model=payload.get("model"))
 
     async def openai_sse_stream():
-        nonlocal selected_provider, selected_route, selected_model
         completed = False
         try:
             async for part in normalize_openai_sse_stream(
@@ -310,18 +325,21 @@ async def _route_chat_completion_stream_request(
                 payload.get("model"),
             ):
                 if isinstance(part, RouteStreamDiag):
+                    tracker.record_diag(part)
                     await _publish_route_stream_diag(monitor, request_id, part)
                     if part.event_type == "route_selected":
-                        selected_provider = part.provider_name or ""
-                        selected_route = part.route_id or ""
-                        selected_model = part.model_id or ""
-                        routing.set(selected_provider, selected_route, selected_model)
+                        routing.set(
+                            part.provider_name or "",
+                            part.route_id or "",
+                            part.model_id or "",
+                        )
                         if (
                             settings.streaming_release_slot_after_route_selected
                             and lease.held
                         ):
                             lease.release()
                 else:
+                    tracker.record_openai_sse(part)
                     yield part
             completed = True
         except UnsupportedCapabilities as exc:
@@ -383,13 +401,12 @@ async def _route_chat_completion_stream_request(
                 await monitor.publish(
                     event_type="request_completed",
                     request_id=request_id,
-                    payload={
-                        "status_code": 200,
-                        "provider_name": selected_provider,
-                        "route_id": selected_route,
-                        "model_id": selected_model,
-                        "latency_ms": round((perf_counter() - started_at) * 1000),
-                    },
+                    payload=_live_monitor_payload(
+                        tracker.completed_payload(
+                            status_code=200,
+                            latency_ms=round((perf_counter() - started_at) * 1000),
+                        )
+                    ),
                 )
 
     return RoutedLimitedStreamingResponse(
@@ -426,7 +443,7 @@ async def _route_chat_completion_request(
             "stream": bool(payload.get("stream")),
             "model": payload.get("model"),
             "client_ip": client_ip,
-            "request_payload": _monitor_trim(payload),
+            "request_payload": monitor_live_value(payload),
         },
     )
 
@@ -540,23 +557,23 @@ async def _route_chat_completion_request(
     await monitor.publish(
         event_type="request_completed",
         request_id=request_id,
-        payload={
-            "status_code": 200,
-            "provider_name": result.provider_name,
-            "route_id": result.route_id,
-            "model_id": result.model_id,
-            "attempts": len(result.attempts),
-            "usage": _monitor_trim(
-                response_body.get("usage") if isinstance(response_body, dict) else None
-            ),
-            "attempts_detail": [asdict(attempt) for attempt in result.attempts],
-            "assistant_text": _monitor_trim(
-                _assistant_text_from_response_body(response_body),
-                max_string=8000,
-            ),
-            "response_body": _monitor_trim(response_body),
-            "latency_ms": round((perf_counter() - started_at) * 1000),
-        },
+        payload=_live_monitor_payload(
+            {
+                "status_code": 200,
+                "model": payload.get("model") or "auto",
+                "provider_name": result.provider_name,
+                "route_id": result.route_id,
+                "model_id": result.model_id,
+                "attempts": len(result.attempts),
+                "usage": response_body.get("usage")
+                if isinstance(response_body, dict)
+                else None,
+                "attempts_detail": [asdict(attempt) for attempt in result.attempts],
+                "assistant_text": _assistant_text_from_response_body(response_body),
+                "response_body": response_body,
+                "latency_ms": round((perf_counter() - started_at) * 1000),
+            }
+        ),
     )
     return JSONResponse(
         content=response_body,
@@ -579,6 +596,10 @@ async def _route_responses_stream_request(
     services = get_app_services(request)
     router = services.waterfall_router
     limiter = services.request_limiter
+    monitor = services.live_monitor
+    request_id = uuid.uuid4().hex[:12]
+    started_at = perf_counter()
+    client_ip = request.client.host if request.client else None
     response_id = f"resp_{uuid.uuid4().hex}"
 
     try:
@@ -586,8 +607,21 @@ async def _route_responses_stream_request(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    await monitor.publish(
+        event_type="request_started",
+        request_id=request_id,
+        payload={
+            "path": "/v1/responses",
+            "stream": True,
+            "model": requested_model or payload.get("model"),
+            "client_ip": client_ip,
+            "request_payload": monitor_live_value(payload),
+        },
+    )
+
     lease = GatewayLimiterLease(limiter)
     routing = GatewayRoutingContext()
+    tracker = StreamMonitorTracker(requested_model=requested_model or payload.get("model"))
     rejected_response = JSONResponse(
         status_code=429,
         content={
@@ -611,6 +645,8 @@ async def _route_responses_stream_request(
                 requested_model,
             ):
                 if isinstance(part, RouteStreamDiag):
+                    tracker.record_diag(part)
+                    await _publish_route_stream_diag(monitor, request_id, part)
                     if part.event_type == "route_selected":
                         routing.set(
                             part.provider_name or "",
@@ -618,6 +654,7 @@ async def _route_responses_stream_request(
                             part.model_id or "",
                         )
                     continue
+                tracker.record_openai_sse(part)
                 carry += part
                 blocks, carry = _split_sse_event_blocks(carry)
                 for block in blocks:
@@ -695,6 +732,17 @@ async def _route_responses_stream_request(
             yield responses_stream_done()
         finally:
             lease.release()
+            if completed:
+                await monitor.publish(
+                    event_type="request_completed",
+                    request_id=request_id,
+                    payload=_live_monitor_payload(
+                        tracker.completed_payload(
+                            status_code=200,
+                            latency_ms=round((perf_counter() - started_at) * 1000),
+                        )
+                    ),
+                )
 
     return RoutedLimitedStreamingResponse(
         responses_sse_stream(),

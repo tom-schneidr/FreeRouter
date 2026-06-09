@@ -16,7 +16,12 @@ from app.anthropic_compat import (
     chat_body_to_anthropic_message,
     messages_payload_to_chat,
 )
-from app.api.chat_handlers import _monitor_trim, _publish_route_stream_diag
+from app.api.chat_handlers import (
+    _assistant_text_from_response_body,
+    _live_monitor_payload,
+    _publish_route_stream_diag,
+)
+from app.api.stream_monitor import StreamMonitorTracker, monitor_live_value
 from app.api.gateway_headers import GatewayRouteInfo, GatewayRoutingContext, gateway_route_headers
 from app.api.gateway_response import normalize_openai_sse_stream
 from app.api.limited_streaming_response import (
@@ -110,7 +115,7 @@ async def messages(request: Request) -> Response:
             "stream": stream,
             "model": requested_model,
             "client_ip": client_ip,
-            "request_payload": _monitor_trim(anthropic_payload),
+            "request_payload": monitor_live_value(anthropic_payload),
         },
     )
 
@@ -225,15 +230,21 @@ async def _route_anthropic_non_stream(
     await monitor.publish(
         event_type="request_completed",
         request_id=request_id,
-        payload={
-            "status_code": 200,
-            "provider_name": result.provider_name,
-            "route_id": result.route_id,
-            "model_id": result.model_id,
-            "attempts": len(result.attempts),
-            "usage": _monitor_trim(anthropic_message.get("usage")),
-            "latency_ms": round((perf_counter() - started_at) * 1000),
-        },
+        payload=_live_monitor_payload(
+            {
+                "status_code": 200,
+                "model": requested_model or "auto",
+                "provider_name": result.provider_name,
+                "route_id": result.route_id,
+                "model_id": result.model_id,
+                "attempts": len(result.attempts),
+                "usage": anthropic_message.get("usage"),
+                "attempts_detail": [asdict(attempt) for attempt in result.attempts],
+                "assistant_text": _assistant_text_from_response_body(result.body),
+                "response_body": anthropic_message,
+                "latency_ms": round((perf_counter() - started_at) * 1000),
+            }
+        ),
     )
     return JSONResponse(
         content=anthropic_message,
@@ -262,12 +273,9 @@ async def _route_anthropic_stream(
     message_id = f"msg_{uuid.uuid4().hex}"
     lease = GatewayLimiterLease(limiter)
     routing = GatewayRoutingContext()
-    selected_provider = ""
-    selected_route = ""
-    selected_model = ""
+    tracker = StreamMonitorTracker(requested_model=requested_model)
 
     async def anthropic_sse_stream():
-        nonlocal selected_provider, selected_route, selected_model
         carry = ""
         completed = False
         mapper = AnthropicStreamMapper(message_id=message_id, model=requested_model)
@@ -280,18 +288,21 @@ async def _route_anthropic_stream(
                 requested_model,
             ):
                 if isinstance(part, RouteStreamDiag):
+                    tracker.record_diag(part)
                     await _publish_route_stream_diag(monitor, request_id, part)
                     if part.event_type == "route_selected":
-                        selected_provider = part.provider_name or ""
-                        selected_route = part.route_id or ""
-                        selected_model = part.model_id or ""
-                        routing.set(selected_provider, selected_route, selected_model)
+                        routing.set(
+                            part.provider_name or "",
+                            part.route_id or "",
+                            part.model_id or "",
+                        )
                         if (
                             settings.streaming_release_slot_after_route_selected
                             and lease.held
                         ):
                             lease.release()
                     continue
+                tracker.record_openai_sse(part)
                 carry += part
                 blocks, carry = _split_sse_event_blocks(carry)
                 for block in blocks:
@@ -362,13 +373,12 @@ async def _route_anthropic_stream(
                 await monitor.publish(
                     event_type="request_completed",
                     request_id=request_id,
-                    payload={
-                        "status_code": 200,
-                        "provider_name": selected_provider,
-                        "route_id": selected_route,
-                        "model_id": selected_model,
-                        "latency_ms": round((perf_counter() - started_at) * 1000),
-                    },
+                    payload=_live_monitor_payload(
+                        tracker.completed_payload(
+                            status_code=200,
+                            latency_ms=round((perf_counter() - started_at) * 1000),
+                        )
+                    ),
                 )
 
     async def on_rejected() -> None:

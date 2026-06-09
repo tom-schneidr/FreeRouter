@@ -9,12 +9,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.api.chat_handlers import (
-    _monitor_trim,
+    _live_monitor_payload,
     _payload_with_required_web_search,
     _route_chat_completion_request,
     _route_chat_completion_stream_request,
     _route_responses_stream_request,
 )
+from app.api.stream_monitor import monitor_live_value
 from app.api.gateway_headers import GatewayRoutingContext
 from app.api.limited_streaming_response import GatewayLimiterLease, RoutedLimitedStreamingResponse
 from app.app_services import get_app_services
@@ -132,7 +133,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
             "stream": True,
             "model": payload.get("model"),
             "client_ip": client_ip,
-            "request_payload": _monitor_trim(payload),
+            "request_payload": monitor_live_value(payload),
         },
     )
     rejected_response = JSONResponse(
@@ -167,7 +168,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
                 await monitor.publish(
                     event_type="usage_update",
                     request_id=request_id,
-                    payload={"usage": _monitor_trim(usage)},
+                    payload={"usage": monitor_live_value(usage)},
                 )
             return
         if event_type == "route_selected":
@@ -183,7 +184,19 @@ async def chat_completions_stream_route(request: Request) -> Response:
                     "provider_name": event_payload.get("provider"),
                     "route_id": event_payload.get("route_id"),
                     "model_id": event_payload.get("model_id"),
-                    "stream_event": _monitor_trim(event_payload),
+                    "stream_event": monitor_live_value(event_payload),
+                },
+            )
+            await monitor.publish(
+                event_type="route_attempt",
+                request_id=request_id,
+                payload={
+                    "route_event": {
+                        "type": "route_selected",
+                        "provider_name": event_payload.get("provider"),
+                        "route_id": event_payload.get("route_id"),
+                        "model_id": event_payload.get("model_id"),
+                    }
                 },
             )
             if (
@@ -212,7 +225,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
                 event_type="response_content",
                 request_id=request_id,
                 payload={
-                    "stream_event": _monitor_trim(event_payload),
+                    "stream_event": monitor_live_value(event_payload),
                     "content": event_payload.get("text") or "",
                 },
             )
@@ -225,7 +238,7 @@ async def chat_completions_stream_route(request: Request) -> Response:
                     "status_code": 502,
                     "reason": "stream_error",
                     "message": event_payload.get("message"),
-                    "response_body": _monitor_trim(event_payload),
+                    "response_body": monitor_live_value(event_payload),
                     "latency_ms": round((perf_counter() - started_at) * 1000),
                 },
             )
@@ -235,24 +248,17 @@ async def chat_completions_stream_route(request: Request) -> Response:
             await monitor.publish(
                 event_type="request_completed",
                 request_id=request_id,
-                payload={
-                    "status_code": 200,
-                    "provider_name": event_payload.get("provider"),
-                    "route_id": event_payload.get("route_id"),
-                    "model_id": event_payload.get("model_id"),
-                    "route_event": {
-                        "type": "success",
+                payload=_live_monitor_payload(
+                    {
+                        "status_code": 200,
                         "provider_name": event_payload.get("provider"),
                         "route_id": event_payload.get("route_id"),
                         "model_id": event_payload.get("model_id"),
-                    },
-                    "assistant_text": _monitor_trim(
-                        event_payload.get("content") or "",
-                        max_string=8000,
-                    ),
-                    "response_body": _monitor_trim(event_payload),
-                    "latency_ms": round((perf_counter() - started_at) * 1000),
-                },
+                        "assistant_text": event_payload.get("content") or "",
+                        "response_body": event_payload,
+                        "latency_ms": round((perf_counter() - started_at) * 1000),
+                    }
+                ),
             )
             done_published = True
 
