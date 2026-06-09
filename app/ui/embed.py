@@ -18,7 +18,9 @@ EMBED_HEAD_FRAGMENT = """
       html.embed-mode main {
         flex: 1;
         min-height: 0;
-        overflow: auto;
+        overflow-x: hidden;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
         max-width: none;
         margin: 0;
         padding: 0.75rem 1rem;
@@ -36,18 +38,15 @@ EMBED_HEAD_FRAGMENT = """
         max-height: none;
         min-height: 0;
       }
-      html.embed-mode main {
-        overflow-x: hidden;
-      }
       html.embed-mode .table-wrap:not(.usage-wrap) {
         max-width: 100%;
       }
-      html.embed-mode table:not(.usage-table) {
+      html.embed-mode table:not(.usage-table):not(.live-table) {
         min-width: 0;
         width: 100%;
       }
-      html.embed-mode table:not(.usage-table) th,
-      html.embed-mode table:not(.usage-table) td {
+      html.embed-mode table:not(.usage-table):not(.live-table) th,
+      html.embed-mode table:not(.usage-table):not(.live-table) td {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
