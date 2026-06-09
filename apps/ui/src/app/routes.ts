@@ -29,22 +29,16 @@ export const NAV_ITEMS = [...PRIMARY_NAV_ITEMS, SETTINGS_NAV_ITEM] as const;
 export type SectionId = (typeof NAV_ITEMS)[number]["id"];
 
 /** Sections that fill the main pane edge-to-edge. */
-export const FILL_SECTIONS = new Set<SectionId>(["models"]);
-
-/** Legacy HTML pages embedded for pixel-perfect parity. */
-export const LEGACY_EMBED_SECTIONS: Partial<Record<SectionId, string>> = {
-  chat: "/chat?embed=1",
-  usage: "/status?embed=1",
-  health: "/health?embed=1",
-  live: "/live?embed=1",
-};
+export const FILL_SECTIONS = new Set<SectionId>([
+  "models",
+  "chat",
+  "usage",
+  "health",
+  "live",
+]);
 
 export function isFillSection(section: SectionId): boolean {
-  return FILL_SECTIONS.has(section) || section in LEGACY_EMBED_SECTIONS;
-}
-
-export function isLegacyEmbedSection(section: SectionId): boolean {
-  return section in LEGACY_EMBED_SECTIONS;
+  return FILL_SECTIONS.has(section);
 }
 
 export type NavItem = {

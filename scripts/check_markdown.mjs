@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-vm.runInThisContext(readFileSync(new URL("../app/ui/markdown_renderer.js", import.meta.url), "utf8"));
+vm.runInThisContext(readFileSync(new URL("../apps/ui/src/lib/markdown_renderer.js", import.meta.url), "utf8"));
 const { renderMarkdown } = globalThis;
 
 const src = `You can also use __bold__ and _italic_. Here is ~~strikethrough~~.

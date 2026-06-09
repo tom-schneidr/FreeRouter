@@ -1,7 +1,6 @@
 param(
     [int]$ApiPort = 8000,
-    [switch]$NoInstall,
-    [switch]$ReplaceExisting
+    [switch]$NoInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -135,15 +134,16 @@ function Test-FreeRouterHealth {
     return $false
 }
 
-function Test-LivePageIsCurrent {
+function Test-BackendIsCurrent {
     param([int]$Port)
 
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/live?embed=1" -TimeoutSec 3
-        if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 500) {
+        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/gateway/health.json" -TimeoutSec 3
+        if ($null -eq $health.status) {
             return $false
         }
-        return ($response.Content -notmatch "<th>Request</th>") -and ($response.Content -notmatch "Upstream usage")
+        $snapshot = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/v1/gateway/live/snapshot" -TimeoutSec 3
+        return $null -ne $snapshot.data
     }
     catch {
         return $false
@@ -159,7 +159,7 @@ function Resolve-DevBackendPort {
         Start-Sleep -Seconds 2
     }
 
-    if (Test-FreeRouterHealth -Port $PreferredPort -and (Test-LivePageIsCurrent -Port $PreferredPort)) {
+    if (Test-FreeRouterHealth -Port $PreferredPort -and (Test-BackendIsCurrent -Port $PreferredPort)) {
         Write-Host "Reusing current dev backend on 127.0.0.1:$PreferredPort."
         return @{
             Port = $PreferredPort
@@ -189,7 +189,7 @@ function Resolve-DevBackendPort {
     }
 }
 
-function Wait-ForLivePageCurrent {
+function Wait-ForBackendCurrent {
     param(
         [int]$Port,
         [int]$Seconds = 35
@@ -197,12 +197,12 @@ function Wait-ForLivePageCurrent {
 
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $deadline) {
-        if (Test-LivePageIsCurrent -Port $Port) {
+        if (Test-BackendIsCurrent -Port $Port) {
             return
         }
         Start-Sleep -Milliseconds 500
     }
-    throw "Timed out waiting for current /live HTML on 127.0.0.1:$Port"
+    throw "Timed out waiting for current FreeRouter backend on 127.0.0.1:$Port"
 }
 
 function Test-PortOpen {
@@ -342,7 +342,7 @@ try {
         Start-DevBackendSupervisorJob -Port $ApiPort -ProjectRoot $ProjectRoot -VenvPython $VenvPython -DesktopToken $desktopToken
 
         Wait-ForUrl -Url "http://127.0.0.1:$ApiPort/v1/gateway/health.json"
-        Wait-ForLivePageCurrent -Port $ApiPort
+        Wait-ForBackendCurrent -Port $ApiPort
     }
 
     $env:FREEROUTER_DEV_BACKEND = "1"

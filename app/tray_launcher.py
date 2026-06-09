@@ -263,13 +263,13 @@ class FreeRouterTrayApp:
         self._open_url("/")
 
     def open_chat(self) -> None:
-        self._open_url("/chat")
+        self._open_url("/app#chat")
 
     def open_models(self) -> None:
-        self._open_url("/models")
+        self._open_url("/app#models")
 
     def open_live_traffic(self) -> None:
-        self._open_url("/live")
+        self._open_url("/app#live")
 
     def _open_url(self, path: str) -> None:
         import webbrowser

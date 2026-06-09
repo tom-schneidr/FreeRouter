@@ -6,14 +6,16 @@ import brandLogo from "../assets/brand/logo.png";
 import { desktopHeaders, fetchJson, queryClient } from "../api/client";
 import type { GatewayHealth, ModelRoute, ProviderStatus } from "../api/types";
 import { DocsOverlay } from "../components/DocsOverlay";
-import { EmbedFrame } from "../components/EmbedFrame";
 import { BackupsView } from "../features/backups/BackupsView";
+import { ChatView } from "../features/chat/ChatView";
 import { DashboardView } from "../features/dashboard/DashboardView";
+import { HealthView } from "../features/health/HealthView";
+import { LiveView } from "../features/live/LiveView";
 import { LogsView } from "../features/logs/LogsView";
 import { ModelsView } from "../features/models/ModelsView";
 import { SettingsView } from "../features/settings/SettingsView";
+import { UsageView } from "../features/usage/UsageView";
 import { useDesktopReady, useDesktopToken, useGatewayQuery } from "../hooks/useDesktop";
-import { embedSrcWithReload } from "../lib/embedSrc";
 import { copyText } from "../lib/format";
 import { waitForGatewayHealth } from "../lib/gatewayHealth";
 import {
@@ -21,30 +23,19 @@ import {
   SETTINGS_NAV_ITEM,
   initialSection,
   isFillSection,
-  isLegacyEmbedSection,
-  LEGACY_EMBED_SECTIONS,
   type SectionId,
 } from "./routes";
 import "../styles.css";
 import "../theme.css";
 
-// Re-export for tests if needed
 export { initialSection };
 
 function FreeRouterShell() {
   const desktopToken = useDesktopToken();
   const [activeSection, setActiveSection] = React.useState<SectionId>(() => initialSection());
-  const [loadedEmbeds, setLoadedEmbeds] = React.useState<Set<string>>(() => new Set());
-  const [embedReloadKey, setEmbedReloadKey] = React.useState(0);
   const [actionNotice, setActionNotice] = React.useState<string | null>(null);
   const [restarting, setRestarting] = React.useState(false);
   const [docsOpen, setDocsOpen] = React.useState(false);
-
-  React.useEffect(() => {
-    if (isLegacyEmbedSection(activeSection)) {
-      setLoadedEmbeds((current) => new Set(current).add(activeSection));
-    }
-  }, [activeSection]);
 
   const desktopReady = useDesktopReady(desktopToken);
   const health = useGatewayQuery<GatewayHealth>("gateway-health", "/v1/gateway/health.json", 5000);
@@ -77,7 +68,6 @@ function FreeRouterShell() {
 
   function refreshAll() {
     void queryClient.invalidateQueries();
-    setEmbedReloadKey((current) => current + 1);
     setActionNotice("Refreshed");
   }
 
@@ -100,7 +90,6 @@ function FreeRouterShell() {
         return;
       }
       await queryClient.invalidateQueries();
-      setEmbedReloadKey((current) => current + 1);
       setActionNotice("Server restarted");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Restart failed";
@@ -226,20 +215,17 @@ function FreeRouterShell() {
               providers={providerRows}
             />
           )}
+          {activeSection === "chat" && <ChatView />}
           {activeSection === "models" && <ModelsView />}
-          {Array.from(loadedEmbeds).map((sectionId) => {
-            const src = LEGACY_EMBED_SECTIONS[sectionId as SectionId];
-            if (!src) return null;
-            return (
-              <div
-                key={sectionId}
-                className={`embed-panel ${activeSection === sectionId ? "active" : ""}`}
-                aria-hidden={activeSection !== sectionId}
-              >
-                <EmbedFrame title={sectionId} src={embedSrcWithReload(src, embedReloadKey)} />
-              </div>
-            );
-          })}
+          {activeSection === "usage" && (
+            <UsageView
+              providers={providerRows}
+              loading={providers.isLoading}
+              onReload={() => void queryClient.invalidateQueries({ queryKey: ["provider-status"] })}
+            />
+          )}
+          {activeSection === "health" && <HealthView />}
+          {activeSection === "live" && <LiveView />}
           {activeSection === "settings" && (
             <SettingsView
               desktopToken={desktopToken}

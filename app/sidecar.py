@@ -7,8 +7,8 @@ from pathlib import Path
 import uvicorn
 
 from app.desktop_runtime import DEFAULT_HOST, DEFAULT_PORT
-from app.desktop_settings import launcher_host_port, migrate_settings_from_legacy_env
-from app.runtime_paths import APP_DATA_DIR_ENV, configure_desktop_runtime, legacy_env_candidates
+from app.desktop_settings import launcher_host_port
+from app.runtime_paths import APP_DATA_DIR_ENV, configure_desktop_runtime
 
 
 def main() -> None:
@@ -21,7 +21,6 @@ def main() -> None:
     if root:
         runtime_root = Path(root)
         configure_desktop_runtime(runtime_root)
-        migrate_settings_from_legacy_env(runtime_root, legacy_env_candidates(runtime_root))
     env_host, env_port = launcher_host_port(Path(root or os.getcwd()))
     host = args.host or os.getenv("GATEWAY_HOST") or env_host or DEFAULT_HOST
     port = args.port or int(os.getenv("GATEWAY_PORT") or env_port or DEFAULT_PORT)

@@ -12,7 +12,6 @@ from app.desktop_icon import _icons_equivalent
 from app.desktop_settings import (
     MASKED_SECRET,
     launcher_host_port,
-    migrate_settings_from_legacy_env,
     settings_payload,
     write_settings,
 )
@@ -82,40 +81,6 @@ def test_desktop_settings_append_missing_known_keys(tmp_path):
     written = env_path.read_text(encoding="utf-8")
     assert "# Added by FreeRouter desktop app" in written
     assert "DATABASE_PATH=./data/test.sqlite3" in written
-
-
-def test_desktop_settings_migrate_legacy_env_when_provider_keys_are_missing(tmp_path):
-    app_data = tmp_path / "app-data"
-    legacy = tmp_path / "project" / ".env"
-    legacy.parent.mkdir()
-    legacy.write_text(
-        "GROQ_API_KEY=secret\nREQUEST_TIMEOUT_SECONDS=15\nUNKNOWN=value\n",
-        encoding="utf-8",
-    )
-
-    migrated = migrate_settings_from_legacy_env(app_data, [legacy])
-
-    written = (app_data / ".env").read_text(encoding="utf-8")
-    assert migrated is True
-    assert "GROQ_API_KEY=secret" in written
-    assert "REQUEST_TIMEOUT_SECONDS=15" in written
-    assert "UNKNOWN=value" not in written
-
-
-def test_desktop_settings_migration_does_not_overwrite_existing_provider_keys(tmp_path):
-    app_data = tmp_path / "app-data"
-    app_data.mkdir()
-    (app_data / ".env").write_text("GROQ_API_KEY=existing\n", encoding="utf-8")
-    legacy = tmp_path / "project.env"
-    legacy.write_text("GROQ_API_KEY=legacy\nOPENROUTER_API_KEY=legacy-openrouter\n", encoding="utf-8")
-
-    migrated = migrate_settings_from_legacy_env(app_data, [legacy])
-
-    written = (app_data / ".env").read_text(encoding="utf-8")
-    assert migrated is True
-    assert "GROQ_API_KEY=existing" in written
-    assert "GROQ_API_KEY=legacy" not in written
-    assert "OPENROUTER_API_KEY=legacy-openrouter" in written
 
 
 def test_desktop_settings_validate_numeric_values(tmp_path):

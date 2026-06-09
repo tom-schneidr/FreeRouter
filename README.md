@@ -252,7 +252,8 @@ If another coding agent is integrating with this repository, give it these rules
 |   |-- react_app.py            # Mounts built React UI at /app
 |   |-- endpoint_diagnosis.py   # Catalog diagnosis and reviewable update suggestions
 |   |-- local_backup.py         # Local state export/import CLI
-|   |-- main.py                 # FastAPI app and OpenAI-compatible endpoints
+|   |-- main.py                 # FastAPI app entrypoint and router wiring
+|   |-- stream_route.py         # Chat UI streaming API (/v1/chat/completions/stream-route)
 |   |-- model_catalog.py        # Editable ranked model catalog defaults
 |   |-- model_discovery.py      # Structured /models payload discovery helpers
 |   |-- provider_errors.py      # Provider error classification helpers
@@ -320,7 +321,37 @@ Point OpenAI-compatible clients at:
 http://localhost:8000/v1
 ```
 
-Open the control plane UI at `http://localhost:8000/app` (or `npm run dev` for Vite on port 5173 with the same `/app` path).
+Open the control plane UI at `http://localhost:8000/app`.
+
+## Desktop App
+
+Day-to-day development:
+
+```powershell
+npm run desktop:dev
+```
+
+This builds the React UI, starts a source backend on `http://127.0.0.1:8000`, and launches the Tauri shell against `http://127.0.0.1:8000/app`.
+
+Build the packaged desktop executable:
+
+```powershell
+npm run build:desktop
+```
+
+Create Start Menu / Desktop shortcuts after a build:
+
+```powershell
+.\install-desktop.ps1
+```
+
+Stop stray local gateway processes:
+
+```powershell
+npm run stop
+```
+
+See `desktop-help.html` for tray behavior and shortcut details.
 
 ## Model Ranking
 
@@ -403,6 +434,7 @@ GET  /v1/providers/status
 POST /v1/chat/completions
 POST /v1/chat/completions/web-search
 POST /v1/chat/completions/stream-route
+POST /v1/messages
 ```
 
 `/v1/chat/completions` returns provider completion content in the OpenAI shape, but the

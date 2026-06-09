@@ -1,0 +1,56 @@
+/* Embed layout rules ported from app/ui/embed.py for native React sections */
+.section-embed-layout {
+  height: 100%;
+  max-height: 100%;
+  margin: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.section-embed-layout .section-embed-main {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  max-width: none;
+  margin: 0;
+  padding: 0.75rem 1rem;
+}
+
+.section-embed-layout .app {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  display: flex;
+  overflow: hidden;
+}
+
+.section-embed-layout .chat-panel {
+  min-height: 0;
+}
+
+.section-embed-layout .route-panel {
+  height: auto;
+  max-height: none;
+  min-height: 0;
+}
+
+.section-embed-layout .table-wrap:not(.usage-wrap) {
+  max-width: 100%;
+}
+
+.section-embed-layout table:not(.usage-table):not(.live-table) {
+  min-width: 0;
+  width: 100%;
+}
+
+.section-embed-layout table:not(.usage-table):not(.live-table) th,
+.section-embed-layout table:not(.usage-table):not(.live-table) td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}

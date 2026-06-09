@@ -1,5 +1,5 @@
 /**
- * Shared markdown renderer for legacy chat/live pages and the React UI.
+ * Shared markdown renderer for the React control plane.
  */
 
 function escapeHtml(value) {

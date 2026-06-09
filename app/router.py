@@ -163,7 +163,7 @@ def _delta_has_tool_calls(payload_obj: dict[str, Any]) -> bool:
 
 
 def _delta_visible_text_from_chunk(payload_obj: dict[str, Any]) -> str:
-    """Assistant-visible text in one SSE JSON chunk: message delta content, reasoning, legacy text."""
+    """Assistant-visible text in one SSE JSON chunk: message delta content, reasoning, or text."""
     choices = payload_obj.get("choices")
     if not isinstance(choices, list) or not choices:
         return ""

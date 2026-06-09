@@ -73,7 +73,7 @@ def test_root_redirects_to_app(tmp_path, monkeypatch):
     assert response.headers["location"] == "/app"
 
 
-def test_legacy_app_next_route_is_gone(tmp_path, monkeypatch):
+def test_app_next_route_is_gone(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         response = client.get("/app-next", follow_redirects=False)
     assert response.status_code == 404
@@ -111,19 +111,9 @@ def test_react_dist_path_can_resolve_pyinstaller_bundle(tmp_path, monkeypatch):
     assert react_dist_path(Path("missing-source-root")) == bundled_dist
 
 
-def test_embedded_legacy_routes_still_support_desktop_shell(tmp_path, monkeypatch):
+def test_removed_html_routes_return_not_found(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
-        for path in ("/chat", "/status", "/health", "/live"):
-            response = client.get(path)
-            assert response.status_code == 200
-            assert "fr-embed-styles" in response.text
-            assert "embed-mode" in response.text
-            assert "fr-theme-styles" in response.text
-
-
-def test_removed_legacy_control_plane_routes_return_not_found(tmp_path, monkeypatch):
-    with _client(tmp_path, monkeypatch) as client:
-        for path in ("/models",):
+        for path in ("/chat", "/status", "/health", "/live", "/models", "/ui/markdown-renderer.js"):
             response = client.get(path)
             assert response.status_code == 404
 

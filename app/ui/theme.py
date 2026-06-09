@@ -591,23 +591,3 @@ def with_theme_sync(html: str) -> str:
     if "fr-theme-styles" not in html and "</head>" in html:
         html = html.replace("</head>", f"{THEME_SYNC_HEAD_FRAGMENT}\n  </head>", 1)
     return html
-
-
-def with_theme_support(html: str, *, nav: bool = True, floating: bool = False, controls: bool = True) -> str:
-    """Inject shared FreeRouter theme support into an HTML document."""
-
-    has_toggle = '<button class="fr-theme-toggle"' in html
-    if "fr-theme-styles" not in html and "</head>" in html:
-        fragment = THEME_HEAD_FRAGMENT if controls else THEME_SYNC_HEAD_FRAGMENT
-        html = html.replace("</head>", f"{fragment}\n  </head>", 1)
-    if not controls:
-        return html
-    if nav and not has_toggle and "</nav>" in html:
-        html = html.replace("</nav>", f"{THEME_TOGGLE_BUTTON.rstrip()}\n        </nav>", 1)
-        has_toggle = True
-    if floating and not has_toggle:
-        if "</body>" in html:
-            html = html.replace("</body>", f"{THEME_FLOATING_BUTTON.rstrip()}\n  </body>", 1)
-        elif "<body>" in html:
-            html = html.replace("<body>", f"<body>\n{THEME_FLOATING_BUTTON.rstrip()}", 1)
-    return html

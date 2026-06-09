@@ -103,28 +103,6 @@ def project_env_path(project_root: Path) -> Path:
     return project_root / ".env"
 
 
-def migrate_settings_from_legacy_env(project_root: Path, candidates: list[Path]) -> bool:
-    path = project_env_path(project_root)
-    existing = read_env_values(path)
-
-    for candidate in candidates:
-        if candidate == path or not candidate.exists():
-            continue
-        legacy = read_env_values(candidate)
-        updates = {
-            setting.key: legacy[setting.key]
-            for setting in DESKTOP_SETTINGS
-            if setting.key in legacy and setting.key not in existing and legacy[setting.key].strip()
-        }
-        if not updates:
-            continue
-        project_root.mkdir(parents=True, exist_ok=True)
-        lines = _updated_env_lines(path, updates, existing)
-        path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-        return True
-    return False
-
-
 def read_env_values(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.exists():

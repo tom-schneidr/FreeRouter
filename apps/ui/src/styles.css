@@ -370,28 +370,7 @@ button:hover {
   position: relative;
 }
 
-.embed-panel {
-  display: none;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-}
-
-.embed-panel.active {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.embed-frame {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  border: none;
-  background: var(--bg-primary, #07111f);
-  display: block;
-}
-
+.content-fill > .section-embed-layout,
 .content-fill > .section-stack,
 .content-fill > .chat-layout,
 .content-fill > .live-view {
@@ -400,6 +379,7 @@ button:hover {
   width: 100%;
   max-width: none;
   margin: 0;
+  align-self: stretch;
 }
 
 .content-fill > .section-stack {

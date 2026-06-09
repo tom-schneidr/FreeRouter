@@ -12,7 +12,6 @@ CORE_ROOT = ROOT / "app"
 
 FORBIDDEN_PREFIXES = (
     "app.ui",
-    "app.legacy_pages",
     "app.desktop_api",
     "app.desktop_runtime",
     "app.desktop_settings",

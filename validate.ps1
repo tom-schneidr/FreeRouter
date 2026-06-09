@@ -25,6 +25,14 @@ if (-not $NoLint) {
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+    & $Python scripts/check_import_boundaries.py
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $Python scripts/check_app_state_access.py
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $Python scripts/check_module_sizes.py
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $Python -m pyright
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 if (-not $NoFrontend) {
