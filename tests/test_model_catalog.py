@@ -336,7 +336,17 @@ def test_discovered_routes_are_inserted_by_auto_rank_and_enabled(tmp_path):
     assert all_routes[0].rank_score is not None
 
 
-def test_add_discovered_inserts_by_score_without_reordering_existing(tmp_path):
+def test_add_discovered_inserts_by_score_without_reordering_existing(tmp_path, monkeypatch):
+    from app.benchmark_store import reset_benchmark_store_for_tests
+    from app.model_ranking import invalidate_dynamic_benchmark_cache
+    from app.settings import get_settings
+
+    benchmark_path = str(tmp_path / "empty_benchmark_scores.json")
+    monkeypatch.setenv("BENCHMARK_SCORES_PATH", benchmark_path)
+    get_settings.cache_clear()
+    reset_benchmark_store_for_tests()
+    invalidate_dynamic_benchmark_cache()
+
     catalog = ModelCatalog(str(tmp_path / "models.json"))
     catalog.replace_routes(
         [
@@ -369,11 +379,14 @@ def test_add_discovered_inserts_by_score_without_reordering_existing(tmp_path):
     )
     catalog.add_discovered_routes([discovered])
 
+    # Static AA scores: gpt-oss-20b (24) < gemini-2.5-flash (30) < gpt-oss-120b (33).
+    # Existing routes keep their relative order; the newcomer slots between them.
     assert [route.route_id for route in catalog.all_routes()] == [
         "manual-first",
-        "manual-second",
         "middle",
+        "manual-second",
     ]
+    assert catalog.all_routes()[1].rank == 2
     assert catalog.all_routes()[2].rank == 3
 
 
