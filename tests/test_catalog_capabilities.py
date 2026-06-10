@@ -6,7 +6,6 @@ from app.capability_tags import (
     apply_probe_claims,
     route_satisfies_capabilities,
     should_probe_tool_use,
-    tags_to_capabilities,
 )
 from app.model_catalog import DEFAULT_MODEL_ROUTES
 

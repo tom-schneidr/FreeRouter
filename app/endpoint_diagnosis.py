@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from time import time
 from typing import Any
 
 import httpx
 
+from app.benchmark_research import BenchmarkResearchService
 from app.capability_probe_schedule import select_routes_for_capability_probe
 from app.capability_probes import probe_route_capabilities
 from app.capability_tags import should_probe_tool_use
@@ -19,13 +20,13 @@ from app.model_catalog import (
     remove_routes_from_default_catalog,
 )
 from app.model_discovery import route_from_catalog_item, route_model_id_from_catalog_id
-from app.benchmark_research import BenchmarkResearchService
-from app.response_parse import chat_response_text, json_object_from_text
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderAdapter, ProviderError, ProviderRateLimited
+from app.response_parse import chat_response_text, json_object_from_text
+from app.state import StateManager
 
 logger = logging.getLogger(__name__)
-from app.state import StateManager
+
 
 @dataclass(frozen=True)
 class EndpointSuggestion:

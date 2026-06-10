@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from time import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.model_catalog import ModelRoute

@@ -14,13 +14,13 @@ from app.api import (
     static_routes,
 )
 from app.api.chat_handlers import (
-    WEB_SEARCH_TOOL,
     _assistant_text_from_response_body,
     _payload_with_required_web_search,
 )
 from app.app_services import attach_app_services
 from app.factory import build_app_services
 from app.react_app import mount_react_app
+from app.web_search_payload import WEB_SEARCH_TOOL
 
 __all__ = [
     "WEB_SEARCH_TOOL",

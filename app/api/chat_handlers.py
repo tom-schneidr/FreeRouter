@@ -27,7 +27,6 @@ from app.live_monitor import APILiveMonitor
 from app.model_catalog import ModelCatalog
 from app.providers import ProviderError
 from app.request_requirements import RequestRequirements, chat_request_requirements
-from app.tool_use_validation import ROUTING_SSE_KEEPALIVE
 from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,
@@ -39,7 +38,8 @@ from app.router import (
 )
 from app.settings import get_settings
 from app.state import StateManager
-from app.web_search_payload import WEB_SEARCH_TOOL, payload_with_required_web_search
+from app.tool_use_validation import ROUTING_SSE_KEEPALIVE
+from app.web_search_payload import payload_with_required_web_search
 
 
 def _live_monitor_payload(payload: dict[str, Any]) -> dict[str, Any]:

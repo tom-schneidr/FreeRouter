@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.capability_registry import registry_claims_for
-from app.capability_tags import apply_capability_pipeline, derive_tags_from_capabilities, tags_to_capabilities
+from app.capability_tags import (
+    apply_capability_pipeline,
+    derive_tags_from_capabilities,
+    tags_to_capabilities,
+)
 from app.model_catalog import ModelRoute, route_id_for
 
 
@@ -33,7 +37,7 @@ def test_apply_capability_pipeline_records_registry_tool_use_hint_without_tag():
 
 
 def test_probe_confirmed_tool_use_appears_in_tags():
-    from app.capability_tags import apply_probe_claims, CapabilityClaim
+    from app.capability_tags import CapabilityClaim, apply_probe_claims
 
     route = ModelRoute(
         route_id=route_id_for("gemini", "gemini-3.1-pro-preview"),

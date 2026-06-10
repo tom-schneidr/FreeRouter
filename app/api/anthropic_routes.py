@@ -31,7 +31,6 @@ from app.api.stream_monitor import StreamMonitorTracker, monitor_live_value
 from app.app_services import get_app_services
 from app.providers import ProviderError
 from app.request_requirements import chat_request_requirements
-from app.tool_use_validation import ROUTING_SSE_KEEPALIVE
 from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,
@@ -40,6 +39,7 @@ from app.router import (
     validate_chat_completion_payload,
 )
 from app.settings import get_settings
+from app.tool_use_validation import ROUTING_SSE_KEEPALIVE
 
 router = APIRouter()
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from app.model_catalog import ModelRoute, route_id_for
 from app.benchmark_store import reset_benchmark_store_for_tests
+from app.model_catalog import ModelRoute, route_id_for
 from app.model_ranking import compute_rank_score, invalidate_dynamic_benchmark_cache
 
 

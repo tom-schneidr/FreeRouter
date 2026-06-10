@@ -8,11 +8,6 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from app.capability_runtime import adjust_capabilities_from_traffic
-from app.tool_use_validation import (
-    evaluate_tool_use_outcome,
-    payload_requires_function_tools,
-    should_abort_tool_stream_early,
-)
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderError, ProviderRateLimited
 from app.request_requirements import RequestRequirements, chat_request_requirements
@@ -37,6 +32,11 @@ from app.routing_policy import (
     static_route_skip_reason,
 )
 from app.state import Availability, StateManager
+from app.tool_use_validation import (
+    evaluate_tool_use_outcome,
+    payload_requires_function_tools,
+    should_abort_tool_stream_early,
+)
 
 if TYPE_CHECKING:
     from app.model_catalog import ModelCatalog

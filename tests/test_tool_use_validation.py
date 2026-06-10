@@ -3,7 +3,6 @@ from __future__ import annotations
 from app.capability_probes import evaluate_tool_use_probe_response
 from app.capability_runtime import adjust_capabilities_from_traffic
 from app.model_catalog import ModelCatalog, route_id_for
-from app.capability_tags import CapabilityClaim, apply_probe_claims, tags_to_capabilities
 from app.tool_use_validation import (
     evaluate_tool_use_outcome,
     response_fakes_tool_use_in_text,

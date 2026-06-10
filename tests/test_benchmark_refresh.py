@@ -10,6 +10,7 @@ from app.benchmark_research import BenchmarkResearchService, _parse_research_res
 from app.benchmark_store import BenchmarkStore, reset_benchmark_store_for_tests
 from app.model_catalog import ModelCatalog, ModelRoute, route_id_for
 from app.model_ranking import compute_rank_score, invalidate_dynamic_benchmark_cache
+from app.router import RouteResult
 
 
 @pytest.fixture(autouse=True)
@@ -19,7 +20,6 @@ def _reset_benchmark_state():
     yield
     reset_benchmark_store_for_tests()
     invalidate_dynamic_benchmark_cache()
-from app.router import RouteResult
 
 
 def _route(model_id: str, display_name: str, **kwargs) -> ModelRoute:

@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from time import time
 from typing import TYPE_CHECKING, Any
 
-from app.web_search_payload import payload_with_required_web_search
 from app.benchmark_store import BenchmarkStore
 from app.model_catalog import ModelCatalog, is_text_chat_route
 from app.request_requirements import chat_request_requirements, with_extra_capabilities
 from app.response_parse import chat_response_text, json_object_from_text
+from app.web_search_payload import payload_with_required_web_search
 
 if TYPE_CHECKING:
     from app.router import WaterfallRouter

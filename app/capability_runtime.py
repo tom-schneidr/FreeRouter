@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from app.capability_probes import _provider_error_indicates_unsupported
-from app.capability_tags import CapabilityStatus
 from app.model_catalog import ModelCatalog
 from app.providers.base import ProviderError
 from app.tool_use_validation import (

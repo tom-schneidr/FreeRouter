@@ -5,7 +5,6 @@ import re
 from typing import Any, Literal
 
 from app.request_requirements import (
-    _capabilities_from_messages,
     _tool_choice_requires_function_tools,
 )
 

@@ -7,16 +7,16 @@ from typing import Any
 
 from app.capability_tags import (
     CANONICAL_MODEL_TAGS,
+    TAGS_REQUIRING_CONFIRMATION,
     CapabilityClaim,
     CapabilityStatus,
     apply_capability_pipeline,
-    normalize_route_tool_use_policy,
-    TAGS_REQUIRING_CONFIRMATION,
     apply_probe_claims,
     apply_runtime_claim,
     capability_claim_from_dict,
     capability_claim_to_dict,
     derive_tags_from_capabilities,
+    normalize_route_tool_use_policy,
     tags_to_capabilities,
 )
 from app.catalog_store import load_catalog_json, save_catalog_json
