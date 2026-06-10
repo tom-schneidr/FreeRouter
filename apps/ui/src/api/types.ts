@@ -33,6 +33,15 @@ export type RouteUsage = {
   last_status_code: number | null;
 };
 
+export type CapabilityClaim = {
+  tag: string;
+  status: "unknown" | "supported" | "unsupported" | "inconclusive";
+  source: "provider_metadata" | "registry" | "probe" | "runtime" | "manual";
+  confidence: "high" | "medium" | "low";
+  checked_at: number | null;
+  evidence: string;
+};
+
 export type ModelRoute = {
   route_id: string;
   provider_name: string;
@@ -45,6 +54,8 @@ export type ModelRoute = {
   speed: string;
   cost: string;
   tags: string[];
+  capabilities?: Record<string, CapabilityClaim>;
+  tag_locks?: string[];
   notes: string;
   source_url: string;
   rank_score: number | null;
@@ -145,9 +156,23 @@ export type EndpointSuggestion = {
   route?: Record<string, unknown> | null;
 };
 
+export type ProviderDiagnosis = {
+  provider_name: string;
+  configured: boolean;
+  ok: boolean;
+  discovered_model_count?: number;
+  new_route_suggestion_count?: number;
+  confirmed_route_count?: number;
+  stale_route_suggestion_count?: number;
+  recovered_route_suggestion_count?: number;
+  capability_probes_run?: number;
+  capability_updates?: number;
+  error?: string | null;
+};
+
 export type DiagnosisReport = {
   checked_at: number;
-  providers: unknown[];
+  providers: ProviderDiagnosis[];
   suggestions: EndpointSuggestion[];
 };
 

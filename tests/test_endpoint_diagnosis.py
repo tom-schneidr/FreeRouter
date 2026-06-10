@@ -722,3 +722,75 @@ async def test_approved_added_routes_are_promoted_to_reset_defaults(tmp_path):
         route.route_id == route_id_for("openrouter", "unit-test/new-llama-chat:free")
         for route in reset_routes
     )
+
+
+async def test_apply_does_not_wait_for_long_running_diagnosis(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [
+            ProviderQuota(
+                "groq", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
+    )
+    await state.initialize()
+
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes(
+        [
+            {
+                "route_id": "groq-dead-model",
+                "provider_name": "groq",
+                "model_id": "dead-model",
+                "display_name": "Dead Model",
+                "rank": 1,
+                "enabled": True,
+            },
+        ]
+    )
+    provider = FakeCatalogProvider("groq", {"data": []}, missing_models={"dead-model"})
+    service = EndpointDiagnosisService([provider], catalog, state, request_timeout_seconds=5)
+    service.last_report = DiagnosisReport(
+        checked_at=1,
+        providers=[],
+        suggestions=[
+            EndpointSuggestion(
+                suggestion_id="remove:groq-dead-model",
+                action="remove_route",
+                provider_name="groq",
+                model_id="dead-model",
+                route_id="groq-dead-model",
+                title="Remove Dead Model",
+                details="Missing from provider catalog.",
+            )
+        ],
+    )
+
+    original_diagnose = service._diagnose_provider
+
+    async def slow_diagnose(
+        client: httpx.AsyncClient,
+        provider: FakeCatalogProvider,
+    ):
+        await asyncio.sleep(0.35)
+        return await original_diagnose(client, provider)
+
+    service._diagnose_provider = slow_diagnose  # type: ignore[method-assign]
+
+    run_task = asyncio.create_task(service.run_once())
+    await asyncio.sleep(0.05)
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    applied = await service.apply_suggestions(["remove:groq-dead-model"])
+    elapsed = loop.time() - started
+
+    assert [item.suggestion_id for item in applied] == ["remove:groq-dead-model"]
+    assert catalog.all_routes() == []
+    assert elapsed < 0.2
+
+    report = await run_task
+    assert all(
+        suggestion.action != "remove_route" or suggestion.route_id != "groq-dead-model"
+        for suggestion in report.suggestions
+    )

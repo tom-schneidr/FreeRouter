@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.capability_tags import apply_capability_pipeline
 from app.model_catalog import ModelRoute, route_from_discovered_model
 from app.providers.base import ProviderAdapter
 
@@ -63,7 +64,7 @@ def route_from_catalog_item(
     if supervisor_note:
         notes = f"{notes} {supervisor_note}".strip()
 
-    return route_from_discovered_model(
+    route = route_from_discovered_model(
         provider.name,
         route_model_id,
         display_name=display_name,
@@ -72,6 +73,11 @@ def route_from_catalog_item(
         source_url=f"{provider.base_url.rstrip('/')}/models",
         notes=notes,
         enabled=enabled,
+    )
+    from app.capability_tags import normalize_route_tool_use_policy
+
+    return normalize_route_tool_use_policy(
+        apply_capability_pipeline(route, metadata_tags=tags)
     )
 
 
@@ -132,7 +138,7 @@ def tags_for_model(item: dict[str, Any]) -> list[str]:
         tags.append("reasoning")
     if any(term in text for term in ("coder", "code")):
         tags.append("coding")
-    if _supports_tool_use(capability_text):
+    if _supports_tool_use_from_item(item):
         tags.append("tool-use")
     if _supports_web_search(capability_text):
         tags.append("web-search")
@@ -272,12 +278,23 @@ def _flatten_text_values(value: Any) -> list[str]:
     return [str(value)]
 
 
+def _supports_tool_use_from_item(item: dict[str, Any]) -> bool:
+    params = item.get("supported_parameters")
+    if isinstance(params, list):
+        normalized = {str(param).lower() for param in params}
+        if "tools" in normalized or "tool_choice" in normalized:
+            return True
+    capability_text = _capability_search_text(item)
+    return _supports_tool_use(capability_text)
+
+
 def _supports_tool_use(capability_text: str) -> bool:
+    tokens = capability_text.replace(",", " ").split()
+    if "tools" in tokens or "tool_choice" in tokens:
+        return True
     return any(
         term in capability_text
         for term in (
-            "tools",
-            "tool_choice",
             "function_call",
             "function calling",
             "function_calling",

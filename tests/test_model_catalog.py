@@ -59,15 +59,34 @@ def test_text_is_available_as_a_filterable_capability():
     assert any("text" in route.tags for route in DEFAULT_MODEL_ROUTES)
 
 
-def test_openrouter_text_routes_are_web_search_capable():
-    openrouter_text_routes = [
+def test_openrouter_free_router_claims_web_search_and_tool_use():
+    free_router = next(
         route
         for route in DEFAULT_MODEL_ROUTES
-        if route.provider_name == "openrouter" and "text" in route.tags
-    ]
+        if route.provider_name == "openrouter" and route.model_id == "openrouter/free"
+    )
+    assert "web-search" in free_router.tags
+    assert "tool-use" not in free_router.tags
+    assert free_router.capabilities["tool-use"].source == "registry"
 
-    assert openrouter_text_routes
-    assert all("web-search" in route.tags for route in openrouter_text_routes)
+
+def test_openrouter_bulk_free_models_do_not_blanket_claim_web_search():
+    bulk_routes = [
+        route
+        for route in DEFAULT_MODEL_ROUTES
+        if route.provider_name == "openrouter"
+        and route.model_id != "openrouter/free"
+        and "text" in route.tags
+    ]
+    assert bulk_routes
+    assert not all("web-search" in route.tags for route in bulk_routes)
+
+
+def test_gemini_default_routes_hint_tool_use_without_unconfirmed_tag():
+    gemini_routes = [route for route in DEFAULT_MODEL_ROUTES if route.provider_name == "gemini"]
+    assert gemini_routes
+    assert all("tool-use" not in route.tags for route in gemini_routes)
+    assert all(route.capabilities["tool-use"].source == "registry" for route in gemini_routes)
 
 
 def test_groq_compound_routes_do_not_claim_function_tool_support():
@@ -352,10 +371,10 @@ def test_add_discovered_inserts_by_score_without_reordering_existing(tmp_path):
 
     assert [route.route_id for route in catalog.all_routes()] == [
         "manual-first",
-        "middle",
         "manual-second",
+        "middle",
     ]
-    assert catalog.all_routes()[1].rank == 2
+    assert catalog.all_routes()[2].rank == 3
 
 
 def test_auto_rank_keeps_multimodal_text_routes(tmp_path):

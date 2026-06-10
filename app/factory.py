@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import httpx
 
 from app.app_services import AppServices
+from app.benchmark_research import BenchmarkResearchService
+from app.benchmark_store import get_benchmark_store
 from app.endpoint_diagnosis import (
     BackgroundEndpointDiagnosis,
     EndpointDiagnosisService,
@@ -97,6 +99,19 @@ async def build_app_services(settings: Settings | None = None) -> AppServices:
             preferred_model=resolved_settings.endpoint_diagnosis_supervisor_model,
         ),
     )
+    benchmark_store = get_benchmark_store(resolved_settings.benchmark_scores_path)
+    benchmark_research: BenchmarkResearchService | None = None
+    if resolved_settings.benchmark_refresh_enabled:
+        benchmark_research = BenchmarkResearchService(
+            stack.waterfall_router,
+            stack.model_catalog,
+            benchmark_store,
+            enabled=True,
+            max_age_seconds=resolved_settings.benchmark_refresh_max_age_seconds,
+            max_models=resolved_settings.benchmark_refresh_max_models,
+            min_scores_to_apply=resolved_settings.benchmark_refresh_min_scores,
+        )
+
     background: BackgroundEndpointDiagnosis | None = None
     if resolved_settings.auto_endpoint_diagnosis_enabled:
         background = BackgroundEndpointDiagnosis(
@@ -104,6 +119,7 @@ async def build_app_services(settings: Settings | None = None) -> AppServices:
             interval_seconds=resolved_settings.auto_endpoint_diagnosis_interval_seconds,
             startup_delay_seconds=resolved_settings.auto_endpoint_diagnosis_startup_delay_seconds,
             apply_safe_suggestions=resolved_settings.auto_endpoint_maintenance_enabled,
+            benchmark_research=benchmark_research,
         )
         background.start()
     return AppServices(
@@ -115,4 +131,5 @@ async def build_app_services(settings: Settings | None = None) -> AppServices:
         waterfall_router=stack.waterfall_router,
         endpoint_diagnosis=diagnosis,
         background_endpoint_diagnosis=background,
+        benchmark_research=benchmark_research,
     )

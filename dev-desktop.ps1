@@ -50,6 +50,19 @@ function Start-DevBackendSupervisorJob {
         $env:FREEROUTER_APP_DATA_DIR = $AppDataDir
         $env:FREEROUTER_DEV_BACKEND = "1"
 
+        $logPath = Join-Path $AppDataDir "data\desktop-backend.log"
+        $logDir = Split-Path -Parent $logPath
+        if (-not (Test-Path $logDir)) {
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        }
+
+        function Write-BackendLog {
+            param([string]$Message)
+            $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            Add-Content -Path $logPath -Value "[$timestamp] $Message"
+        }
+
+        $restartDelaySeconds = 0.5
         while ($true) {
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName = $Python
@@ -58,15 +71,25 @@ function Start-DevBackendSupervisorJob {
             $psi.UseShellExecute = $false
             $psi.CreateNoWindow = $true
 
+            Write-BackendLog "Starting uvicorn on 127.0.0.1:$Port"
             $proc = [System.Diagnostics.Process]::Start($psi)
             if (-not $proc) {
+                Write-BackendLog "Failed to start uvicorn process."
                 break
             }
             $proc.WaitForExit()
-            if ($proc.ExitCode -ne 42) {
-                break
+            $exitCode = $proc.ExitCode
+            if ($exitCode -eq 42) {
+                Write-BackendLog "Uvicorn exited with code 42 (intentional restart)."
+                $restartDelaySeconds = 0.5
             }
-            Start-Sleep -Milliseconds 500
+            else {
+                Write-BackendLog "Uvicorn exited unexpectedly with code $exitCode; restarting in $restartDelaySeconds s."
+                if ($restartDelaySeconds -lt 30) {
+                    $restartDelaySeconds = [Math]::Min(30, $restartDelaySeconds * 2)
+                }
+            }
+            Start-Sleep -Seconds $restartDelaySeconds
         }
     } -ArgumentList $ProjectRoot, $VenvPython, $Port, $DesktopToken, $ProjectRoot
 }

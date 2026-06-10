@@ -31,6 +31,7 @@ from app.api.stream_monitor import StreamMonitorTracker, monitor_live_value
 from app.app_services import get_app_services
 from app.providers import ProviderError
 from app.request_requirements import chat_request_requirements
+from app.tool_use_validation import ROUTING_SSE_KEEPALIVE
 from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,
@@ -279,6 +280,7 @@ async def _route_anthropic_stream(
         carry = ""
         completed = False
         mapper = AnthropicStreamMapper(message_id=message_id, model=requested_model)
+        yield ROUTING_SSE_KEEPALIVE
         try:
             async for part in normalize_openai_sse_stream(
                 router.iter_chat_completion_openai_stream(
@@ -290,6 +292,13 @@ async def _route_anthropic_stream(
                 if isinstance(part, RouteStreamDiag):
                     tracker.record_diag(part)
                     await _publish_route_stream_diag(monitor, request_id, part)
+                    if part.event_type in {
+                        "route_trying",
+                        "route_failed",
+                        "route_skipped",
+                        "route_flagged",
+                    }:
+                        yield ROUTING_SSE_KEEPALIVE
                     if part.event_type == "route_selected":
                         routing.set(
                             part.provider_name or "",

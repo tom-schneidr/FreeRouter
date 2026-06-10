@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from time import time
 from typing import Any
 
@@ -8,6 +7,9 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.api.chat_handlers import _catalog_payload_with_health
 from app.app_services import get_app_services
+from app.capability_probes import PROBE_TAGS, probe_route_capabilities
+from app.capability_tags import capability_claim_to_dict
+from app.model_catalog import _route_to_dict
 from app.settings import get_settings
 
 router = APIRouter()
@@ -89,7 +91,7 @@ async def disable_gateway_model(route_id: str, request: Request) -> dict[str, An
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     route_state = await state.get_route_state(route.route_id, route.provider_name, route.model_id)
-    return {"data": {**asdict(route), "health": asdict(route_state)}}
+    return {"data": {**_route_to_dict(route), "health": route_state.__dict__}}
 
 
 @router.post("/v1/gateway/models/{route_id}/enable")
@@ -102,7 +104,7 @@ async def enable_gateway_model(route_id: str, request: Request) -> dict[str, Any
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     route_state = await state.get_route_state(route.route_id, route.provider_name, route.model_id)
-    return {"data": {**asdict(route), "health": asdict(route_state)}}
+    return {"data": {**_route_to_dict(route), "health": route_state.__dict__}}
 
 
 @router.post("/v1/gateway/models/{route_id}/health/reset")
@@ -116,4 +118,49 @@ async def reset_gateway_model_health(route_id: str, request: Request) -> dict[st
     route_state = await state.clear_route_health(
         route.route_id, route.provider_name, route.model_id
     )
-    return {"data": {**asdict(route), "health": asdict(route_state)}}
+    return {"data": {**_route_to_dict(route), "health": route_state.__dict__}}
+
+
+@router.post("/v1/gateway/models/{route_id}/probe-capabilities")
+async def probe_gateway_model_capabilities(route_id: str, request: Request) -> dict[str, Any]:
+    services = get_app_services(request)
+    catalog = services.model_catalog
+    router_svc = services.waterfall_router
+    route = next((item for item in catalog.all_routes() if item.route_id == route_id), None)
+    if route is None:
+        raise HTTPException(status_code=404, detail=f"Unknown route_id: {route_id}")
+
+    provider = router_svc.provider_by_name.get(route.provider_name)
+    if provider is None or not provider.is_configured:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Provider {route.provider_name} is not configured for probing",
+        )
+
+    body: dict[str, Any] = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    tags = body.get("tags") if isinstance(body, dict) else None
+    probe_tags = tuple(str(tag) for tag in tags) if isinstance(tags, list) and tags else PROBE_TAGS
+
+    claims = await probe_route_capabilities(
+        provider,
+        services.http_client,
+        route,
+        tags=probe_tags,
+    )
+    updated = catalog.apply_probe_claims_to_route(route_id, claims)
+    route_state = await services.gateway_state.get_route_state(
+        updated.route_id, updated.provider_name, updated.model_id
+    )
+    return {
+        "data": {
+            **_route_to_dict(updated),
+            "health": route_state.__dict__,
+            "probe_results": {
+                tag: capability_claim_to_dict(claim) for tag, claim in claims.items()
+            },
+        }
+    }

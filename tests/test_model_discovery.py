@@ -151,7 +151,8 @@ def test_catalog_payload_tags_explicit_web_search_capability():
         },
     )
 
-    assert routes[0].tags == ["text", "tool-use", "web-search"]
+    assert routes[0].tags == ["text", "web-search"]
+    assert routes[0].capabilities["tool-use"].source == "provider_metadata"
 
 
 def test_sambanova_catalog_payload_can_auto_discover_zero_priced_chat_models():
@@ -200,7 +201,8 @@ def test_catalog_payload_does_not_treat_generic_tools_as_web_search():
         },
     )
 
-    assert "tool-use" in routes[0].tags
+    assert "tool-use" not in routes[0].tags
+    assert routes[0].capabilities["tool-use"].source == "provider_metadata"
     assert "web-search" not in routes[0].tags
 
 

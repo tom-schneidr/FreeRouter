@@ -8,6 +8,11 @@ from typing import Any
 
 import httpx
 
+from app.capability_runtime import adjust_capabilities_from_traffic
+from app.tool_use_validation import (
+    evaluate_tool_use_outcome,
+    payload_requires_function_tools,
+)
 from app.model_catalog import ModelCatalog
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderAdapter, ProviderError, ProviderRateLimited, ProviderResponse
@@ -106,6 +111,8 @@ class RouteStreamDiag:
     reason: str | None = None
     status_code: int | None = None
     usage: dict[str, Any] | None = None
+    route_tags: tuple[str, ...] | None = None
+    required_capabilities: frozenset[str] | None = None
 
 
 ChatStreamPart = RouteStreamDiag | str
@@ -190,6 +197,7 @@ def _payload_commits_openai_stream(
     payload_obj: Any,
     *,
     require_substantive_assistant: bool = False,
+    outbound_payload: dict[str, Any] | None = None,
 ) -> bool:
     """Commit after the first meaningful chunk (optionally require non-whitespace text)."""
     if payload_obj is None or isinstance(payload_obj, _SseDoneSentinel):
@@ -203,6 +211,11 @@ def _payload_commits_openai_stream(
         return False
     if _delta_has_tool_calls(payload_obj):
         return True
+    if outbound_payload and payload_requires_function_tools(outbound_payload):
+        from app.tool_use_validation import tool_use_response_mandatory
+
+        if tool_use_response_mandatory(outbound_payload):
+            return False
     visible = _delta_visible_text_from_chunk(payload_obj)
     if require_substantive_assistant:
         return bool(visible.strip())
@@ -727,6 +740,14 @@ class WaterfallRouter:
                             reason=flagged.reason,
                         )
                     continue
+                if "tool-use" in required_capabilities and exc.status_code == 400:
+                    adjust_capabilities_from_traffic(
+                        self.model_catalog,
+                        route_id=route.route_id,
+                        required_capabilities=required_capabilities,
+                        payload=payload,
+                        error=exc,
+                    )
                 raise
 
             if require_assistant_content and not response_has_assistant_content(response.body):
@@ -749,6 +770,42 @@ class WaterfallRouter:
                 )
                 continue
 
+            if payload_requires_function_tools(payload):
+                tool_outcome = evaluate_tool_use_outcome(payload, response.body)
+                if tool_outcome == "unsupported":
+                    adjust_capabilities_from_traffic(
+                        self.model_catalog,
+                        route_id=route.route_id,
+                        required_capabilities=required_capabilities,
+                        payload=payload,
+                        response_body=response.body,
+                    )
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "failed",
+                        "invalid_tool_response",
+                        response.status_code,
+                        route.route_id,
+                        route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_failed",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                        status_code=response.status_code,
+                    )
+                    continue
+
+            adjust_capabilities_from_traffic(
+                self.model_catalog,
+                route_id=route.route_id,
+                required_capabilities=required_capabilities,
+                payload=payload,
+                response_body=response.body,
+            )
             usage = response.body.get("usage")
             await self.state.record_route_success(
                 route.route_id,

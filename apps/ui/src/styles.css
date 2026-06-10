@@ -672,6 +672,26 @@ h1 {
   line-height: 1.55;
 }
 
+.panel-copy-busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-spin {
+  flex: 0 0 auto;
+  animation: inline-spin 0.9s linear infinite;
+}
+
+@keyframes inline-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .panel-actions {
   display: flex;
   align-items: flex-start;

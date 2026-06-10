@@ -92,24 +92,9 @@ class RoutedLimitedStreamingResponse(LimitedStreamingResponse):
         )
 
     async def stream_response(self, send: Send) -> None:
-        buffer: list[str | bytes | memoryview] = []
-        started = False
-
+        # Start the HTTP response immediately so clients (e.g. OpenClaw) do not time out
+        # while the waterfall is still trying routes.
+        await self._start_response(send)
         async for chunk in self.body_iterator:
-            if not started:
-                buffer.append(chunk)
-                if self.routing.ready:
-                    await self._start_response(send)
-                    started = True
-                    for buffered in buffer:
-                        await self._send_body_chunk(send, buffered)
-                    buffer.clear()
-                continue
             await self._send_body_chunk(send, chunk)
-
-        if not started:
-            await self._start_response(send)
-            for buffered in buffer:
-                await self._send_body_chunk(send, buffered)
-
         await send({"type": "http.response.body", "body": b"", "more_body": False})

@@ -19,6 +19,7 @@ function New-FreeRouterShortcut {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($ShortcutPath)
     $shortcut.TargetPath = $TargetPath
+    $shortcut.Arguments = ""
     $shortcut.WorkingDirectory = $ProjectRoot
     $shortcut.Description = "FreeRouter local desktop app"
     if (Test-Path $IconPath) {

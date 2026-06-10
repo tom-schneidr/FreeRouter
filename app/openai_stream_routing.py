@@ -7,6 +7,12 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from app.capability_runtime import adjust_capabilities_from_traffic
+from app.tool_use_validation import (
+    evaluate_tool_use_outcome,
+    payload_requires_function_tools,
+    should_abort_tool_stream_early,
+)
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderError, ProviderRateLimited
 from app.request_requirements import RequestRequirements, chat_request_requirements
@@ -16,6 +22,8 @@ from app.router import (
     ProviderAttempt,
     RouteStreamDiag,
     UnsupportedCapabilities,
+    _delta_has_tool_calls,
+    _delta_visible_text_from_chunk,
     _event_block_data_payload,
     _payload_commits_openai_stream,
     _split_sse_event_blocks,
@@ -33,6 +41,25 @@ from app.state import Availability, StateManager
 if TYPE_CHECKING:
     from app.model_catalog import ModelCatalog
     from app.providers.base import ProviderAdapter
+
+
+def _synthetic_stream_response_body(*, saw_tool_calls: bool, text: str) -> dict[str, Any]:
+    if saw_tool_calls:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {"name": "stream", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    return {"choices": [{"message": {"content": text}}]}
 
 
 def _usage_summary_diag(usage: dict[str, Any] | None) -> RouteStreamDiag | None:
@@ -221,6 +248,8 @@ async def waterfall_openai_stream(
         carry = ""
         buffered_before_commit: list[str] = []
         committed = False
+        precommit_saw_tool_calls = False
+        precommit_text = ""
         usage: dict[str, Any] | None = None
         last_status = 200
         stop_route_attempt = False
@@ -240,11 +269,69 @@ async def waterfall_openai_stream(
                                 usage = u
 
                         if not committed:
+                            if isinstance(pl, dict):
+                                if _delta_has_tool_calls(pl):
+                                    precommit_saw_tool_calls = True
+                                precommit_text += _delta_visible_text_from_chunk(pl)
+                                if should_abort_tool_stream_early(
+                                    outbound_payload,
+                                    text=precommit_text,
+                                    saw_tool_calls=precommit_saw_tool_calls,
+                                ):
+                                    synthetic_body = _synthetic_stream_response_body(
+                                        saw_tool_calls=False,
+                                        text=precommit_text,
+                                    )
+                                    adjust_capabilities_from_traffic(
+                                        model_catalog,
+                                        route_id=route.route_id,
+                                        required_capabilities=required_capabilities,
+                                        payload=outbound_payload,
+                                        response_body=synthetic_body,
+                                    )
+                                    attempt = ProviderAttempt(
+                                        provider.name,
+                                        "failed",
+                                        "invalid_tool_response",
+                                        route_id=route.route_id,
+                                        model_id=route.model_id,
+                                    )
+                                    attempts.append(attempt)
+                                    yield RouteStreamDiag(
+                                        event_type="route_failed",
+                                        provider_name=provider.name,
+                                        route_id=route.route_id,
+                                        model_id=route.model_id,
+                                        reason=attempt.reason,
+                                    )
+                                    stop_route_attempt = True
+                                    break
                             if pl is _SSE_DONE:
+                                fail_reason = "empty_stream"
+                                if payload_requires_function_tools(outbound_payload):
+                                    synthetic_body = _synthetic_stream_response_body(
+                                        saw_tool_calls=precommit_saw_tool_calls,
+                                        text=precommit_text,
+                                    )
+                                    if (
+                                        evaluate_tool_use_outcome(
+                                            outbound_payload,
+                                            synthetic_body,
+                                        )
+                                        == "unsupported"
+                                    ):
+                                        adjust_capabilities_from_traffic(
+                                            model_catalog,
+                                            route_id=route.route_id,
+                                            required_capabilities=required_capabilities,
+                                            payload=outbound_payload,
+                                            response_body=synthetic_body,
+                                        )
+                                        fail_reason = "invalid_tool_response"
                                 attempt = ProviderAttempt(
                                     provider.name,
                                     "failed",
-                                    "empty_stream",
+                                    fail_reason,
                                     route_id=route.route_id,
                                     model_id=route.model_id,
                                 )
@@ -279,6 +366,7 @@ async def waterfall_openai_stream(
                             if _payload_commits_openai_stream(
                                 pl,
                                 require_substantive_assistant=require_assistant_content,
+                                outbound_payload=outbound_payload,
                             ):
                                 committed = True
                                 selected = ProviderAttempt(
@@ -293,7 +381,33 @@ async def waterfall_openai_stream(
                                     provider_name=provider.name,
                                     route_id=route.route_id,
                                     model_id=route.model_id,
+                                    route_tags=tuple(route.tags),
+                                    required_capabilities=required_capabilities,
                                 )
+                                if isinstance(pl, dict) and _delta_has_tool_calls(pl):
+                                    adjust_capabilities_from_traffic(
+                                        model_catalog,
+                                        route_id=route.route_id,
+                                        required_capabilities=required_capabilities,
+                                        payload=outbound_payload,
+                                        response_body={
+                                            "choices": [
+                                                {
+                                                    "message": {
+                                                        "tool_calls": [
+                                                            {
+                                                                "type": "function",
+                                                                "function": {
+                                                                    "name": "probe",
+                                                                    "arguments": "{}",
+                                                                },
+                                                            }
+                                                        ]
+                                                    }
+                                                }
+                                            ]
+                                        },
+                                    )
                                 for b in buffered_before_commit:
                                     yield b
                                 buffered_before_commit.clear()
@@ -611,6 +725,14 @@ async def waterfall_openai_stream(
                         reason=flagged.reason,
                     )
                 continue
+            if "tool-use" in required_capabilities and exc.status_code == 400:
+                adjust_capabilities_from_traffic(
+                    model_catalog,
+                    route_id=route.route_id,
+                    required_capabilities=required_capabilities,
+                    payload=outbound_payload,
+                    error=exc,
+                )
             attempt = ProviderAttempt(
                 provider.name,
                 "failed",

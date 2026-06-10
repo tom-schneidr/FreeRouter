@@ -67,6 +67,7 @@ async def _services_with_provider(
             request_timeout_seconds=settings.request_timeout_seconds,
         ),
         background_endpoint_diagnosis=None,
+        benchmark_research=None,
     )
 
 
@@ -384,6 +385,24 @@ async def test_messages_stream_tool_call_lifecycle(tmp_path, monkeypatch):
                 "rank": 1,
                 "enabled": True,
                 "tags": ["text", "tool-use"],
+                "capabilities": {
+                    "text": {
+                        "tag": "text",
+                        "status": "supported",
+                        "source": "probe",
+                        "confidence": "high",
+                        "checked_at": 1,
+                        "evidence": "probe",
+                    },
+                    "tool-use": {
+                        "tag": "tool-use",
+                        "status": "supported",
+                        "source": "probe",
+                        "confidence": "high",
+                        "checked_at": 1,
+                        "evidence": "echo tool call",
+                    },
+                },
             }
         ],
     )

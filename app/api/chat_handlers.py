@@ -26,19 +26,20 @@ from app.codex_compat import (
 from app.live_monitor import APILiveMonitor
 from app.model_catalog import ModelCatalog
 from app.providers import ProviderError
-from app.request_requirements import RequestRequirements
+from app.request_requirements import RequestRequirements, chat_request_requirements
+from app.tool_use_validation import ROUTING_SSE_KEEPALIVE
 from app.router import (
     NoProviderAvailable,
     RouteStreamDiag,
     UnsupportedCapabilities,
+    _display_capabilities,
     _split_sse_event_blocks,
     unsupported_capabilities_error_body,
     validate_chat_completion_payload,
 )
 from app.settings import get_settings
 from app.state import StateManager
-
-WEB_SEARCH_TOOL = {"type": "web_search_preview"}
+from app.web_search_payload import WEB_SEARCH_TOOL, payload_with_required_web_search
 
 
 def _live_monitor_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -118,25 +119,7 @@ def _content_parts_to_text(parts: list[Any]) -> str:
 
 
 def _payload_with_required_web_search(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise ValueError("Request body must be a JSON object")
-    prepared = dict(payload)
-    tools = prepared.get("tools")
-    if not isinstance(tools, list):
-        tools = []
-    elif not _has_web_search_tool(tools):
-        tools = list(tools)
-    if not _has_web_search_tool(tools):
-        tools.append(dict(WEB_SEARCH_TOOL))
-    prepared["tools"] = tools
-    prepared["tool_choice"] = dict(WEB_SEARCH_TOOL)
-    return prepared
-
-
-def _has_web_search_tool(tools: list[Any]) -> bool:
-    return any(
-        isinstance(tool, dict) and tool.get("type") == WEB_SEARCH_TOOL["type"] for tool in tools
-    )
+    return payload_with_required_web_search(payload)
 
 
 async def _catalog_payload_with_health(
@@ -231,27 +214,38 @@ async def _publish_route_stream_diag(
         )
         return
     if diag.event_type == "route_selected":
-        selected_payload = {
+        selected_payload: dict[str, Any] = {
             "provider_name": diag.provider_name,
             "route_id": diag.route_id,
             "model_id": diag.model_id,
         }
+        if diag.route_tags:
+            selected_payload["route_tags"] = list(diag.route_tags)
+        if diag.required_capabilities:
+            selected_payload["required_capabilities"] = _display_capabilities(
+                diag.required_capabilities
+            )
         await monitor.publish(
             event_type="route_selected",
             request_id=request_id,
             payload=selected_payload,
         )
+        route_event: dict[str, Any] = {
+            "type": "route_selected",
+            "provider_name": diag.provider_name,
+            "route_id": diag.route_id,
+            "model_id": diag.model_id,
+        }
+        if diag.route_tags:
+            route_event["route_tags"] = list(diag.route_tags)
+        if diag.required_capabilities:
+            route_event["required_capabilities"] = _display_capabilities(
+                diag.required_capabilities
+            )
         await monitor.publish(
             event_type="route_attempt",
             request_id=request_id,
-            payload={
-                "route_event": {
-                    "type": "route_selected",
-                    "provider_name": diag.provider_name,
-                    "route_id": diag.route_id,
-                    "model_id": diag.model_id,
-                }
-            },
+            payload={"route_event": route_event},
         )
         return
 
@@ -277,6 +271,7 @@ async def _route_chat_completion_stream_request(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    resolved_requirements = requirements or chat_request_requirements(payload)
     await monitor.publish(
         event_type="request_started",
         request_id=request_id,
@@ -285,6 +280,9 @@ async def _route_chat_completion_stream_request(
             "stream": True,
             "model": payload.get("model"),
             "client_ip": client_ip,
+            "required_capabilities": _display_capabilities(
+                resolved_requirements.required_capabilities
+            ),
             "request_payload": monitor_live_value(payload),
         },
     )
@@ -316,6 +314,7 @@ async def _route_chat_completion_stream_request(
     async def openai_sse_stream():
         completed = False
         try:
+            yield ROUTING_SSE_KEEPALIVE
             async for part in normalize_openai_sse_stream(
                 router.iter_chat_completion_openai_stream(
                     payload,
@@ -327,6 +326,13 @@ async def _route_chat_completion_stream_request(
                 if isinstance(part, RouteStreamDiag):
                     tracker.record_diag(part)
                     await _publish_route_stream_diag(monitor, request_id, part)
+                    if part.event_type in {
+                        "route_trying",
+                        "route_failed",
+                        "route_skipped",
+                        "route_flagged",
+                    }:
+                        yield ROUTING_SSE_KEEPALIVE
                     if part.event_type == "route_selected":
                         routing.set(
                             part.provider_name or "",
@@ -435,6 +441,7 @@ async def _route_chat_completion_request(
     request_id = uuid.uuid4().hex[:12]
     started_at = perf_counter()
     client_ip = request.client.host if request.client else None
+    resolved_requirements = requirements or chat_request_requirements(payload)
     await monitor.publish(
         event_type="request_started",
         request_id=request_id,
@@ -443,6 +450,9 @@ async def _route_chat_completion_request(
             "stream": bool(payload.get("stream")),
             "model": payload.get("model"),
             "client_ip": client_ip,
+            "required_capabilities": _display_capabilities(
+                resolved_requirements.required_capabilities
+            ),
             "request_payload": monitor_live_value(payload),
         },
     )
@@ -647,6 +657,13 @@ async def _route_responses_stream_request(
                 if isinstance(part, RouteStreamDiag):
                     tracker.record_diag(part)
                     await _publish_route_stream_diag(monitor, request_id, part)
+                    if part.event_type in {
+                        "route_trying",
+                        "route_failed",
+                        "route_skipped",
+                        "route_flagged",
+                    }:
+                        yield ROUTING_SSE_KEEPALIVE
                     if part.event_type == "route_selected":
                         routing.set(
                             part.provider_name or "",

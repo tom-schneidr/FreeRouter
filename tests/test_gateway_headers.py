@@ -167,13 +167,14 @@ async def test_routed_stream_omits_gateway_headers_when_route_unknown():
     assert "x-gateway-model" not in headers
 
 
-async def test_routed_stream_defers_headers_until_route_selected():
+async def test_routed_stream_starts_immediately_for_client_keepalive():
     limiter = GatewayRequestLimiter(max_concurrent_requests=1, queue_timeout_seconds=0.01)
     lease = GatewayLimiterLease(limiter)
     routing = GatewayRoutingContext()
     sent: list[dict] = []
 
     async def body():
+        yield ": freerouter routing\r\n\r\n"
         routing.set("primary", "primary-test", "primary/model")
         yield "data: first\n\n"
 
@@ -186,9 +187,19 @@ async def test_routed_stream_defers_headers_until_route_selected():
     )
     await response(_scope(), _receive, _sender(sent))
 
-    start = next(message for message in sent if message["type"] == "http.response.start")
-    headers = _header_map(start)
-    assert headers["x-gateway-route"] == "primary-test"
+    start_index = next(
+        index for index, message in enumerate(sent) if message["type"] == "http.response.start"
+    )
+    first_body_index = next(
+        index for index, message in enumerate(sent) if message["type"] == "http.response.body"
+    )
+    assert start_index < first_body_index
+    body_chunks = [
+        message["body"]
+        for message in sent
+        if message["type"] == "http.response.body" and message["body"]
+    ]
+    assert b"freerouter routing" in b"".join(body_chunks)
 
 
 async def _services_with_provider(
@@ -236,6 +247,7 @@ async def _services_with_provider(
             request_timeout_seconds=settings.request_timeout_seconds,
         ),
         background_endpoint_diagnosis=None,
+        benchmark_research=None,
     )
 
 
@@ -344,8 +356,7 @@ async def test_chat_completions_stream_exposes_gateway_headers(tmp_path, monkeyp
         },
     ) as response:
         assert response.status_code == 200
-        assert response.headers["X-Gateway-Route"] == "primary-test"
-        assert response.headers["X-Gateway-Model"] == "primary/model"
         assert "X-Gateway-Attempts" not in response.headers
         body = "".join(response.iter_text())
+    assert "freerouter routing" in body
     assert "data:" in body

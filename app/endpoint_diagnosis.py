@@ -1,24 +1,31 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import logging
 from dataclasses import asdict, dataclass, field
 from time import time
 from typing import Any
 
 import httpx
 
+from app.capability_probe_schedule import select_routes_for_capability_probe
+from app.capability_probes import probe_route_capabilities
+from app.capability_tags import should_probe_tool_use
 from app.model_catalog import (
     ModelCatalog,
     ModelRoute,
+    _route_to_dict,
     promote_routes_to_default_catalog,
     remove_routes_from_default_catalog,
 )
 from app.model_discovery import route_from_catalog_item, route_model_id_from_catalog_id
+from app.benchmark_research import BenchmarkResearchService
+from app.response_parse import chat_response_text, json_object_from_text
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderAdapter, ProviderError, ProviderRateLimited
-from app.state import StateManager
 
+logger = logging.getLogger(__name__)
+from app.state import StateManager
 
 @dataclass(frozen=True)
 class EndpointSuggestion:
@@ -42,6 +49,8 @@ class ProviderDiagnosis:
     confirmed_route_count: int = 0
     stale_route_suggestion_count: int = 0
     recovered_route_suggestion_count: int = 0
+    capability_probes_run: int = 0
+    capability_updates: int = 0
     error: str | None = None
 
 
@@ -147,8 +156,8 @@ class EndpointSupervisor:
         except (ProviderError, httpx.RequestError, httpx.TimeoutException) as exc:
             return SupervisorVerdict(False, "none", f"Supervisor failed: {exc.__class__.__name__}.")
 
-        raw_text = _chat_response_text(response.body)
-        parsed = _json_object_from_text(raw_text)
+        raw_text = chat_response_text(response.body)
+        parsed = json_object_from_text(raw_text)
         if not isinstance(parsed, dict):
             return SupervisorVerdict(False, "none", "Supervisor returned unparsable output.")
 
@@ -228,24 +237,25 @@ class EndpointDiagnosisService:
         return f"{provider_name.lower()}::{model_id.lower()}"
 
     async def run_once(self) -> DiagnosisReport:
+        provider_reports: list[ProviderDiagnosis] = []
+        all_suggestions: list[EndpointSuggestion] = []
+
+        timeout = httpx.Timeout(self.request_timeout_seconds)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for provider in self.providers:
+                report, suggestions = await self._diagnose_provider(client, provider)
+                provider_reports.append(report)
+                all_suggestions.extend(suggestions)
+
+        report = DiagnosisReport(
+            checked_at=int(time()),
+            providers=provider_reports,
+            suggestions=self._prune_stale_suggestions(all_suggestions),
+        )
         async with self._lock:
-            provider_reports: list[ProviderDiagnosis] = []
-            all_suggestions: list[EndpointSuggestion] = []
-
-            timeout = httpx.Timeout(self.request_timeout_seconds)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                for provider in self.providers:
-                    report, suggestions = await self._diagnose_provider(client, provider)
-                    provider_reports.append(report)
-                    all_suggestions.extend(suggestions)
-
-            report = DiagnosisReport(
-                checked_at=int(time()),
-                providers=provider_reports,
-                suggestions=all_suggestions,
-            )
             self.last_report = report
-            return report
+        self.catalog.save()
+        return report
 
     async def apply_suggestions(self, suggestion_ids: list[str]) -> list[EndpointSuggestion]:
         async with self._lock:
@@ -281,11 +291,40 @@ class EndpointDiagnosisService:
                 if suggestion.suggestion_id not in selected_ids
             ]
             self.last_report = DiagnosisReport(
-                checked_at=self.last_report.checked_at,
+                checked_at=int(time()),
                 providers=self.last_report.providers,
-                suggestions=remaining,
+                suggestions=self._prune_stale_suggestions(remaining),
             )
             return selected
+
+    def _prune_stale_suggestions(
+        self,
+        suggestions: list[EndpointSuggestion],
+    ) -> list[EndpointSuggestion]:
+        """Drop suggestions that no longer match catalog state (e.g. after a concurrent apply)."""
+        catalog_ids = {route.route_id for route in self.catalog.all_routes()}
+        catalog_targets = {
+            (route.provider_name, route.model_id) for route in self.catalog.all_routes()
+        }
+        pruned: list[EndpointSuggestion] = []
+        for suggestion in suggestions:
+            if suggestion.action == "remove_route":
+                if suggestion.route_id not in catalog_ids:
+                    continue
+            elif suggestion.action == "add_route":
+                if suggestion.route_id in catalog_ids:
+                    continue
+                provider_name = suggestion.provider_name
+                model_id = suggestion.model_id
+                if isinstance(suggestion.route, dict):
+                    provider_name = str(
+                        suggestion.route.get("provider_name", provider_name)
+                    )
+                    model_id = str(suggestion.route.get("model_id", model_id))
+                if (provider_name, model_id) in catalog_targets:
+                    continue
+            pruned.append(suggestion)
+        return pruned
 
     async def _diagnose_provider(
         self,
@@ -342,6 +381,9 @@ class EndpointDiagnosisService:
             discovered_ids,
             routeable_ids,
         )
+        capability_probes_run, capability_updates = await self._run_capability_probes(
+            client, provider
+        )
         suggestions = new_route_suggestions + stale_suggestions + recovered_suggestions
 
         return (
@@ -354,6 +396,8 @@ class EndpointDiagnosisService:
                 confirmed_route_count=confirmed,
                 stale_route_suggestion_count=len(stale_suggestions),
                 recovered_route_suggestion_count=len(recovered_suggestions),
+                capability_probes_run=capability_probes_run,
+                capability_updates=capability_updates,
             ),
             suggestions,
         )
@@ -385,10 +429,50 @@ class EndpointDiagnosisService:
                         "New free route discovered in the provider model catalog. "
                         "When applied, it is enabled and inserted into model priority by quality score."
                     ),
-                    route=asdict(route),
+                    route=_route_to_dict(route),
                 )
             )
         return suggestions
+
+    async def _run_capability_probes(
+        self,
+        client: httpx.AsyncClient,
+        provider: ProviderAdapter,
+    ) -> tuple[int, int]:
+        """Probe enabled routes and auto-apply capability claims to the catalog."""
+        routes = select_routes_for_capability_probe(
+            self.catalog.all_routes(),
+            provider_name=provider.name,
+        )
+        probes_run = 0
+        updates = 0
+
+        for route in routes:
+            tags_to_probe: list[str] = ["text"]
+            if should_probe_tool_use(route):
+                tags_to_probe.append("tool-use")
+
+            before_tags = set(route.tags)
+            claims = await probe_route_capabilities(
+                provider,
+                client,
+                route,
+                tags=tuple(tags_to_probe),
+            )
+            probes_run += len(claims)
+            try:
+                updated = self.catalog.apply_probe_claims_to_route(
+                    route.route_id,
+                    claims,
+                    save=False,
+                )
+            except KeyError:
+                continue
+
+            if set(updated.tags) != before_tags:
+                updates += 1
+
+        return probes_run, updates
 
     async def _routes_from_payload(
         self,
@@ -574,11 +658,13 @@ class BackgroundEndpointDiagnosis:
         interval_seconds: int,
         startup_delay_seconds: int,
         apply_safe_suggestions: bool = True,
+        benchmark_research: BenchmarkResearchService | None = None,
     ) -> None:
         self.service = service
         self.interval_seconds = max(60, interval_seconds)
         self.startup_delay_seconds = max(0, startup_delay_seconds)
         self.apply_safe_suggestions = apply_safe_suggestions
+        self.benchmark_research = benchmark_research
         self.last_auto_applied: list[EndpointSuggestion] = []
         self._task: asyncio.Task[None] | None = None
 
@@ -608,9 +694,11 @@ class BackgroundEndpointDiagnosis:
                     ]
                     if safe_ids:
                         self.last_auto_applied = await self.service.apply_suggestions(safe_ids)
+                if self.benchmark_research is not None:
+                    await self.benchmark_research.refresh_if_stale()
             except Exception:
                 # The request path must never depend on background refresh health.
-                pass
+                logger.exception("Background endpoint diagnosis cycle failed")
             await asyncio.sleep(self.interval_seconds)
 
 
@@ -677,50 +765,6 @@ def _probe_payload() -> dict[str, Any]:
         "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 1,
     }
-
-
-def _chat_response_text(payload: dict[str, Any]) -> str:
-    choices = payload.get("choices")
-    if not isinstance(choices, list):
-        return ""
-
-    chunks: list[str] = []
-    for choice in choices:
-        if not isinstance(choice, dict):
-            continue
-        message = choice.get("message")
-        if isinstance(message, dict):
-            content = message.get("content")
-            if isinstance(content, str):
-                chunks.append(content)
-            elif isinstance(content, list):
-                chunks.extend(
-                    str(item.get("text"))
-                    for item in content
-                    if isinstance(item, dict) and isinstance(item.get("text"), str)
-                )
-        text = choice.get("text")
-        if isinstance(text, str):
-            chunks.append(text)
-    return "\n".join(chunks)
-
-
-def _json_object_from_text(text: str) -> dict[str, Any] | None:
-    stripped = text.strip()
-    if not stripped:
-        return None
-    try:
-        parsed = json.loads(stripped)
-    except ValueError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            return None
-        try:
-            parsed = json.loads(stripped[start : end + 1])
-        except ValueError:
-            return None
-    return parsed if isinstance(parsed, dict) else None
 
 
 def _supervisor_note(verdict: SupervisorVerdict) -> str:

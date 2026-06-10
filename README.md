@@ -28,6 +28,11 @@ fallback, quota awareness, endpoint health, and low-touch maintenance across mul
 - **Transparent control:** The Models and Status pages show ranking, route health, usage, and
   pending endpoint updates.
 
+Route **capability tags** (`tool-use`, `web-search`, `vision`, etc.) are routing constraints, not
+marketing labels. A request is only sent to routes that support every required capability. Tags come
+from curated registry entries, provider metadata, live probes, and runtime traffic — see
+`docs/capability-tags.md`.
+
 ## Integration Guide For Other Projects
 
 Prefer integrating FreeRouter over HTTP. Run FreeRouter as a local service, then point your app or

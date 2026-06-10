@@ -1,6 +1,6 @@
 use std::{
     fs::{create_dir_all, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
     sync::{
@@ -137,6 +137,8 @@ pub fn run() {
                 }
             });
 
+            spawn_gateway_health_watchdog(app.handle().clone());
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -224,17 +226,18 @@ fn spawn_sidecar_monitor(
                             &project_root,
                             "Desktop restart requested by local app controls.",
                         );
-                        reclaim_gateway_port(GATEWAY_HOST, gateway_port);
-                        start_sidecar(&app, gateway_port, &token, &project_root);
                     } else {
                         let _ = append_launcher_log(
                             &project_root,
                             &format!(
-                                "FreeRouter sidecar exited with code {:?}.",
+                                "FreeRouter sidecar exited unexpectedly with code {:?}; restarting.",
                                 payload.code
                             ),
                         );
                     }
+                    thread::sleep(Duration::from_millis(500));
+                    reclaim_gateway_port(GATEWAY_HOST, gateway_port);
+                    start_sidecar(&app, gateway_port, &token, &project_root);
                     break;
                 }
                 CommandEvent::Error(message) => {
@@ -549,6 +552,69 @@ fn stop_gateway_listeners(host: &str, port: u16) {
     for pid in listener_pids_on_port(host, port) {
         force_kill_process_tree(pid);
     }
+}
+
+fn spawn_gateway_health_watchdog(app: AppHandle) {
+    thread::spawn(move || {
+        let mut consecutive_failures = 0u32;
+        loop {
+            thread::sleep(Duration::from_secs(30));
+            let Some(state) = app.try_state::<AppRuntimeState>() else {
+                break;
+            };
+            if state.quitting.load(Ordering::SeqCst) {
+                break;
+            }
+            let port = state.gateway_port;
+            if gateway_health_probe(GATEWAY_HOST, port) {
+                consecutive_failures = 0;
+                continue;
+            }
+            consecutive_failures += 1;
+            if consecutive_failures < 3 {
+                continue;
+            }
+            let project_root = state.project_root.clone();
+            let manages_sidecar = state.manages_sidecar;
+            let _ = append_launcher_log(
+                &project_root,
+                &format!(
+                    "Gateway health check failed on {GATEWAY_HOST}:{port}; attempting recovery."
+                ),
+            );
+            consecutive_failures = 0;
+            if manages_sidecar {
+                restart_sidecar(&app);
+            }
+        }
+    });
+}
+
+fn gateway_health_probe(host: &str, port: u16) -> bool {
+    let address = match (host, port).to_socket_addrs() {
+        Ok(mut addresses) => addresses.next(),
+        Err(_) => None,
+    };
+    let Some(address) = address else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_secs(2)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let request = format!(
+        "GET /v1/gateway/health.json HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut buffer = [0_u8; 768];
+    let Ok(read) = stream.read(&mut buffer) else {
+        return false;
+    };
+    let response = std::str::from_utf8(&buffer[..read]).unwrap_or("");
+    response.contains("200 OK") && response.contains("\"freerouter\"")
 }
 
 fn wait_for_port(host: &str, port: u16, timeout: Duration) -> bool {

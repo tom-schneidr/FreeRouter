@@ -2,27 +2,27 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
 
+from app.capability_tags import (
+    CANONICAL_MODEL_TAGS,
+    CapabilityClaim,
+    CapabilityStatus,
+    apply_capability_pipeline,
+    normalize_route_tool_use_policy,
+    TAGS_REQUIRING_CONFIRMATION,
+    apply_probe_claims,
+    apply_runtime_claim,
+    capability_claim_from_dict,
+    capability_claim_to_dict,
+    derive_tags_from_capabilities,
+    tags_to_capabilities,
+)
 from app.catalog_store import load_catalog_json, save_catalog_json
 from app.model_ranking import compute_rank_score, rank_sort_key
 
-CANONICAL_MODEL_TAGS = {
-    "text",
-    "reasoning",
-    "coding",
-    "tool-use",
-    "json-schema",
-    "web-search",
-    "vision",
-    "audio",
-    "safety",
-    "moderation",
-    "translation",
-    "classification",
-    "rag",
-}
+CANONICAL_MODEL_TAGS = set(CANONICAL_MODEL_TAGS)
 
 NON_TEXT_ROUTE_TAGS = {
     "safety",
@@ -47,6 +47,8 @@ class ModelRoute:
     speed: str = "unknown"
     cost: str = "free-tier"
     tags: list[str] = field(default_factory=list)
+    capabilities: dict[str, CapabilityClaim] = field(default_factory=dict)
+    tag_locks: frozenset[str] = field(default_factory=frozenset)
     notes: str = ""
     source_url: str = ""
     rank_score: int | None = None
@@ -71,8 +73,10 @@ def _route(
     """Build a ModelRoute with an auto-generated route_id slug."""
     raw_id = f"{provider_name}-{model_id}".lower()
     route_id = re.sub(r"[/:._]+", "-", raw_id).strip("-")
-    route_tags = list(dict.fromkeys((["text"] if text else []) + (tags or [])))
-    return ModelRoute(
+    explicit_tags = list(tags or [])
+    manual_tags = [tag for tag in explicit_tags if tag not in TAGS_REQUIRING_CONFIRMATION]
+    route_tags = list(dict.fromkeys((["text"] if text else []) + explicit_tags))
+    route = ModelRoute(
         route_id=route_id,
         provider_name=provider_name,
         model_id=model_id,
@@ -83,9 +87,12 @@ def _route(
         quality=quality,
         speed=speed,
         tags=route_tags,
+        capabilities=tags_to_capabilities(manual_tags, source="manual"),
+        tag_locks=frozenset(manual_tags),
         notes=notes,
         source_url=source_url,
     )
+    return apply_capability_pipeline(route)
 
 
 def route_id_for(provider_name: str, model_id: str) -> str:
@@ -136,29 +143,28 @@ def promote_routes_to_default_catalog(routes: list[ModelRoute]) -> list[ModelRou
             or (route.provider_name, route.model_id) in existing_targets
         ):
             continue
-        promoted_tags = _canonical_tags(route.tags)
-        if route.provider_name == "openrouter" and "text" in promoted_tags:
-            for extra in ("tool-use", "web-search"):
-                if extra not in promoted_tags:
-                    promoted_tags.append(extra)
-
-        default_route = ModelRoute(
-            route_id=route.route_id,
-            provider_name=route.provider_name,
-            model_id=route.model_id,
-            display_name=route.display_name,
-            rank=0,
-            enabled=route.enabled,
-            context_window=route.context_window,
-            quality=route.quality,
-            speed=route.speed,
-            cost=route.cost,
-            tags=promoted_tags,
-            notes=route.notes,
-            source_url=route.source_url,
-            rank_score=route.rank_score,
-            rank_reason=route.rank_reason,
-            rank_source=route.rank_source,
+        default_route = apply_capability_pipeline(
+            ModelRoute(
+                route_id=route.route_id,
+                provider_name=route.provider_name,
+                model_id=route.model_id,
+                display_name=route.display_name,
+                rank=0,
+                enabled=route.enabled,
+                context_window=route.context_window,
+                quality=route.quality,
+                speed=route.speed,
+                cost=route.cost,
+                tags=_canonical_tags(route.tags),
+                capabilities=dict(route.capabilities),
+                tag_locks=route.tag_locks,
+                notes=route.notes,
+                source_url=route.source_url,
+                rank_score=route.rank_score,
+                rank_reason=route.rank_reason,
+                rank_source=route.rank_source,
+            ),
+            metadata_tags=_canonical_tags(route.tags),
         )
         DEFAULT_MODEL_ROUTES.append(default_route)
         promoted.append(default_route)
@@ -188,6 +194,56 @@ def remove_routes_from_default_catalog(route_ids: set[str]) -> list[ModelRoute]:
 
 def _canonical_tags(tags: list[str]) -> list[str]:
     return list(dict.fromkeys(tag for tag in tags if tag in CANONICAL_MODEL_TAGS))
+
+
+def _clone_route(route: ModelRoute, **changes: Any) -> ModelRoute:
+    payload = {
+        "route_id": route.route_id,
+        "provider_name": route.provider_name,
+        "model_id": route.model_id,
+        "display_name": route.display_name,
+        "rank": route.rank,
+        "enabled": route.enabled,
+        "context_window": route.context_window,
+        "quality": route.quality,
+        "speed": route.speed,
+        "cost": route.cost,
+        "tags": list(route.tags),
+        "capabilities": dict(route.capabilities),
+        "tag_locks": route.tag_locks,
+        "notes": route.notes,
+        "source_url": route.source_url,
+        "rank_score": route.rank_score,
+        "rank_reason": route.rank_reason,
+        "rank_source": route.rank_source,
+    }
+    payload.update(changes)
+    return ModelRoute(**payload)
+
+
+def _route_to_dict(route: ModelRoute) -> dict[str, Any]:
+    return {
+        "route_id": route.route_id,
+        "provider_name": route.provider_name,
+        "model_id": route.model_id,
+        "display_name": route.display_name,
+        "rank": route.rank,
+        "enabled": route.enabled,
+        "context_window": route.context_window,
+        "quality": route.quality,
+        "speed": route.speed,
+        "cost": route.cost,
+        "tags": list(route.tags),
+        "capabilities": {
+            tag: capability_claim_to_dict(claim) for tag, claim in route.capabilities.items()
+        },
+        "tag_locks": sorted(route.tag_locks),
+        "notes": route.notes,
+        "source_url": route.source_url,
+        "rank_score": route.rank_score,
+        "rank_reason": route.rank_reason,
+        "rank_source": route.rank_source,
+    }
 
 
 def is_text_chat_route(route: ModelRoute) -> bool:
@@ -331,7 +387,7 @@ DEFAULT_MODEL_ROUTES = [
         2_097_152,
         quality="very high",
         speed="medium",
-        tags=["reasoning", "vision", "audio"],
+        tags=["reasoning", "tool-use", "vision", "audio"],
         notes="Listed in Gemini docs. Free-tier limits are dynamic and must be checked in AI Studio. 2 RPM.",
         source_url="https://ai.google.dev/gemini-api/docs/models",
     ),
@@ -342,7 +398,7 @@ DEFAULT_MODEL_ROUTES = [
         1_048_576,
         quality="high",
         speed="fast",
-        tags=["vision", "audio"],
+        tags=["tool-use", "vision", "audio"],
         notes="Frontier-class performance rivaling larger models. Free-tier limits are dynamic. 15 RPM.",
         source_url="https://ai.google.dev/gemini-api/docs/models",
     ),
@@ -353,7 +409,7 @@ DEFAULT_MODEL_ROUTES = [
         1_048_576,
         quality="good",
         speed="very fast",
-        tags=["vision", "audio"],
+        tags=["tool-use", "vision", "audio"],
         notes="Listed in Gemini docs. Free-tier limits are dynamic and must be checked in AI Studio. 15 RPM.",
         source_url="https://ai.google.dev/gemini-api/docs/models",
     ),
@@ -364,7 +420,7 @@ DEFAULT_MODEL_ROUTES = [
         1_000_000,
         quality="high",
         speed="fast",
-        tags=["vision", "audio"],
+        tags=["tool-use", "vision", "audio"],
         notes="Current stable Flash family model. Free-tier limits are dynamic and per project.",
         source_url="https://ai.google.dev/gemini-api/docs/models",
     ),
@@ -375,7 +431,7 @@ DEFAULT_MODEL_ROUTES = [
         1_000_000,
         quality="good",
         speed="very fast",
-        tags=["vision", "audio"],
+        tags=["tool-use", "vision", "audio"],
         notes="Fastest 2.5 family model. Free-tier limits are dynamic and per project.",
         source_url="https://ai.google.dev/gemini-api/docs/models",
     ),
@@ -386,7 +442,7 @@ DEFAULT_MODEL_ROUTES = [
         1_000_000,
         quality="very high",
         speed="medium",
-        tags=["reasoning", "vision", "audio"],
+        tags=["reasoning", "tool-use", "vision", "audio"],
         notes="Listed in Gemini docs; availability/free limits vary by project and tier.",
         source_url="https://ai.google.dev/gemini-api/docs/models",
     ),
@@ -397,7 +453,7 @@ DEFAULT_MODEL_ROUTES = [
         1_000_000,
         quality="very high",
         speed="fast",
-        tags=["coding"],
+        tags=["coding", "tool-use"],
         notes="Verified on NVIDIA Build Free Endpoint filtered catalog. DeepSeek V4 Pro is optimized for coding tasks and 1M-token context.",
         source_url="https://build.nvidia.com/deepseek-ai/deepseek-v4-pro",
     ),
@@ -408,7 +464,7 @@ DEFAULT_MODEL_ROUTES = [
         1_000_000,
         quality="high",
         speed="very fast",
-        tags=["coding"],
+        tags=["coding", "tool-use"],
         notes="Verified on NVIDIA Build Free Endpoint filtered catalog. DeepSeek V4 Flash is a 284B MoE optimized for fast coding and agents.",
         source_url="https://build.nvidia.com/deepseek-ai/deepseek-v4-flash",
     ),
@@ -458,14 +514,26 @@ DEFAULT_MODEL_ROUTES = [
     ),
     _route(
         "nvidia",
+        "moonshotai/kimi-k2.6",
+        "Kimi K2.6",
+        256000,
+        quality="very high",
+        speed="fast",
+        tags=["reasoning", "tool-use", "vision"],
+        notes="Moonshot flagship multimodal agent model on NVIDIA Build. Replaces deprecated Kimi K2 family.",
+        source_url="https://build.nvidia.com/moonshotai/kimi-k2.6",
+    ),
+    _route(
+        "nvidia",
         "moonshotai/kimi-k2-thinking",
         "Kimi K2 Thinking",
         256000,
         quality="high",
         speed="fast",
         tags=["reasoning", "tool-use"],
-        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        notes="Deprecated by Moonshot (May 2026). Prefer moonshotai/kimi-k2.6. Disabled for routing.",
         source_url="https://build.nvidia.com/moonshotai/kimi-k2-thinking",
+        enabled=False,
     ),
     _route(
         "nvidia",
@@ -486,8 +554,9 @@ DEFAULT_MODEL_ROUTES = [
         quality="high",
         speed="fast",
         tags=["reasoning"],
-        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        notes="Deprecated by Moonshot (May 2026). Prefer moonshotai/kimi-k2.6. Disabled for routing.",
         source_url="https://build.nvidia.com/moonshotai/kimi-k2-instruct-0905",
+        enabled=False,
     ),
     _route(
         "nvidia",
@@ -519,8 +588,9 @@ DEFAULT_MODEL_ROUTES = [
         quality="high",
         speed="fast",
         tags=["coding"],
-        notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
+        notes="Deprecated by Moonshot (May 2026). Prefer moonshotai/kimi-k2.6. Disabled for routing.",
         source_url="https://build.nvidia.com/moonshotai/kimi-k2-instruct",
+        enabled=False,
     ),
     _route(
         "nvidia",
@@ -734,7 +804,7 @@ DEFAULT_MODEL_ROUTES = [
         256000,
         quality="high",
         speed="fast",
-        tags=["reasoning"],
+        tags=["reasoning", "tool-use"],
         notes="Verified on NVIDIA Build Free Endpoint filtered catalog.",
         source_url="https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
     ),
@@ -842,6 +912,7 @@ DEFAULT_MODEL_ROUTES = [
 ]
 
 _OPENROUTER_FREE_MODELS = [
+    ("moonshotai/kimi-k2.6:free", "MoonshotAI: Kimi K2.6", 262144, "text"),
     ("meta-llama/llama-3.1-405b-instruct:free", "Meta: Llama 3.1 405B Instruct", 128000, "text"),
     ("mistralai/pixtral-12b:free", "Mistral: Pixtral 12B", 128000, "text"),
     ("poolside/laguna-xs.2:free", "Poolside: Laguna XS.2", 131072, "text"),
@@ -899,8 +970,6 @@ def _openrouter_tags(
         tags.append("reasoning")
     if any(term in text for term in ("coder", "code")):
         tags.append("coding")
-    if modality in {"text", "vision"}:
-        tags.extend(["tool-use", "web-search"])
     if "ocr" in text:
         tags.append("classification")
 
@@ -944,6 +1013,15 @@ def _assign_default_ranks() -> None:
 _assign_default_ranks()
 
 
+def _normalize_default_routes_tool_use() -> None:
+    DEFAULT_MODEL_ROUTES[:] = [
+        normalize_route_tool_use_policy(route) for route in DEFAULT_MODEL_ROUTES
+    ]
+
+
+_normalize_default_routes_tool_use()
+
+
 def _sort_routes_for_catalog(routes: list[ModelRoute]) -> list[ModelRoute]:
     return sorted(routes, key=lambda route: (route.rank, route.provider_name, route.model_id))
 
@@ -965,12 +1043,16 @@ class ModelCatalog:
             os.makedirs(directory, exist_ok=True)
 
         if not os.path.exists(self.path):
-            self._routes = DEFAULT_MODEL_ROUTES.copy()
+            self._routes = [normalize_route_tool_use_policy(route) for route in DEFAULT_MODEL_ROUTES]
             self._invalidate_sorted_cache()
             self.save()
             return
 
-        self._routes = [route for route in self._load_routes() if is_text_chat_route(route)]
+        self._routes = [
+            normalize_route_tool_use_policy(route)
+            for route in self._load_routes()
+            if is_text_chat_route(route)
+        ]
         self._merge_new_defaults()
         self._invalidate_sorted_cache()
         self.save()
@@ -1014,24 +1096,7 @@ class ModelCatalog:
         for index, route in enumerate(self._routes):
             if route.route_id != route_id:
                 continue
-            updated = ModelRoute(
-                route_id=route.route_id,
-                provider_name=route.provider_name,
-                model_id=route.model_id,
-                display_name=route.display_name,
-                rank=route.rank,
-                enabled=enabled,
-                context_window=route.context_window,
-                quality=route.quality,
-                speed=route.speed,
-                cost=route.cost,
-                tags=route.tags,
-                notes=route.notes,
-                source_url=route.source_url,
-                rank_score=route.rank_score,
-                rank_reason=route.rank_reason,
-                rank_source=route.rank_source,
-            )
+            updated = _clone_route(route, enabled=enabled)
             self._routes[index] = updated
             self._invalidate_sorted_cache()
             self.save()
@@ -1077,23 +1142,18 @@ class ModelCatalog:
     @staticmethod
     def _build_discovered_route(route: ModelRoute) -> ModelRoute:
         score = compute_rank_score(route)
-        return ModelRoute(
-            route_id=route.route_id,
-            provider_name=route.provider_name,
-            model_id=route.model_id,
-            display_name=route.display_name,
-            rank=route.rank,
-            enabled=True,
-            context_window=route.context_window,
-            quality=route.quality,
-            speed=route.speed,
-            cost=route.cost,
-            tags=_canonical_tags(route.tags),
-            notes=route.notes,
-            source_url=route.source_url,
-            rank_score=score,
-            rank_reason=route.rank_reason or "deterministic_quality_score",
-            rank_source=route.rank_source or "heuristic",
+        return normalize_route_tool_use_policy(
+            apply_capability_pipeline(
+                _clone_route(
+                    route,
+                    enabled=True,
+                    tags=_canonical_tags(route.tags),
+                    rank_score=score,
+                    rank_reason=route.rank_reason or "deterministic_quality_score",
+                    rank_source=route.rank_source or "heuristic",
+                ),
+                metadata_tags=_canonical_tags(route.tags),
+            )
         )
 
     @staticmethod
@@ -1116,20 +1176,10 @@ class ModelCatalog:
         for index, route in enumerate(ordered, start=1):
             score = compute_rank_score(route)
             rebuilt.append(
-                ModelRoute(
-                    route_id=route.route_id,
-                    provider_name=route.provider_name,
-                    model_id=route.model_id,
-                    display_name=route.display_name,
+                _clone_route(
+                    route,
                     rank=index,
-                    enabled=route.enabled,
-                    context_window=route.context_window,
-                    quality=route.quality,
-                    speed=route.speed,
-                    cost=route.cost,
                     tags=_canonical_tags(route.tags),
-                    notes=route.notes,
-                    source_url=route.source_url,
                     rank_score=score,
                     rank_reason=route.rank_reason or "deterministic_quality_score",
                     rank_source=route.rank_source or "heuristic",
@@ -1157,6 +1207,44 @@ class ModelCatalog:
         self.save()
         return self.all_routes()
 
+    def apply_probe_claims_to_route(
+        self,
+        route_id: str,
+        claims: dict[str, CapabilityClaim],
+        *,
+        save: bool = True,
+    ) -> ModelRoute:
+        for index, route in enumerate(self._routes):
+            if route.route_id != route_id:
+                continue
+            updated = apply_probe_claims(route, claims)
+            self._routes[index] = updated
+            self._invalidate_sorted_cache()
+            if save:
+                self.save()
+            return updated
+        raise KeyError(f"Unknown route_id: {route_id}")
+
+    def note_runtime_capability(
+        self,
+        route_id: str,
+        tag: str,
+        *,
+        status: CapabilityStatus,
+        evidence: str,
+    ) -> ModelRoute | None:
+        for index, route in enumerate(self._routes):
+            if route.route_id != route_id:
+                continue
+            updated = apply_runtime_claim(route, tag, status=status, evidence=evidence)
+            if updated.tags == route.tags and updated.capabilities == route.capabilities:
+                return updated
+            self._routes[index] = updated
+            self._invalidate_sorted_cache()
+            self.save()
+            return updated
+        return None
+
     def auto_rank_routes(self) -> list[ModelRoute]:
         ranked = sorted(
             (route for route in self._routes if is_text_chat_route(route)),
@@ -1167,20 +1255,10 @@ class ModelCatalog:
         for index, route in enumerate(ranked, start=1):
             score = compute_rank_score(route)
             rebuilt.append(
-                ModelRoute(
-                    route_id=route.route_id,
-                    provider_name=route.provider_name,
-                    model_id=route.model_id,
-                    display_name=route.display_name,
+                _clone_route(
+                    route,
                     rank=index,
-                    enabled=route.enabled,
-                    context_window=route.context_window,
-                    quality=route.quality,
-                    speed=route.speed,
-                    cost=route.cost,
                     tags=_canonical_tags(route.tags),
-                    notes=route.notes,
-                    source_url=route.source_url,
                     rank_score=score,
                     rank_reason=route.rank_reason or "deterministic_quality_score",
                     rank_source=route.rank_source or "heuristic",
@@ -1194,11 +1272,11 @@ class ModelCatalog:
         return {
             "object": "list",
             "catalog_path": self.path,
-            "data": [asdict(route) for route in self.all_routes()],
+            "data": [_route_to_dict(route) for route in self.all_routes()],
         }
 
     def save(self) -> None:
-        save_catalog_json(self.path, [asdict(route) for route in self.all_routes()])
+        save_catalog_json(self.path, [_route_to_dict(route) for route in self.all_routes()])
 
     def _load_routes(self) -> list[ModelRoute]:
         return [self._route_from_dict(item) for item in load_catalog_json(self.path)]
@@ -1211,42 +1289,18 @@ class ModelCatalog:
             default = defaults.get(route.route_id)
             if not default:
                 refreshed.append(
-                    ModelRoute(
-                        route_id=route.route_id,
-                        provider_name=route.provider_name,
-                        model_id=route.model_id,
-                        display_name=route.display_name,
-                        rank=route.rank,
-                        enabled=route.enabled,
-                        context_window=route.context_window,
-                        quality=route.quality,
-                        speed=route.speed,
-                        cost=route.cost,
-                        tags=_canonical_tags(route.tags),
-                        notes=route.notes,
-                        source_url=route.source_url,
-                        rank_score=route.rank_score,
-                        rank_reason=route.rank_reason,
-                        rank_source=route.rank_source,
+                    apply_capability_pipeline(
+                        _clone_route(route, tags=_canonical_tags(route.tags))
                     )
                 )
                 continue
 
             refreshed.append(
-                ModelRoute(
-                    route_id=default.route_id,
-                    provider_name=default.provider_name,
-                    model_id=default.model_id,
-                    display_name=default.display_name,
+                _clone_route(
+                    default,
                     rank=route.rank,
                     enabled=route.enabled,
-                    context_window=default.context_window,
-                    quality=default.quality,
-                    speed=default.speed,
-                    cost=default.cost,
                     tags=_canonical_tags(default.tags),
-                    notes=default.notes,
-                    source_url=default.source_url,
                     rank_score=route.rank_score,
                     rank_reason=route.rank_reason,
                     rank_source=route.rank_source,
@@ -1263,7 +1317,24 @@ class ModelCatalog:
         if not isinstance(raw, dict):
             raise ValueError("Each model catalog entry must be an object")
         tags = _canonical_tags([str(tag) for tag in raw.get("tags", [])]) or ["text"]
-        return ModelRoute(
+        raw_capabilities = raw.get("capabilities")
+        capabilities: dict[str, CapabilityClaim] = {}
+        if isinstance(raw_capabilities, dict) and raw_capabilities:
+            for tag, claim_raw in raw_capabilities.items():
+                if isinstance(claim_raw, dict):
+                    capabilities[str(tag)] = capability_claim_from_dict(claim_raw)
+            tags = derive_tags_from_capabilities(capabilities) or tags
+        else:
+            capabilities = tags_to_capabilities(tags, source="manual")
+
+        raw_locks = raw.get("tag_locks")
+        tag_locks = (
+            frozenset(str(tag) for tag in raw_locks)
+            if isinstance(raw_locks, list)
+            else frozenset(tags)
+        )
+
+        route = ModelRoute(
             route_id=str(raw["route_id"]),
             provider_name=str(raw["provider_name"]),
             model_id=str(raw["model_id"]),
@@ -1277,9 +1348,14 @@ class ModelCatalog:
             speed=str(raw.get("speed", "unknown")),
             cost=str(raw.get("cost", "free-tier")),
             tags=tags,
+            capabilities=capabilities,
+            tag_locks=tag_locks,
             notes=str(raw.get("notes", "")),
             source_url=str(raw.get("source_url", "")),
             rank_score=(int(raw["rank_score"]) if raw.get("rank_score") is not None else None),
             rank_reason=str(raw.get("rank_reason", "")),
             rank_source=str(raw.get("rank_source", "heuristic")),
         )
+        if not isinstance(raw_capabilities, dict) or not raw_capabilities:
+            return normalize_route_tool_use_policy(apply_capability_pipeline(route))
+        return normalize_route_tool_use_policy(route)

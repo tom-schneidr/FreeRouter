@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.capability_tags import route_satisfies_capabilities
 from app.model_catalog import ModelCatalog, ModelRoute
 from app.providers.base import ProviderAdapter
 
@@ -25,7 +26,7 @@ def enabled_routes_for_request(
     return [
         route
         for route in catalog.enabled_routes(requested_model if isinstance(requested_model, str) else None)
-        if required.issubset(route.tags)
+        if route_satisfies_capabilities(route, required)
     ]
 
 

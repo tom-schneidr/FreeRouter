@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import httpx
 from fastapi import Request
 
+from app.benchmark_research import BenchmarkResearchService
 from app.endpoint_diagnosis import BackgroundEndpointDiagnosis, EndpointDiagnosisService
 from app.live_monitor import APILiveMonitor
 from app.model_catalog import ModelCatalog
@@ -27,6 +28,7 @@ class AppServices:
     waterfall_router: WaterfallRouter
     endpoint_diagnosis: EndpointDiagnosisService
     background_endpoint_diagnosis: BackgroundEndpointDiagnosis | None
+    benchmark_research: BenchmarkResearchService | None
 
     async def shutdown(self) -> None:
         background = self.background_endpoint_diagnosis

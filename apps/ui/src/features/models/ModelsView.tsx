@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { RefreshCw, Save, Sparkles, Undo2, Wrench } from "lucide-react";
 import { fetchJson, queryClient } from "../../api/client";
 import type {
+  DiagnosisReport,
   EndpointDiagnosisRefreshResponse,
   EndpointDiagnosisResponse,
   EndpointSuggestion,
@@ -11,6 +12,32 @@ import type {
 } from "../../api/types";
 import { EmptyState, Notice, StatusPill } from "../../components/ui";
 import { healthLabel } from "../../lib/format";
+
+const CAPABILITY_SOURCE_SHORT: Record<string, string> = {
+  manual: "M",
+  probe: "P",
+  runtime: "R",
+  registry: "G",
+  provider_metadata: "D",
+};
+
+function capabilityBadge(route: ModelRoute, tag: string) {
+  const claim = route.capabilities?.[tag];
+  const sourceKey = claim?.source;
+  const source =
+    sourceKey && sourceKey !== "manual"
+      ? CAPABILITY_SOURCE_SHORT[sourceKey] || sourceKey[0]
+      : null;
+  const title = claim
+    ? `${tag}: ${claim.status} (${claim.source}, ${claim.confidence})${claim.evidence ? ` — ${claim.evidence}` : ""}`
+    : tag;
+  return (
+    <span key={tag} className="pill muted" title={title}>
+      {tag}
+      {source ? <span className="cap-source">{source}</span> : null}
+    </span>
+  );
+}
 
 const CAPABILITY_LABELS: Record<string, string> = {
   text: "Text",
@@ -39,12 +66,65 @@ function normalize(value: unknown) {
   return String(value || "").toLowerCase();
 }
 
+function diagnosisRefreshSummary(report: DiagnosisReport) {
+  const suggestionCount = report.suggestions?.length ?? 0;
+  const probesRun = (report.providers ?? []).reduce(
+    (sum, provider) => sum + (provider.capability_probes_run ?? 0),
+    0,
+  );
+  const capabilityUpdates = (report.providers ?? []).reduce(
+    (sum, provider) => sum + (provider.capability_updates ?? 0),
+    0,
+  );
+  const parts: string[] = [];
+  if (suggestionCount) {
+    parts.push(
+      `${suggestionCount} endpoint suggestion${suggestionCount === 1 ? "" : "s"}`,
+    );
+  }
+  if (probesRun) {
+    parts.push(
+      `probed ${probesRun} capability check${probesRun === 1 ? "" : "s"}`,
+    );
+  }
+  if (capabilityUpdates) {
+    parts.push(
+      `${capabilityUpdates} capability tag change${capabilityUpdates === 1 ? "" : "s"} applied`,
+    );
+  }
+  return parts.length ? `${parts.join("; ")}.` : "No pending endpoint updates.";
+}
+
 function suggestionActionLabel(action: string) {
   return (
     { add_route: "New route", remove_route: "Remove route", clear_stale: "Recovered route" }[
       action
     ] || action
   );
+}
+
+const REFRESH_STATUS_MESSAGE =
+  "Checking provider catalogs and verifying route capabilities...";
+
+export function endpointUpdatesStatusText(options: {
+  suggestionCount: number;
+  isRefreshing: boolean;
+  isApplying: boolean;
+  summary: string;
+}): string {
+  if (options.isApplying) {
+    return "Applying selected updates...";
+  }
+  if (options.isRefreshing) {
+    return REFRESH_STATUS_MESSAGE;
+  }
+  if (options.summary.trim()) {
+    return options.summary;
+  }
+  if (options.suggestionCount > 0) {
+    return `${options.suggestionCount} suggested update${options.suggestionCount === 1 ? "" : "s"} found. Nothing changes until you apply them.`;
+  }
+  return "No pending endpoint updates.";
 }
 
 export function shouldAutoOpenEndpointUpdates(
@@ -134,14 +214,11 @@ export function ModelsView() {
       fetchJson<EndpointDiagnosisRefreshResponse>("/v1/gateway/endpoint-diagnosis/refresh", {
         method: "POST",
       }),
-    onMutate: () => setUpdateSummary("Checking provider catalogs..."),
+    onMutate: () => setUpdateSummary(REFRESH_STATUS_MESSAGE),
     onSuccess: (payload) => {
       setEndpointSuggestions(payload.data.suggestions || []);
-      setUpdateSummary(
-        payload.data.suggestions?.length
-          ? `${payload.data.suggestions.length} suggested update(s) found.`
-          : "No pending endpoint updates.",
-      );
+      setUpdateSummary(diagnosisRefreshSummary(payload.data));
+      queryClient.invalidateQueries({ queryKey: ["gateway-models-catalog"] });
     },
     onError: () => setUpdateSummary("Could not refresh endpoint suggestions."),
   });
@@ -156,11 +233,18 @@ export function ModelsView() {
     onSuccess: async () => {
       setUpdateSummary("Applied selected updates.");
       setSelectedSuggestions(new Set());
-      await catalog.refetch();
-      await diagnosis.refetch();
+      const [catalogResult, diagnosisResult] = await Promise.all([
+        catalog.refetch(),
+        diagnosis.refetch(),
+      ]);
+      if (catalogResult.data) {
+        setRoutes(catalogResult.data.data);
+      }
+      setEndpointSuggestions(diagnosisResult.data?.last_report?.suggestions ?? []);
       setUpdateModalOpen(false);
     },
-    onError: () => setUpdateSummary("Could not apply selected updates."),
+    onError: (error: Error) =>
+      setUpdateSummary(error.message || "Could not apply selected updates."),
   });
 
   const allCapabilities = [...new Set(routes.flatMap((route) => route.tags || []))].sort((a, b) =>
@@ -186,6 +270,7 @@ export function ModelsView() {
     .filter((route) => !contextFilter || Number(route.context_window || 0) >= Number(contextFilter))
     .filter((route) => {
       if (routeability === "routeable") return route.enabled;
+      if (routeability === "tool-use") return route.enabled && (route.tags || []).includes("tool-use");
       if (routeability === "disabled") return !route.enabled;
       return true;
     })
@@ -256,12 +341,23 @@ export function ModelsView() {
 
   function openUpdateModal() {
     setUpdateModalOpen(true);
+    if (refreshSuggestions.isPending || applySuggestions.isPending) {
+      return;
+    }
     setUpdateSummary(
       endpointSuggestions.length
         ? `${endpointSuggestions.length} suggested update${endpointSuggestions.length === 1 ? "" : "s"} found. Nothing changes until you apply them.`
         : "No pending endpoint updates.",
     );
   }
+
+  const updatesStatusText = endpointUpdatesStatusText({
+    suggestionCount: endpointSuggestions.length,
+    isRefreshing: refreshSuggestions.isPending,
+    isApplying: applySuggestions.isPending,
+    summary: updateSummary,
+  });
+  const updatesBusy = refreshSuggestions.isPending || applySuggestions.isPending;
 
   React.useEffect(() => {
     if (!diagnosis.data) return;
@@ -294,7 +390,9 @@ export function ModelsView() {
           >
             <Wrench size={16} />
             Updates
-            {endpointSuggestions.length > 0 ? (
+            {refreshSuggestions.isPending ? (
+              <span className="update-count active">…</span>
+            ) : endpointSuggestions.length > 0 ? (
               <span className="update-count active">{endpointSuggestions.length}</span>
             ) : null}
           </button>
@@ -415,6 +513,7 @@ export function ModelsView() {
               {[
                 { value: "", label: "All routes" },
                 { value: "routeable", label: "Enabled only" },
+                { value: "tool-use", label: "Tool-use eligible" },
                 { value: "disabled", label: "Disabled/specialized" },
               ].map((option) => (
                 <label key={option.value || "all"} className="filter-option">
@@ -465,11 +564,7 @@ export function ModelsView() {
                 <span className="muted"> {route.model_id}</span>
                 <br />
                 <span className="provider-tag">{route.provider_name}</span>
-                {(route.tags || []).map((tag) => (
-                  <span key={tag} className="pill muted">
-                    {tag}
-                  </span>
-                ))}
+                {(route.tags || []).map((tag) => capabilityBadge(route, tag))}
                 {route.health?.status && route.health.status !== "active" ? (
                   <StatusPill tone="warn">{healthLabel(route.health.status)}</StatusPill>
                 ) : null}
@@ -551,7 +646,10 @@ export function ModelsView() {
               </button>
             </div>
             <div className="modal-body">
-              <p className="panel-copy">{updateSummary}</p>
+              <p className={`panel-copy${updatesBusy ? " panel-copy-busy" : ""}`}>
+                {updatesBusy ? <RefreshCw className="inline-spin" size={14} aria-hidden /> : null}
+                {updatesStatusText}
+              </p>
               {endpointSuggestions.length ? (
                 endpointSuggestions.map((item) => (
                   <label key={item.suggestion_id} className="suggestion">
@@ -577,9 +675,7 @@ export function ModelsView() {
                     </span>
                   </label>
                 ))
-              ) : (
-                <div className="empty-updates">No pending endpoint updates.</div>
-              )}
+              ) : null}
             </div>
             <div className="modal-actions">
               <button
@@ -587,7 +683,7 @@ export function ModelsView() {
                 disabled={refreshSuggestions.isPending}
                 onClick={() => refreshSuggestions.mutate()}
               >
-                Refresh
+                {refreshSuggestions.isPending ? "Refreshing..." : "Refresh"}
               </button>
               <button
                 type="button"
@@ -600,17 +696,18 @@ export function ModelsView() {
               <button
                 className="primary-action"
                 type="button"
-                disabled={applySuggestions.isPending}
+                disabled={applySuggestions.isPending || refreshSuggestions.isPending}
                 onClick={() => {
                   const ids = [...selectedSuggestions];
                   if (!ids.length) {
                     setUpdateSummary("Choose at least one suggestion to apply.");
                     return;
                   }
+                  setUpdateSummary(`Applying ${ids.length} selected update${ids.length === 1 ? "" : "s"}...`);
                   applySuggestions.mutate(ids);
                 }}
               >
-                Apply selected
+                {applySuggestions.isPending ? "Applying..." : "Apply selected"}
               </button>
             </div>
           </div>

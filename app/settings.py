@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     auto_endpoint_diagnosis_startup_delay_seconds: int = 10
     endpoint_diagnosis_supervisor_enabled: bool = False
     endpoint_diagnosis_supervisor_model: str | None = None
+    benchmark_refresh_enabled: bool = True
+    benchmark_scores_path: str = "./data/benchmark_scores.json"
+    benchmark_refresh_max_age_seconds: int = 604_800
+    benchmark_refresh_max_models: int = 60
+    benchmark_refresh_min_scores: int = 3
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -60,6 +65,7 @@ class Settings(BaseSettings):
         "http_max_connections",
         "http_max_keepalive_connections",
         "auto_endpoint_diagnosis_interval_seconds",
+        "benchmark_refresh_max_age_seconds",
         mode="after",
     )
     @classmethod
