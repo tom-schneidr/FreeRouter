@@ -1,8 +1,6 @@
 .usage-page *, .usage-page *::before, .usage-page *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-.usage-page { --bg-primary: #0a0e1a; --bg-secondary: #111827; --bg-tertiary: #1e293b; --border: #2d3a4f; --text: #e2e8f0; --text-muted: #94a3b8; --accent: #3b82f6; --accent-glow: rgba(59,130,246,0.15); --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --font: 'Inter', system-ui, sans-serif; }
-
-.usage-page { font-family: var(--font); background: var(--bg-primary); color: var(--text); }
+.usage-page { background: var(--bg-primary); color: var(--text); }
 
 .usage-page nav { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
 
@@ -91,7 +89,7 @@
 
 .usage-page th { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; background: var(--table-head-bg); position: sticky; top: 0; z-index: 1; }
 
-.usage-page tbody tr:hover { background: rgba(59,130,246,0.08); }
+.usage-page tbody tr:hover { background: var(--table-row-hover); }
 
 .usage-page .model { font-weight: 700; color: var(--heading); }
 

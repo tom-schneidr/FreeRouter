@@ -1,16 +1,10 @@
 .chat-page *, .chat-page *::before, .chat-page *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-.chat-page {
-      --bg-primary: #0a0e1a; --bg-secondary: #111827; --bg-tertiary: #1e293b;
-      --border: #2d3a4f; --text: #e2e8f0; --text-muted: #94a3b8;
-      --accent: #3b82f6; --accent-glow: rgba(59,130,246,0.15);
-      --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --purple: #a78bfa;
-      --radius: 12px; --font: 'Inter', system-ui, sans-serif;
-    }
+.chat-page { --radius: 12px; }
 
 .chat-page, .chat-page { height: 100%; }
 
-.chat-page { font-family: var(--font); background: var(--bg-primary); color: var(--text); display: flex; flex-direction: column; }
+.chat-page { background: var(--bg-primary); color: var(--text); display: flex; flex-direction: column; }
 
 .chat-page nav { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem;
       background: var(--bg-secondary); border-bottom: 1px solid var(--border); flex-shrink: 0; }

@@ -1,8 +1,6 @@
 .health-page *, .health-page *::before, .health-page *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-.health-page { --bg-primary: #0a0e1a; --bg-secondary: #111827; --bg-tertiary: #1e293b; --border: #2d3a4f; --text: #e2e8f0; --text-muted: #94a3b8; --accent: #3b82f6; --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --font: 'Inter', system-ui, sans-serif; }
-
-.health-page { font-family: var(--font); background: var(--bg-primary); color: var(--text); }
+.health-page { background: var(--bg-primary); color: var(--text); }
 
 .health-page nav { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
 

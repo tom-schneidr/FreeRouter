@@ -49,6 +49,16 @@ html[data-theme="dark"] {
   --danger-text: #fecaca;
   --danger-bg: rgba(239, 68, 68, 0.12);
   --danger-border: rgba(239, 68, 68, 0.5);
+  --green: #22c55e;
+  --red: #ef4444;
+  --amber: #f59e0b;
+  --purple: #a78bfa;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --bad: #ef4444;
+  --purple-text: #ddd6fe;
+  --purple-bg: rgba(167, 139, 250, 0.14);
+  --purple-border: rgba(167, 139, 250, 0.5);
   --button-hover-bg: #1a2c47;
   --button-hover-border: #3a5578;
 }
@@ -103,6 +113,16 @@ html[data-theme="light"] {
   --danger-text: #b91c1c;
   --danger-bg: rgba(220, 38, 38, 0.1);
   --danger-border: rgba(185, 28, 28, 0.28);
+  --green: #15803d;
+  --red: #dc2626;
+  --amber: #b45309;
+  --purple: #6d28d9;
+  --ok: #15803d;
+  --warn: #b45309;
+  --bad: #dc2626;
+  --purple-text: #6d28d9;
+  --purple-bg: rgba(124, 58, 237, 0.1);
+  --purple-border: rgba(109, 40, 217, 0.28);
   --button-hover-bg: #dbe7f7;
   --button-hover-border: #9db5d3;
 }

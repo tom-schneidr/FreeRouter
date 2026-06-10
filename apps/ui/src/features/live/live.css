@@ -1,10 +1,8 @@
 .live-page *, .live-page *::before, .live-page *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-.live-page { --bg-primary: #0a0e1a; --bg-secondary: #111827; --bg-tertiary: #1e293b; --border: #2d3a4f; --text: #e2e8f0; --text-muted: #94a3b8; --accent: #3b82f6; --font: 'Inter', system-ui, sans-serif; --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444; }
-
 .live-page { scrollbar-gutter: stable; }
 
-.live-page { font-family: var(--font); background: var(--bg-primary); color: var(--text); }
+.live-page { background: var(--bg-primary); color: var(--text); }
 
 .live-page nav { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1.5rem; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
 
@@ -32,7 +30,7 @@
 
 .live-page th { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; background: var(--table-head-bg); position: sticky; top: 0; z-index: 1; }
 
-.live-page tr:hover { background: rgba(59, 130, 246, 0.08); }
+.live-page tr:hover { background: var(--table-row-hover); }
 
 .live-page .ok { color: var(--ok); }
 
