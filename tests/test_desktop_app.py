@@ -127,6 +127,14 @@ def test_desktop_sidecar_recovery_is_serialized_and_ignores_stale_monitors():
     assert "restart_sidecar(&app);" not in source
 
 
+def test_desktop_health_probe_accepts_current_health_shape():
+    source = Path("apps/desktop/src-tauri/src/lib.rs").read_text(encoding="utf-8")
+
+    assert r'response.contains("\"status\":\"ok\"")' in source
+    assert r'response.contains("\"status\": \"ok\"")' in source
+    assert r'response.contains("\"freerouter\"")' in source
+
+
 def test_desktop_api_requires_token(monkeypatch, tmp_path):
     monkeypatch.setenv(DESKTOP_TOKEN_ENV, "secret-token")
     monkeypatch.setenv(DESKTOP_PROJECT_ROOT_ENV, str(tmp_path))

@@ -660,7 +660,10 @@ fn gateway_health_probe(host: &str, port: u16) -> bool {
         return false;
     };
     let response = std::str::from_utf8(&buffer[..read]).unwrap_or("");
-    response.contains("200 OK") && response.contains("\"freerouter\"")
+    response.contains("200 OK")
+        && (response.contains("\"status\":\"ok\"")
+            || response.contains("\"status\": \"ok\"")
+            || response.contains("\"freerouter\""))
 }
 
 fn wait_for_port(host: &str, port: u16, timeout: Duration) -> bool {
