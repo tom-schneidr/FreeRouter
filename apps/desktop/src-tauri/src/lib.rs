@@ -4,7 +4,7 @@ use std::{
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
     thread,
@@ -16,7 +16,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, RunEvent, WindowEvent,
 };
-use tauri_plugin_shell::{process::CommandEvent, process::CommandChild, ShellExt};
+use tauri_plugin_shell::{process::CommandChild, process::CommandEvent, ShellExt};
 use uuid::Uuid;
 
 const SIDECAR_NAME: &str = "freerouterd";
@@ -34,6 +34,8 @@ struct AppRuntimeState {
     project_root: PathBuf,
     manages_sidecar: bool,
     quitting: AtomicBool,
+    sidecar_generation: AtomicU64,
+    recovery_lock: Mutex<()>,
     #[cfg(windows)]
     sidecar_job: Mutex<Option<isize>>,
 }
@@ -59,6 +61,8 @@ pub fn run() {
                 project_root: project_root.clone(),
                 manages_sidecar: !dev_backend,
                 quitting: AtomicBool::new(false),
+                sidecar_generation: AtomicU64::new(0),
+                recovery_lock: Mutex::new(()),
                 #[cfg(windows)]
                 sidecar_job: Mutex::new(None),
             });
@@ -80,14 +84,20 @@ pub fn run() {
                 MenuItem::with_id(app, "hide_to_tray", "Hide to tray", true, None::<&str>)?;
             let chat = MenuItem::with_id(app, "open_chat", "Chat", true, None::<&str>)?;
             let models = MenuItem::with_id(app, "open_models", "Models", true, None::<&str>)?;
-            let copy_url =
-                MenuItem::with_id(app, "copy_url", "Copy base URL", true, None::<&str>)?;
-            let restart =
-                MenuItem::with_id(app, "restart", "Restart server", true, None::<&str>)?;
+            let copy_url = MenuItem::with_id(app, "copy_url", "Copy base URL", true, None::<&str>)?;
+            let restart = MenuItem::with_id(app, "restart", "Restart server", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&show, &hide_to_tray, &chat, &models, &copy_url, &restart, &quit],
+                &[
+                    &show,
+                    &hide_to_tray,
+                    &chat,
+                    &models,
+                    &copy_url,
+                    &restart,
+                    &quit,
+                ],
             )?;
 
             let tray_icon = app
@@ -149,22 +159,15 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building FreeRouter desktop shell")
-        .run(|app_handle, event| {
-            match event {
-                RunEvent::Exit | RunEvent::ExitRequested { .. } => {
-                    shutdown_gateway(app_handle);
-                }
-                _ => {}
+        .run(|app_handle, event| match event {
+            RunEvent::Exit | RunEvent::ExitRequested { .. } => {
+                shutdown_gateway(app_handle);
             }
+            _ => {}
         });
 }
 
-fn start_sidecar(
-    app: &AppHandle,
-    gateway_port: u16,
-    token: &str,
-    project_root: &PathBuf,
-) {
+fn start_sidecar(app: &AppHandle, gateway_port: u16, token: &str, project_root: &PathBuf) {
     let _ = append_launcher_log(
         project_root,
         &format!("Starting FreeRouter sidecar on {GATEWAY_HOST}:{gateway_port}."),
@@ -189,15 +192,26 @@ fn start_sidecar(
         .expect("Failed to spawn FreeRouter sidecar");
 
     let sidecar_pid = child.pid();
-    if let Some(state) = app.try_state::<AppRuntimeState>() {
+    let generation = if let Some(state) = app.try_state::<AppRuntimeState>() {
+        let generation = state.sidecar_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *state.sidecar.lock().unwrap() = Some(child);
         #[cfg(windows)]
         if let Some(job) = create_kill_on_close_job(sidecar_pid) {
             *state.sidecar_job.lock().unwrap() = Some(job);
         }
-    }
+        generation
+    } else {
+        0
+    };
 
-    spawn_sidecar_monitor(app.clone(), rx, gateway_port, token.to_string(), project_root.clone());
+    spawn_sidecar_monitor(
+        app.clone(),
+        rx,
+        gateway_port,
+        token.to_string(),
+        project_root.clone(),
+        generation,
+    );
 }
 
 fn spawn_sidecar_monitor(
@@ -206,6 +220,7 @@ fn spawn_sidecar_monitor(
     gateway_port: u16,
     token: String,
     project_root: PathBuf,
+    generation: u64,
 ) {
     thread::spawn(move || {
         while let Some(event) = tauri::async_runtime::block_on(rx.recv()) {
@@ -214,11 +229,12 @@ fn spawn_sidecar_monitor(
                     append_sidecar_output(&project_root, &line);
                 }
                 CommandEvent::Terminated(payload) => {
-                    let quitting = app
-                        .try_state::<AppRuntimeState>()
-                        .map(|state| state.quitting.load(Ordering::SeqCst))
-                        .unwrap_or(false);
-                    if quitting {
+                    let Some(state) = app.try_state::<AppRuntimeState>() else {
+                        break;
+                    };
+                    if state.quitting.load(Ordering::SeqCst)
+                        || state.sidecar_generation.load(Ordering::SeqCst) != generation
+                    {
                         break;
                     }
                     if payload.code == Some(SIDECAR_RESTART_EXIT_CODE) {
@@ -235,18 +251,42 @@ fn spawn_sidecar_monitor(
                             ),
                         );
                     }
-                    thread::sleep(Duration::from_millis(500));
-                    reclaim_gateway_port(GATEWAY_HOST, gateway_port);
-                    start_sidecar(&app, gateway_port, &token, &project_root);
+                    recover_sidecar(&app, gateway_port, &token, &project_root);
                     break;
                 }
                 CommandEvent::Error(message) => {
-                    let _ = append_launcher_log(&project_root, &format!("Sidecar error: {message}"));
+                    let _ =
+                        append_launcher_log(&project_root, &format!("Sidecar error: {message}"));
                 }
                 _ => {}
             }
         }
     });
+}
+
+fn recover_sidecar(app: &AppHandle, gateway_port: u16, token: &str, project_root: &PathBuf) {
+    let Some(state) = app.try_state::<AppRuntimeState>() else {
+        return;
+    };
+    let Ok(_guard) = state.recovery_lock.lock() else {
+        return;
+    };
+    if state.quitting.load(Ordering::SeqCst) {
+        return;
+    }
+    if gateway_health_probe(GATEWAY_HOST, gateway_port) {
+        let _ = append_launcher_log(
+            project_root,
+            &format!(
+                "Gateway recovery skipped because {GATEWAY_HOST}:{gateway_port} is already healthy."
+            ),
+        );
+        return;
+    }
+
+    thread::sleep(Duration::from_millis(500));
+    reclaim_gateway_port(GATEWAY_HOST, gateway_port);
+    start_sidecar(app, gateway_port, token, project_root);
 }
 
 fn restart_sidecar(app: &AppHandle) {
@@ -413,7 +453,10 @@ fn append_launcher_log(project_root: &PathBuf, message: &str) -> std::io::Result
     let log_dir = project_root.join("data");
     create_dir_all(&log_dir)?;
     let log_path = log_dir.join("desktop-app.log");
-    let mut file = OpenOptions::new().create(true).append(true).open(log_path)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)?;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -526,7 +569,10 @@ fn listener_pids_on_port(host: &str, port: u16) -> Vec<u32> {
             if !trimmed.contains("LISTENING") || !trimmed.contains(&needle) {
                 continue;
             }
-            let Some(pid) = trimmed.split_whitespace().last().and_then(|value| value.parse::<u32>().ok())
+            let Some(pid) = trimmed
+                .split_whitespace()
+                .last()
+                .and_then(|value| value.parse::<u32>().ok())
             else {
                 continue;
             };
@@ -584,7 +630,7 @@ fn spawn_gateway_health_watchdog(app: AppHandle) {
             );
             consecutive_failures = 0;
             if manages_sidecar {
-                restart_sidecar(&app);
+                recover_sidecar(&app, port, &state.desktop_token, &project_root);
             }
         }
     });

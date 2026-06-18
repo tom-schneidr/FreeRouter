@@ -116,6 +116,17 @@ def test_sidecar_build_packages_react_dist_assets():
     assert '"--add-data", "$ReactDist;apps\\ui\\dist"' in script
 
 
+def test_desktop_sidecar_recovery_is_serialized_and_ignores_stale_monitors():
+    source = Path("apps/desktop/src-tauri/src/lib.rs").read_text(encoding="utf-8")
+
+    assert "sidecar_generation: AtomicU64" in source
+    assert "recovery_lock: Mutex<()>" in source
+    assert "state.sidecar_generation.load(Ordering::SeqCst) != generation" in source
+    assert "fn recover_sidecar(" in source
+    assert "Gateway recovery skipped because" in source
+    assert "restart_sidecar(&app);" not in source
+
+
 def test_desktop_api_requires_token(monkeypatch, tmp_path):
     monkeypatch.setenv(DESKTOP_TOKEN_ENV, "secret-token")
     monkeypatch.setenv(DESKTOP_PROJECT_ROOT_ENV, str(tmp_path))
