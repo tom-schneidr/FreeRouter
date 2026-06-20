@@ -20,6 +20,7 @@ from app.api.chat_handlers import (
     _assistant_text_from_response_body,
     _live_monitor_payload,
     _publish_route_stream_diag,
+    _publish_stream_closed,
 )
 from app.api.gateway_headers import GatewayRouteInfo, GatewayRoutingContext, gateway_route_headers
 from app.api.gateway_response import normalize_openai_sse_stream
@@ -279,6 +280,7 @@ async def _route_anthropic_stream(
     async def anthropic_sse_stream():
         carry = ""
         completed = False
+        terminal_published = False
         mapper = AnthropicStreamMapper(message_id=message_id, model=requested_model)
         yield ROUTING_SSE_KEEPALIVE
         try:
@@ -336,6 +338,7 @@ async def _route_anthropic_stream(
                     "latency_ms": round((perf_counter() - started_at) * 1000),
                 },
             )
+            terminal_published = True
             yield anthropic_stream_event("error", body)
         except NoProviderAvailable as exc:
             _, body = _waterfall_exhausted_anthropic_error()
@@ -349,6 +352,7 @@ async def _route_anthropic_stream(
                     "latency_ms": round((perf_counter() - started_at) * 1000),
                 },
             )
+            terminal_published = True
             yield anthropic_stream_event("error", body)
         except ValueError as exc:
             body = anthropic_error_body("invalid_request_error", str(exc))
@@ -362,6 +366,7 @@ async def _route_anthropic_stream(
                     "latency_ms": round((perf_counter() - started_at) * 1000),
                 },
             )
+            terminal_published = True
             yield anthropic_stream_event("error", body)
         except ProviderError as exc:
             _, body = _provider_error_anthropic_error(exc)
@@ -375,6 +380,7 @@ async def _route_anthropic_stream(
                     "latency_ms": round((perf_counter() - started_at) * 1000),
                 },
             )
+            terminal_published = True
             yield anthropic_stream_event("error", body)
         finally:
             lease.release()
@@ -389,6 +395,9 @@ async def _route_anthropic_stream(
                         )
                     ),
                 )
+                terminal_published = True
+            elif not terminal_published:
+                await _publish_stream_closed(monitor, request_id, started_at=started_at)
 
     async def on_rejected() -> None:
         await monitor.publish(

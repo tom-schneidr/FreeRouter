@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -360,3 +361,171 @@ async def test_chat_completions_stream_exposes_gateway_headers(tmp_path, monkeyp
         body = "".join(response.iter_text())
     assert "freerouter routing" in body
     assert "data:" in body
+
+class _SlowStreamingProvider(_FakeProvider):
+    async def chat_completion_stream(self, client, payload, target_model=None):
+        chunk = json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {"content": "Hi"}}],
+            }
+        )
+        yield f"data: {chunk}\n\n"
+        await asyncio.sleep(30)
+        yield "data: [DONE]\n\n"
+
+
+async def _post_stream_until_marker_then_disconnect(
+    path: str,
+    payload: dict[str, Any],
+    *,
+    marker: bytes,
+) -> list[dict[str, Any]]:
+    body = json.dumps(payload).encode("utf-8")
+    disconnect = asyncio.Event()
+    request_sent = False
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await disconnect.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+        if message.get("type") != "http.response.body":
+            return
+        chunk = bytes(message.get("body") or b"")
+        if marker in chunk:
+            disconnect.set()
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+        "client": ("testclient", 123),
+        "server": ("testserver", 80),
+        "root_path": "",
+    }
+    await asyncio.wait_for(app(scope, receive, send), timeout=5)
+    assert disconnect.is_set(), "test stream did not reach the disconnect marker"
+    return sent
+
+
+async def _services_with_slow_stream(tmp_path, monkeypatch) -> AppServices:
+    get_settings.cache_clear()
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "gateway.sqlite3"))
+    monkeypatch.setenv("MODEL_CATALOG_PATH", str(tmp_path / "model_catalog.json"))
+    return await _services_with_provider(
+        tmp_path,
+        _SlowStreamingProvider(),
+        [
+            {
+                "route_id": "primary-test",
+                "provider_name": "primary",
+                "model_id": "primary/model",
+                "display_name": "Primary",
+                "rank": 1,
+                "enabled": True,
+                "tags": ["text"],
+            }
+        ],
+    )
+
+
+async def _closed_event_for_path(services: AppServices, path: str) -> dict[str, Any]:
+    events = await services.live_monitor.snapshot()
+    request_ids = {
+        event["request_id"]
+        for event in events
+        if event["event_type"] == "request_started" and event["payload"].get("path") == path
+    }
+    closed = [
+        event
+        for event in events
+        if event["event_type"] == "request_closed" and event["request_id"] in request_ids
+    ]
+    assert closed, events
+    assert not [
+        event
+        for event in events
+        if event["event_type"] == "request_completed" and event["request_id"] in request_ids
+    ]
+    return closed[-1]
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_stream_publishes_closed_when_client_disconnects(
+    tmp_path, monkeypatch
+):
+    services = await _services_with_slow_stream(tmp_path, monkeypatch)
+    attach_app_services(app, services)
+
+    sent = await _post_stream_until_marker_then_disconnect(
+        "/v1/chat/completions",
+        {
+            "model": "auto",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        marker=b"Hi",
+    )
+
+    assert any(message.get("type") == "http.response.start" for message in sent)
+    closed = await _closed_event_for_path(services, "/v1/chat/completions")
+    assert closed["payload"]["status_code"] == 499
+    assert closed["payload"]["reason"] == "client_closed_or_stream_interrupted"
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_publishes_closed_when_client_disconnects(tmp_path, monkeypatch):
+    services = await _services_with_slow_stream(tmp_path, monkeypatch)
+    attach_app_services(app, services)
+
+    sent = await _post_stream_until_marker_then_disconnect(
+        "/v1/responses",
+        {"model": "auto", "input": "hi", "stream": True},
+        marker=b"Hi",
+    )
+
+    assert any(message.get("type") == "http.response.start" for message in sent)
+    closed = await _closed_event_for_path(services, "/v1/responses")
+    assert closed["payload"]["status_code"] == 499
+    assert closed["payload"]["reason"] == "client_closed_or_stream_interrupted"
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_publishes_closed_when_client_disconnects(
+    tmp_path, monkeypatch
+):
+    services = await _services_with_slow_stream(tmp_path, monkeypatch)
+    attach_app_services(app, services)
+
+    sent = await _post_stream_until_marker_then_disconnect(
+        "/v1/messages",
+        {
+            "model": "auto",
+            "max_tokens": 32,
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        marker=b"Hi",
+    )
+
+    assert any(message.get("type") == "http.response.start" for message in sent)
+    closed = await _closed_event_for_path(services, "/v1/messages")
+    assert closed["payload"]["status_code"] == 499
+    assert closed["payload"]["reason"] == "client_closed_or_stream_interrupted"

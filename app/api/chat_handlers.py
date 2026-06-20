@@ -46,6 +46,23 @@ def _live_monitor_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: monitor_live_value(value) for key, value in payload.items()}
 
 
+async def _publish_stream_closed(
+    monitor: APILiveMonitor,
+    request_id: str,
+    *,
+    started_at: float,
+) -> None:
+    await monitor.publish(
+        event_type="request_closed",
+        request_id=request_id,
+        payload={
+            "status_code": 499,
+            "reason": "client_closed_or_stream_interrupted",
+            "latency_ms": round((perf_counter() - started_at) * 1000),
+        },
+    )
+
+
 def _monitor_trim(
     value: Any, *, max_string: int = 1200, max_items: int = 30, depth: int = 0
 ) -> Any:
@@ -313,6 +330,7 @@ async def _route_chat_completion_stream_request(
 
     async def openai_sse_stream():
         completed = False
+        terminal_published = False
         try:
             yield ROUTING_SSE_KEEPALIVE
             async for part in normalize_openai_sse_stream(
@@ -360,6 +378,7 @@ async def _route_chat_completion_stream_request(
                     "latency_ms": round((perf_counter() - started_at) * 1000),
                 },
             )
+            terminal_published = True
             yield "data: " + json.dumps(error_body) + "\n\n"
             yield "data: [DONE]\n\n"
         except NoProviderAvailable as exc:
@@ -374,6 +393,7 @@ async def _route_chat_completion_stream_request(
                     "latency_ms": round((perf_counter() - started_at) * 1000),
                 },
             )
+            terminal_published = True
             yield (
                 "data: "
                 + json.dumps(
@@ -400,6 +420,7 @@ async def _route_chat_completion_stream_request(
                     "latency_ms": round((perf_counter() - started_at) * 1000),
                 },
             )
+            terminal_published = True
             yield "data: " + json.dumps({"error": {"message": str(exc), "type": "invalid_request"}}) + "\n\n"
         finally:
             lease.release()
@@ -414,6 +435,9 @@ async def _route_chat_completion_stream_request(
                         )
                     ),
                 )
+                terminal_published = True
+            elif not terminal_published:
+                await _publish_stream_closed(monitor, request_id, started_at=started_at)
 
     return RoutedLimitedStreamingResponse(
         openai_sse_stream(),
@@ -647,6 +671,7 @@ async def _route_responses_stream_request(
     async def responses_sse_stream():
         carry = ""
         completed = False
+        terminal_published = False
         mapper = ResponsesStreamMapper(response_id=response_id)
         try:
             yield responses_stream_start(response_id=response_id, model=requested_model)
@@ -691,9 +716,11 @@ async def _route_responses_stream_request(
                         },
                     },
                 )
+                completed = True
             yield responses_stream_done()
         except UnsupportedCapabilities as exc:
             error_body = unsupported_capabilities_error_body(exc)
+            terminal_published = True
             yield response_stream_event(
                 "response.failed",
                 {
@@ -709,6 +736,7 @@ async def _route_responses_stream_request(
             )
             yield responses_stream_done()
         except NoProviderAvailable as exc:
+            terminal_published = True
             yield response_stream_event(
                 "response.failed",
                 {
@@ -729,6 +757,7 @@ async def _route_responses_stream_request(
             )
             yield responses_stream_done()
         except (ProviderError, ValueError) as exc:
+            terminal_published = True
             yield response_stream_event(
                 "response.failed",
                 {
@@ -760,6 +789,9 @@ async def _route_responses_stream_request(
                         )
                     ),
                 )
+                terminal_published = True
+            elif not terminal_published:
+                await _publish_stream_closed(monitor, request_id, started_at=started_at)
 
     return RoutedLimitedStreamingResponse(
         responses_sse_stream(),
