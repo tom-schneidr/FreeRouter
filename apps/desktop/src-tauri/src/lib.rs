@@ -655,11 +655,8 @@ fn gateway_health_probe(host: &str, port: u16) -> bool {
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
-    let mut buffer = [0_u8; 768];
-    let Ok(read) = stream.read(&mut buffer) else {
-        return false;
-    };
-    let response = std::str::from_utf8(&buffer[..read]).unwrap_or("");
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
     response.contains("200 OK")
         && (response.contains("\"status\":\"ok\"")
             || response.contains("\"status\": \"ok\"")

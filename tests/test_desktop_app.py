@@ -130,6 +130,7 @@ def test_desktop_sidecar_recovery_is_serialized_and_ignores_stale_monitors():
 def test_desktop_health_probe_accepts_current_health_shape():
     source = Path("apps/desktop/src-tauri/src/lib.rs").read_text(encoding="utf-8")
 
+    assert "stream.read_to_string(&mut response)" in source
     assert r'response.contains("\"status\":\"ok\"")' in source
     assert r'response.contains("\"status\": \"ok\"")' in source
     assert r'response.contains("\"freerouter\"")' in source
