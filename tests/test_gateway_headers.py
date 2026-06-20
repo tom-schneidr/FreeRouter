@@ -363,6 +363,10 @@ async def test_chat_completions_stream_exposes_gateway_headers(tmp_path, monkeyp
     assert "data:" in body
 
 class _SlowStreamingProvider(_FakeProvider):
+    async def chat_completion(self, client, payload, target_model=None):
+        await asyncio.sleep(30)
+        return await super().chat_completion(client, payload, target_model)
+
     async def chat_completion_stream(self, client, payload, target_model=None):
         chunk = json.dumps(
             {
@@ -375,6 +379,49 @@ class _SlowStreamingProvider(_FakeProvider):
         await asyncio.sleep(30)
         yield "data: [DONE]\n\n"
 
+
+
+async def _post_then_disconnect(path: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    body = json.dumps(payload).encode("utf-8")
+    request_sent = False
+    sent_disconnect = False
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        nonlocal request_sent, sent_disconnect
+        if not request_sent:
+            request_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        if not sent_disconnect:
+            sent_disconnect = True
+            return {"type": "http.disconnect"}
+        await asyncio.sleep(30)
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+        "client": ("testclient", 123),
+        "server": ("testserver", 80),
+        "root_path": "",
+    }
+    await asyncio.wait_for(app(scope, receive, send), timeout=5)
+    assert sent_disconnect, "test request did not emit disconnect"
+    return sent
 
 async def _post_stream_until_marker_then_disconnect(
     path: str,
@@ -523,6 +570,63 @@ async def test_anthropic_messages_stream_publishes_closed_when_client_disconnect
             "messages": [{"role": "user", "content": "hi"}],
         },
         marker=b"Hi",
+    )
+
+    assert any(message.get("type") == "http.response.start" for message in sent)
+    closed = await _closed_event_for_path(services, "/v1/messages")
+    assert closed["payload"]["status_code"] == 499
+    assert closed["payload"]["reason"] == "client_closed_or_stream_interrupted"
+
+@pytest.mark.asyncio
+async def test_chat_completions_non_stream_publishes_closed_when_client_disconnects(
+    tmp_path, monkeypatch
+):
+    services = await _services_with_slow_stream(tmp_path, monkeypatch)
+    attach_app_services(app, services)
+
+    sent = await _post_then_disconnect(
+        "/v1/chat/completions",
+        {"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
+    )
+
+    assert any(message.get("type") == "http.response.start" for message in sent)
+    closed = await _closed_event_for_path(services, "/v1/chat/completions")
+    assert closed["payload"]["status_code"] == 499
+    assert closed["payload"]["reason"] == "client_closed_or_stream_interrupted"
+
+
+@pytest.mark.asyncio
+async def test_responses_non_stream_publishes_closed_when_client_disconnects(
+    tmp_path, monkeypatch
+):
+    services = await _services_with_slow_stream(tmp_path, monkeypatch)
+    attach_app_services(app, services)
+
+    sent = await _post_then_disconnect(
+        "/v1/responses",
+        {"model": "auto", "input": "hi"},
+    )
+
+    assert any(message.get("type") == "http.response.start" for message in sent)
+    closed = await _closed_event_for_path(services, "/v1/responses")
+    assert closed["payload"]["status_code"] == 499
+    assert closed["payload"]["reason"] == "client_closed_or_stream_interrupted"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_non_stream_publishes_closed_when_client_disconnects(
+    tmp_path, monkeypatch
+):
+    services = await _services_with_slow_stream(tmp_path, monkeypatch)
+    attach_app_services(app, services)
+
+    sent = await _post_then_disconnect(
+        "/v1/messages",
+        {
+            "model": "auto",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
     )
 
     assert any(message.get("type") == "http.response.start" for message in sent)

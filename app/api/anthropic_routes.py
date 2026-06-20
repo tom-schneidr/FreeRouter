@@ -18,6 +18,8 @@ from app.anthropic_compat import (
 )
 from app.api.chat_handlers import (
     _assistant_text_from_response_body,
+    _await_with_client_disconnect,
+    _ClientDisconnected,
     _live_monitor_payload,
     _publish_route_stream_diag,
     _publish_stream_closed,
@@ -143,6 +145,7 @@ async def messages(request: Request) -> Response:
         return JSONResponse(status_code=429, content=body, headers={"Retry-After": "1"})
 
     return await _route_anthropic_non_stream(
+        request=request,
         request_id=request_id,
         started_at=started_at,
         router=router_svc,
@@ -156,6 +159,7 @@ async def messages(request: Request) -> Response:
 
 async def _route_anthropic_non_stream(
     *,
+    request: Request,
     request_id: str,
     started_at: float,
     router: Any,
@@ -166,7 +170,10 @@ async def _route_anthropic_non_stream(
     requested_model: Any,
 ) -> JSONResponse:
     try:
-        result = await router.route_chat_completion(chat_payload, requirements=requirements)
+        result = await _await_with_client_disconnect(
+            request,
+            router.route_chat_completion(chat_payload, requirements=requirements),
+        )
     except UnsupportedCapabilities as exc:
         status, body = _unsupported_capabilities_anthropic_error(exc)
         await monitor.publish(
@@ -193,6 +200,12 @@ async def _route_anthropic_non_stream(
             },
         )
         return JSONResponse(status_code=400, content=body)
+    except _ClientDisconnected:
+        await _publish_stream_closed(monitor, request_id, started_at=started_at)
+        return JSONResponse(
+            status_code=499,
+            content=anthropic_error_body("api_error", "Client closed request"),
+        )
     except NoProviderAvailable as exc:
         status, body = _waterfall_exhausted_anthropic_error()
         await monitor.publish(

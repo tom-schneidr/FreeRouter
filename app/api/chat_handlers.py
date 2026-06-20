@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
+from contextlib import suppress
 from dataclasses import asdict
 from time import perf_counter
 from typing import Any
@@ -61,6 +63,28 @@ async def _publish_stream_closed(
             "latency_ms": round((perf_counter() - started_at) * 1000),
         },
     )
+
+
+class _ClientDisconnected(RuntimeError):
+    """Raised when the downstream HTTP client disconnects before routing finishes."""
+
+
+async def _await_with_client_disconnect(request: Request, awaitable: Any) -> Any:
+    task = asyncio.create_task(awaitable)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=0.25)
+            if done:
+                return task.result()
+            if await request.is_disconnected():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+                raise _ClientDisconnected
+    except BaseException:
+        if not task.done():
+            task.cancel()
+        raise
 
 
 def _monitor_trim(
@@ -500,10 +524,13 @@ async def _route_chat_completion_request(
         )
 
     try:
-        result = await router.route_chat_completion(
-            payload,
-            requirements=requirements,
-            require_assistant_content=require_assistant_content,
+        result = await _await_with_client_disconnect(
+            request,
+            router.route_chat_completion(
+                payload,
+                requirements=requirements,
+                require_assistant_content=require_assistant_content,
+            ),
         )
     except UnsupportedCapabilities as exc:
         error_body = unsupported_capabilities_error_body(exc)
@@ -530,6 +557,18 @@ async def _route_chat_completion_request(
             },
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except _ClientDisconnected:
+        await _publish_stream_closed(monitor, request_id, started_at=started_at)
+        return JSONResponse(
+            status_code=499,
+            content={
+                "error": {
+                    "message": "Client closed request",
+                    "type": "client_closed",
+                    "code": "client_closed",
+                }
+            },
+        )
     except NoProviderAvailable as exc:
         await monitor.publish(
             event_type="request_failed",
