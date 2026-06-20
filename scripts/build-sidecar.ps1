@@ -46,6 +46,7 @@ $PyInstallerArgs = @(
     "-m", "PyInstaller",
     "--noconfirm",
     "--clean",
+    "--noconsole",
     "--onefile",
     "--name", $PyInstallerName,
     "--distpath", $TargetDir,

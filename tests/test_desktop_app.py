@@ -100,6 +100,13 @@ def test_launcher_host_port_reads_env_with_fallback(tmp_path):
     assert launcher_host_port(tmp_path) == ("127.0.0.1", 8000)
 
 
+def test_desktop_shell_hides_windows_console_in_release():
+    source = Path("apps/desktop/src-tauri/src/main.rs").read_text(encoding="utf-8")
+
+    assert 'windows_subsystem = "windows"' in source
+    assert "not(debug_assertions)" in source
+
+
 def test_tauri_config_points_at_canonical_react_app():
     config_path = Path("apps/desktop/src-tauri/tauri.conf.json")
     config = json.loads(config_path.read_text(encoding="utf-8"))
