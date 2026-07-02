@@ -58,7 +58,7 @@ def build_provider_adapters(settings: Settings) -> list[ProviderAdapter]:
             api_key=settings.groq_api_key,
             base_url="https://api.groq.com/openai/v1",
             default_model="llama-3.1-8b-instant",
-            max_context_tokens=8192,
+            max_context_tokens=131_072,
         ),
         ProviderAdapter(
             name="gemini",
