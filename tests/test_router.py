@@ -137,6 +137,51 @@ def _catalog(tmp_path) -> ModelCatalog:
     return catalog
 
 
+def _tool_catalog(tmp_path) -> ModelCatalog:
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes(
+        [
+            {
+                "route_id": "normal-test",
+                "provider_name": "primary",
+                "model_id": "normal/model",
+                "display_name": "Normal Model",
+                "rank": 1,
+                "enabled": True,
+                "context_window": 8192,
+                "tags": ["text"],
+            },
+            {
+                "route_id": "tool-test",
+                "provider_name": "fallback",
+                "model_id": "tool/model",
+                "display_name": "Tool Model",
+                "rank": 2,
+                "enabled": True,
+                "context_window": 8192,
+                "tags": ["text", "tool-use"],
+                "capabilities": {
+                    "text": {
+                        "tag": "text",
+                        "status": "supported",
+                        "source": "probe",
+                        "confidence": "high",
+                        "checked_at": 1,
+                    },
+                    "tool-use": {
+                        "tag": "tool-use",
+                        "status": "supported",
+                        "source": "probe",
+                        "confidence": "high",
+                        "checked_at": 1,
+                    },
+                },
+            },
+        ]
+    )
+    return catalog
+
+
 # ── Existing tests (preserved) ──────────────────────────────────────────────
 
 
@@ -182,11 +227,13 @@ async def test_router_falls_back_on_429_and_marks_cooldown(tmp_path):
 
     result = await router.route_chat_completion(_payload())
     primary_state = await state.get_state("primary")
+    route_state = await state.get_route_state("primary-test", "primary", "primary/model")
 
     assert result.provider_name == "fallback"
     assert primary.calls == 1
     assert fallback.calls == 1
-    assert primary_state.cooldown_until > 0
+    assert primary_state.cooldown_until == 0
+    assert route_state.status == "rate_limited"
     assert [attempt.status for attempt in result.attempts] == ["rate_limited", "selected"]
 
 
@@ -221,6 +268,103 @@ async def test_router_required_capabilities_only_tries_matching_routes(tmp_path)
     assert fallback.calls == 1
     assert result.provider_name == "fallback"
     assert result.model_id == "fallback/model"
+
+
+async def test_router_routes_tool_request_to_tool_capable_route(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary")
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter(
+        [primary, fallback], _tool_catalog(tmp_path), state, request_timeout_seconds=5
+    )
+    payload = {
+        **_payload(),
+        "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {}}}],
+    }
+
+    result = await router.route_chat_completion(payload)
+
+    assert primary.calls == 0
+    assert fallback.calls == 1
+    assert result.route_id == "tool-test"
+    assert result.model_id == "tool/model"
+
+
+async def test_router_prefers_normal_route_for_normal_request(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary")
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter(
+        [primary, fallback], _tool_catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
+    result = await router.route_chat_completion(_payload())
+
+    assert primary.calls == 1
+    assert fallback.calls == 0
+    assert result.route_id == "normal-test"
+
+
+async def test_router_falls_back_to_tool_route_for_normal_request(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary", error=ProviderError("server error", status_code=500))
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter(
+        [primary, fallback], _tool_catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
+    result = await router.route_chat_completion(_payload())
+
+    assert primary.calls == 1
+    assert fallback.calls == 1
+    assert result.route_id == "tool-test"
+
+
+async def test_router_keeps_tool_choice_none_on_normal_route(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary")
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter(
+        [primary, fallback], _tool_catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
+    result = await router.route_chat_completion({**_payload(), "tool_choice": "none"})
+
+    assert primary.calls == 1
+    assert fallback.calls == 0
+    assert result.route_id == "normal-test"
+
+
+async def test_router_routes_tool_result_continuation_to_tool_route(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider("primary")
+    fallback = FakeProvider("fallback")
+    router = WaterfallRouter(
+        [primary, fallback], _tool_catalog(tmp_path), state, request_timeout_seconds=5
+    )
+    payload = {
+        "model": "auto",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+        ],
+    }
+
+    result = await router.route_chat_completion(payload)
+
+    assert primary.calls == 0
+    assert fallback.calls == 1
+    assert result.route_id == "tool-test"
 
 
 async def test_router_raises_unsupported_capabilities_when_no_route_matches(tmp_path):
@@ -329,7 +473,7 @@ async def test_router_raises_no_provider_when_all_exhausted(tmp_path):
     with pytest.raises(NoProviderAvailable) as exc_info:
         await router.route_chat_completion(_payload())
 
-    assert len(exc_info.value.attempts) == 2
+    assert len(exc_info.value.attempts) == 4
     assert all(a.status == "skipped" for a in exc_info.value.attempts)
 
 
@@ -465,8 +609,8 @@ async def test_router_falls_back_on_auth_error(tmp_path):
 # ── New coverage: non-recoverable provider error ─────────────────────────────
 
 
-async def test_router_raises_non_recoverable_error(tmp_path):
-    """A 400-class error that isn't auth should bubble up."""
+async def test_router_falls_back_on_non_recoverable_provider_error(tmp_path):
+    """A 400-class error that isn't auth should cascade to the next provider."""
     state = await _state(tmp_path)
     primary = FakeProvider(
         "primary",
@@ -477,8 +621,11 @@ async def test_router_raises_non_recoverable_error(tmp_path):
         [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
     )
 
-    with pytest.raises(ProviderError):
-        await router.route_chat_completion(_payload())
+    result = await router.route_chat_completion(_payload())
+
+    assert result.provider_name == "fallback"
+    assert result.attempts[0].status == "failed"
+    assert result.attempts[0].reason == "provider_error"
 
 
 # ── New coverage: request connection error fallback ──────────────────────────

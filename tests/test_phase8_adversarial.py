@@ -267,9 +267,11 @@ async def test_provider_429_rate_limit_cascades_and_cooldowns(tmp_path):
     assert fallback.calls == 1
     assert result.attempts[0].status == "rate_limited"
     
-    # Provider should be marked exhausted/cooldown
+    # Route-level rate limit should be recorded without provider-wide cooldown.
     p_state = await state.get_state("primary")
-    assert p_state.cooldown_until > 0
+    route_state = await state.get_route_state("primary-test", "primary", "primary/model")
+    assert p_state.cooldown_until == 0
+    assert route_state.status == "rate_limited"
 
 
 # ─── 5. Disconnects & Stream Errors ───

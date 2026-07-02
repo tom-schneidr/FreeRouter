@@ -21,13 +21,23 @@ def enabled_routes_for_request(
     *,
     requested_model: Any,
     required_capabilities: frozenset[str] | None = None,
+    avoid_capabilities: frozenset[str] | None = None,
 ) -> list[ModelRoute]:
     required = required_capabilities or frozenset()
-    return [
+    requested_model_value = requested_model if isinstance(requested_model, str) else None
+    routes = [
         route
-        for route in catalog.enabled_routes(requested_model if isinstance(requested_model, str) else None)
+        for route in catalog.enabled_routes(requested_model_value)
         if route_satisfies_capabilities(route, required)
     ]
+    avoided = avoid_capabilities or frozenset()
+    if not avoided or (requested_model_value and requested_model_value != "auto"):
+        return routes
+    preferred = [route for route in routes if not avoided.intersection(route.tags)]
+    if not preferred:
+        return routes
+    fallback = [route for route in routes if route not in preferred]
+    return preferred + fallback
 
 
 def configured_provider_names(
@@ -44,17 +54,36 @@ def configured_provider_names(
     )
 
 
+def effective_context_limit(
+    route: ModelRoute,
+    provider: ProviderAdapter | None,
+) -> int | None:
+    limits = [
+        value
+        for value in (
+            route.context_window,
+            provider.max_context_tokens if provider is not None else None,
+        )
+        if value is not None
+    ]
+    if not limits:
+        return None
+    return min(limits)
+
+
 def static_route_skip_reason(
     provider: ProviderAdapter | None,
     route: ModelRoute,
     *,
     estimated_prompt_tokens: int,
+    estimated_total_tokens: int | None = None,
 ) -> str | None:
     if provider is None:
         return "unknown_provider"
     if not provider.is_configured:
         return "missing_api_key"
-    max_context_tokens = route.context_window or provider.max_context_tokens
-    if max_context_tokens is not None and estimated_prompt_tokens > max_context_tokens:
+    max_context_tokens = effective_context_limit(route, provider)
+    budget_tokens = estimated_total_tokens or estimated_prompt_tokens
+    if max_context_tokens is not None and budget_tokens > max_context_tokens:
         return "context_window_exceeded"
     return None

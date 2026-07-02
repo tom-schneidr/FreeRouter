@@ -65,6 +65,8 @@ async def build_core_gateway_stack(
         state,
         request_timeout_seconds=settings.request_timeout_seconds,
         http_client=http_client,
+        tool_requests_require=frozenset(settings.routing_tool_requests_require),
+        normal_requests_avoid=frozenset(settings.routing_normal_requests_avoid),
     )
     return CoreGatewayStack(
         settings=settings,

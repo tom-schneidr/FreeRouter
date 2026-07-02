@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.request_requirements import RequestRequirements, chat_request_requirements
+from app.request_requirements import (
+    RequestRequirements,
+    chat_request_requirements,
+    request_requires_tool_use,
+)
 
 
 @pytest.mark.parametrize(
@@ -124,6 +128,78 @@ def test_chat_request_requirements(payload: dict, expected: frozenset[str]) -> N
     result = chat_request_requirements(payload)
     assert isinstance(result, RequestRequirements)
     assert result.required_capabilities == expected
+    assert result.request_class == ("tool-use" if "tool-use" in expected else "normal")
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (
+            {"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
+            False,
+        ),
+        (
+            {
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tool_choice": "none",
+            },
+            False,
+        ),
+        (
+            {
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tool_choice": "auto",
+            },
+            True,
+        ),
+        (
+            {
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "web_search_preview"}],
+            },
+            False,
+        ),
+        (
+            {
+                "model": "auto",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [{"type": "function", "function": {"name": "lookup"}}],
+            },
+            True,
+        ),
+        (
+            {
+                "model": "auto",
+                "previous_response_id": "resp_123",
+                "messages": [{"role": "user", "content": "continue"}],
+            },
+            True,
+        ),
+        (
+            {
+                "model": "auto",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_1",
+                                "content": "found",
+                            }
+                        ],
+                    }
+                ],
+            },
+            True,
+        ),
+    ],
+)
+def test_request_requires_tool_use(payload: dict, expected: bool) -> None:
+    assert request_requires_tool_use(payload) is expected
 
 
 def test_chat_request_requirements_is_order_independent() -> None:

@@ -77,6 +77,8 @@ def test_gateway_route_headers_shape():
         "X-Gateway-Provider": "groq",
         "X-Gateway-Route": "groq-llama-3-3-70b",
         "X-Gateway-Model": "llama-3.3-70b-versatile",
+        "X-Gateway-Request-Class": "normal",
+        "X-Gateway-Required-Capabilities": "",
     }
     assert "X-Gateway-Attempts" not in headers
 
@@ -138,6 +140,8 @@ async def test_routed_stream_includes_gateway_headers_when_route_known():
     assert headers["x-gateway-provider"] == "groq"
     assert headers["x-gateway-route"] == "groq-test"
     assert headers["x-gateway-model"] == "llama/model"
+    assert headers["x-gateway-request-class"] == "normal"
+    assert headers["x-gateway-required-capabilities"] == ""
     assert "x-gateway-attempts" not in headers
     body_chunks = [message["body"] for message in sent if message["type"] == "http.response.body"]
     assert b"".join(body_chunks[:-1]) == b"data: ok\n\n"
@@ -166,6 +170,8 @@ async def test_routed_stream_omits_gateway_headers_when_route_unknown():
     assert "x-gateway-provider" not in headers
     assert "x-gateway-route" not in headers
     assert "x-gateway-model" not in headers
+    assert headers["x-gateway-request-class"] == "normal"
+    assert headers["x-gateway-required-capabilities"] == ""
 
 
 async def test_routed_stream_starts_immediately_for_client_keepalive():
@@ -321,6 +327,8 @@ async def test_chat_completions_non_stream_exposes_gateway_headers(tmp_path, mon
     assert response.headers["X-Gateway-Provider"] == "primary"
     assert response.headers["X-Gateway-Route"] == "primary-test"
     assert response.headers["X-Gateway-Model"] == "primary/model"
+    assert response.headers["X-Gateway-Request-Class"] == "normal"
+    assert response.headers["X-Gateway-Required-Capabilities"] == ""
     assert "X-Gateway-Attempts" not in response.headers
     assert response.json()["model"] == "auto"
 

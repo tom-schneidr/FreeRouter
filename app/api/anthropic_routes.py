@@ -268,6 +268,8 @@ async def _route_anthropic_non_stream(
                 provider_name=result.provider_name,
                 route_id=result.route_id,
                 model_id=result.model_id,
+                request_class=requirements.request_class,
+                required_capabilities=requirements.required_capabilities,
             )
         ),
     )
@@ -288,6 +290,10 @@ async def _route_anthropic_stream(
     message_id = f"msg_{uuid.uuid4().hex}"
     lease = GatewayLimiterLease(limiter)
     routing = GatewayRoutingContext()
+    routing.configure_request(
+        request_class=requirements.request_class,
+        required_capabilities=requirements.required_capabilities,
+    )
     tracker = StreamMonitorTracker(requested_model=requested_model)
 
     async def anthropic_sse_stream():

@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     benchmark_refresh_max_age_seconds: int = 604_800
     benchmark_refresh_max_models: int = 60
     benchmark_refresh_min_scores: int = 3
+    routing_tool_requests_require: tuple[str, ...] = ("tool-use",)
+    routing_normal_requests_avoid: tuple[str, ...] = ("tool-use",)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

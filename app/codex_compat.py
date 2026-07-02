@@ -29,6 +29,8 @@ def responses_payload_to_chat(payload: dict[str, Any]) -> dict[str, Any]:
         "model": model,
         "messages": messages,
     }
+    if "previous_response_id" in payload:
+        chat_payload["previous_response_id"] = payload["previous_response_id"]
     for key in (
         "temperature",
         "top_p",

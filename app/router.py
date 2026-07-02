@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
@@ -13,6 +14,7 @@ from app.model_catalog import ModelCatalog
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderAdapter, ProviderError, ProviderRateLimited, ProviderResponse
 from app.request_requirements import RequestRequirements, chat_request_requirements
+from app.request_sizing import estimate_total_request_tokens
 from app.routing_policy import (
     configured_provider_names,
     enabled_routes_for_request,
@@ -22,6 +24,12 @@ from app.state import Availability, StateManager
 from app.tool_use_validation import (
     evaluate_tool_use_outcome,
     payload_requires_function_tools,
+)
+from app.waterfall_resilience import (
+    MAX_WATERFALL_PASSES,
+    route_exhausted_for_request,
+    should_retry_waterfall,
+    waterfall_retry_delay_seconds,
 )
 
 
@@ -251,6 +259,8 @@ class WaterfallRouter:
         *,
         request_timeout_seconds: float,
         http_client: httpx.AsyncClient | None = None,
+        tool_requests_require: frozenset[str] | None = None,
+        normal_requests_avoid: frozenset[str] | None = None,
     ) -> None:
         self.providers = providers
         self.provider_by_name = {provider.name: provider for provider in providers}
@@ -258,6 +268,8 @@ class WaterfallRouter:
         self.state = state
         self.request_timeout_seconds = request_timeout_seconds
         self._http_client = http_client
+        self.tool_requests_require = tool_requests_require or frozenset({"tool-use"})
+        self.normal_requests_avoid = normal_requests_avoid or frozenset({"tool-use"})
 
     async def route_chat_completion(
         self,
@@ -347,6 +359,8 @@ class WaterfallRouter:
                     payload=outbound,
                     requirements=requirements,
                     require_assistant_content=require_assistant_content,
+                    tool_requests_require=self.tool_requests_require,
+                    normal_requests_avoid=self.normal_requests_avoid,
                 )
             ) as stream:
                 async for part in stream:
@@ -364,6 +378,8 @@ class WaterfallRouter:
                     payload=outbound,
                     requirements=requirements,
                     require_assistant_content=require_assistant_content,
+                    tool_requests_require=self.tool_requests_require,
+                    normal_requests_avoid=self.normal_requests_avoid,
                 )
             ) as stream:
                 async for part in stream:
@@ -377,20 +393,19 @@ class WaterfallRouter:
         requirements: RequestRequirements | None = None,
         require_assistant_content: bool = False,
     ) -> AsyncGenerator[RouteEvent, None]:
-        estimated_prompt_tokens = estimate_prompt_tokens(payload)
-        estimated_total_tokens = estimated_prompt_tokens + int(
-            payload.get("max_completion_tokens") or payload.get("max_tokens") or 0
-        )
+        estimated_prompt_tokens, estimated_total_tokens = estimate_total_request_tokens(payload)
         attempts: list[ProviderAttempt] = []
-        rate_limit_probe_providers: set[str] = set()
+        rate_limit_probed_routes: set[str] = set()
+        exhausted_routes: dict[str, str] = {}
 
-        resolved_requirements = requirements or chat_request_requirements(payload)
+        resolved_requirements = self._route_requirements(requirements or chat_request_requirements(payload))
         required_capabilities = resolved_requirements.required_capabilities
         requested_model = payload.get("model")
         routes_list = enabled_routes_for_request(
             self.model_catalog,
             requested_model=requested_model,
             required_capabilities=required_capabilities,
+            avoid_capabilities=self._avoid_capabilities_for(resolved_requirements),
         )
         if not routes_list:
             raise UnsupportedCapabilities(
@@ -401,274 +416,235 @@ class WaterfallRouter:
             routes_list,
             self.provider_by_name,
         )
-        provider_availability_prefetch: dict[str, Availability] = {}
-        if prefetch_provider_names:
-            provider_availability_prefetch = await self.state.snapshot_providers_availability(
-                prefetch_provider_names,
-                estimated_tokens=estimated_total_tokens,
+
+        for pass_index in range(MAX_WATERFALL_PASSES):
+            if pass_index > 0:
+                if not should_retry_waterfall(attempts):
+                    break
+                delay = waterfall_retry_delay_seconds()
+                await asyncio.sleep(delay)
+                yield RouteEvent(
+                    event_type="waterfall_retry",
+                    reason=f"retry_after_{delay:g}s",
+                    attempts=list(attempts),
+                )
+
+            provider_availability_prefetch: dict[str, Availability] = {}
+            if prefetch_provider_names:
+                provider_availability_prefetch = await self.state.snapshot_providers_availability(
+                    prefetch_provider_names,
+                    estimated_tokens=estimated_total_tokens,
+                )
+            route_states_prefetch = await self.state.get_route_states_batch(
+                [(route.route_id, route.provider_name, route.model_id) for route in routes_list]
             )
-        route_states_prefetch = await self.state.get_route_states_batch(
-            [(route.route_id, route.provider_name, route.model_id) for route in routes_list]
-        )
+            if pass_index > 0:
+                rate_limit_probed_routes.clear()
 
-        for route in routes_list:
-            provider = self.provider_by_name.get(route.provider_name)
-            skip_reason = static_route_skip_reason(
-                provider,
-                route,
-                estimated_prompt_tokens=estimated_prompt_tokens,
-            )
-            if skip_reason == "unknown_provider":
-                attempt = ProviderAttempt(
-                    route.provider_name,
-                    "skipped",
-                    skip_reason,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_skipped",
-                    provider_name=route.provider_name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                )
-                continue
-
-            assert provider is not None
-
-            if skip_reason is not None:
-                attempt = ProviderAttempt(
-                    provider.name,
-                    "skipped",
-                    skip_reason,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_skipped",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                )
-                continue
-
-            prefetched = provider_availability_prefetch.get(provider.name)
-            provider_availability = (
-                prefetched
-                if prefetched is not None
-                else await self.state.check_available(
-                    provider.name,
-                    estimated_total_tokens,
-                )
-            )
-            if not provider_availability.available:
-                attempt = ProviderAttempt(
-                    provider.name,
-                    "skipped",
-                    provider_availability.reason,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_skipped",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                )
-                continue
-
-            route_state = route_states_prefetch.get(route.route_id)
-            route_availability = (
-                self.state.route_availability_from_state(
-                    route_state,
-                    allow_rate_limit_probe=provider.name not in rate_limit_probe_providers,
-                )
-                if route_state is not None
-                else await self.state.check_route_available(
-                    route.route_id,
-                    provider.name,
-                    route.model_id,
-                    allow_rate_limit_probe=provider.name not in rate_limit_probe_providers,
-                )
-            )
-            if not route_availability.available:
-                attempt = ProviderAttempt(
-                    provider.name,
-                    "skipped",
-                    route_availability.reason,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_skipped",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                )
-                continue
-            if route_availability.reason in {"rate_limit_probe", "too_slow_probe"}:
-                rate_limit_probe_providers.add(provider.name)
-
-            availability = await self.state.try_reserve_request(
-                provider.name,
-                estimated_total_tokens,
-            )
-            if not availability.available:
-                attempt = ProviderAttempt(
-                    provider.name,
-                    "skipped",
-                    availability.reason,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_skipped",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                )
-                continue
-
-            yield RouteEvent(
-                event_type="route_trying",
-                provider_name=provider.name,
-                route_id=route.route_id,
-                model_id=route.model_id,
-            )
-
-            try:
-                response = await provider.chat_completion(client, payload, route.model_id)
-            except ProviderRateLimited as exc:
-                flagged_state = await self.state.mark_route_rate_limited(
-                    route.route_id,
-                    provider.name,
-                    route.model_id,
-                    headers=exc.headers,
-                    status_code=exc.status_code,
-                )
-                await self.state.mark_exhausted(
-                    provider.name,
-                    headers=exc.headers,
-                    status_code=exc.status_code,
-                )
-                attempt = ProviderAttempt(
-                    provider.name,
-                    "rate_limited",
-                    "provider_429",
-                    exc.status_code,
-                    route.route_id,
-                    route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_failed",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                    status_code=exc.status_code,
-                )
-                yield RouteEvent(
-                    event_type="route_flagged",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=flagged_state.status,
-                )
-                continue
-            except httpx.TimeoutException:
-                timeout_state = await self.state.mark_route_timeout(
-                    route.route_id,
-                    provider.name,
-                    route.model_id,
-                )
-                attempt = ProviderAttempt(
-                    provider.name,
-                    "failed",
-                    "timeout",
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_failed",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                )
-                if timeout_state.status == "too_slow":
-                    flagged = ProviderAttempt(
-                        provider.name,
-                        "flagged",
-                        "too_slow",
+            for route in routes_list:
+                prior_reason = exhausted_routes.get(route.route_id)
+                if prior_reason is not None:
+                    attempt = ProviderAttempt(
+                        route.provider_name,
+                        "skipped",
+                        prior_reason,
                         route_id=route.route_id,
                         model_id=route.model_id,
                     )
-                    attempts.append(flagged)
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=route.provider_name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                    )
+                    continue
+
+                provider = self.provider_by_name.get(route.provider_name)
+                skip_reason = static_route_skip_reason(
+                    provider,
+                    route,
+                    estimated_prompt_tokens=estimated_prompt_tokens,
+                    estimated_total_tokens=estimated_total_tokens,
+                )
+                if skip_reason == "unknown_provider":
+                    attempt = ProviderAttempt(
+                        route.provider_name,
+                        "skipped",
+                        skip_reason,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=route.provider_name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                    )
+                    continue
+
+                assert provider is not None
+
+                if skip_reason is not None:
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "skipped",
+                        skip_reason,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                    )
+                    if route_exhausted_for_request(skip_reason):
+                        exhausted_routes[route.route_id] = skip_reason
+                    continue
+
+                prefetched = provider_availability_prefetch.get(provider.name)
+                provider_availability = (
+                    prefetched
+                    if prefetched is not None
+                    else await self.state.check_available(
+                        provider.name,
+                        estimated_total_tokens,
+                    )
+                )
+                if not provider_availability.available:
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "skipped",
+                        provider_availability.reason,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                    )
+                    continue
+
+                route_state = route_states_prefetch.get(route.route_id)
+                route_availability = (
+                    self.state.route_availability_from_state(
+                        route_state,
+                        allow_rate_limit_probe=route.route_id not in rate_limit_probed_routes,
+                    )
+                    if route_state is not None
+                    else await self.state.check_route_available(
+                        route.route_id,
+                        provider.name,
+                        route.model_id,
+                        allow_rate_limit_probe=route.route_id not in rate_limit_probed_routes,
+                    )
+                )
+                if not route_availability.available:
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "skipped",
+                        route_availability.reason,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                    )
+                    continue
+                if route_availability.reason in {"rate_limit_probe", "too_slow_probe"}:
+                    rate_limit_probed_routes.add(route.route_id)
+
+                availability = await self.state.try_reserve_request(
+                    provider.name,
+                    estimated_total_tokens,
+                )
+                if not availability.available:
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "skipped",
+                        availability.reason,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_skipped",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                    )
+                    continue
+
+                yield RouteEvent(
+                    event_type="route_trying",
+                    provider_name=provider.name,
+                    route_id=route.route_id,
+                    model_id=route.model_id,
+                )
+
+                try:
+                    response = await provider.chat_completion(client, payload, route.model_id)
+                except ProviderRateLimited as exc:
+                    flagged_state = await self.state.mark_route_rate_limited(
+                        route.route_id,
+                        provider.name,
+                        route.model_id,
+                        headers=exc.headers,
+                        status_code=exc.status_code,
+                    )
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "rate_limited",
+                        "provider_429",
+                        exc.status_code,
+                        route.route_id,
+                        route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_failed",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                        status_code=exc.status_code,
+                    )
                     yield RouteEvent(
                         event_type="route_flagged",
                         provider_name=provider.name,
                         route_id=route.route_id,
                         model_id=route.model_id,
-                        reason=flagged.reason,
-                    )
-                continue
-            except httpx.RequestError as exc:
-                attempt = ProviderAttempt(
-                    provider.name,
-                    "failed",
-                    exc.__class__.__name__,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_failed",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                )
-                continue
-            except ProviderError as exc:
-                if exc.status_code is not None and 500 <= exc.status_code < 600:
-                    attempt = ProviderAttempt(
-                        provider.name,
-                        "failed",
-                        "provider_5xx",
-                        exc.status_code,
-                        route.route_id,
-                        route.model_id,
-                    )
-                    attempts.append(attempt)
-                    yield RouteEvent(
-                        event_type="route_failed",
-                        provider_name=provider.name,
-                        route_id=route.route_id,
-                        model_id=route.model_id,
-                        reason=attempt.reason,
-                        status_code=exc.status_code,
+                        reason=flagged_state.status,
                     )
                     continue
-                if exc.status_code == 413:
+                except httpx.TimeoutException:
+                    timeout_state = await self.state.mark_route_timeout(
+                        route.route_id,
+                        provider.name,
+                        route.model_id,
+                    )
                     attempt = ProviderAttempt(
                         provider.name,
                         "failed",
-                        "request_too_large",
-                        exc.status_code,
-                        route.route_id,
-                        route.model_id,
+                        "timeout",
+                        route_id=route.route_id,
+                        model_id=route.model_id,
                     )
                     attempts.append(attempt)
                     yield RouteEvent(
@@ -677,57 +653,12 @@ class WaterfallRouter:
                         route_id=route.route_id,
                         model_id=route.model_id,
                         reason=attempt.reason,
-                        status_code=exc.status_code,
                     )
-                    continue
-                if exc.status_code in {401, 403}:
-                    attempt = ProviderAttempt(
-                        provider.name,
-                        "failed",
-                        "auth_error",
-                        exc.status_code,
-                        route.route_id,
-                        route.model_id,
-                    )
-                    attempts.append(attempt)
-                    yield RouteEvent(
-                        event_type="route_failed",
-                        provider_name=provider.name,
-                        route_id=route.route_id,
-                        model_id=route.model_id,
-                        reason=attempt.reason,
-                        status_code=exc.status_code,
-                    )
-                    continue
-                if looks_like_missing_model(exc):
-                    route_state = await self.state.mark_route_not_found(
-                        route.route_id,
-                        provider.name,
-                        route.model_id,
-                        status_code=exc.status_code,
-                    )
-                    attempt = ProviderAttempt(
-                        provider.name,
-                        "failed",
-                        "model_not_found",
-                        exc.status_code,
-                        route.route_id,
-                        route.model_id,
-                    )
-                    attempts.append(attempt)
-                    yield RouteEvent(
-                        event_type="route_failed",
-                        provider_name=provider.name,
-                        route_id=route.route_id,
-                        model_id=route.model_id,
-                        reason=attempt.reason,
-                        status_code=exc.status_code,
-                    )
-                    if route_state.status == "potentially_outdated":
+                    if timeout_state.status == "too_slow":
                         flagged = ProviderAttempt(
                             provider.name,
                             "flagged",
-                            "potentially_outdated",
+                            "too_slow",
                             route_id=route.route_id,
                             model_id=route.model_id,
                         )
@@ -740,50 +671,162 @@ class WaterfallRouter:
                             reason=flagged.reason,
                         )
                     continue
-                if "tool-use" in required_capabilities and exc.status_code == 400:
-                    adjust_capabilities_from_traffic(
-                        self.model_catalog,
-                        route_id=route.route_id,
-                        required_capabilities=required_capabilities,
-                        payload=payload,
-                        error=exc,
-                    )
-                raise
-
-            if require_assistant_content and not response_has_assistant_content(response.body):
-                attempt = ProviderAttempt(
-                    provider.name,
-                    "failed",
-                    "empty_assistant_response",
-                    response.status_code,
-                    route.route_id,
-                    route.model_id,
-                )
-                attempts.append(attempt)
-                yield RouteEvent(
-                    event_type="route_failed",
-                    provider_name=provider.name,
-                    route_id=route.route_id,
-                    model_id=route.model_id,
-                    reason=attempt.reason,
-                    status_code=response.status_code,
-                )
-                continue
-
-            if payload_requires_function_tools(payload):
-                tool_outcome = evaluate_tool_use_outcome(payload, response.body)
-                if tool_outcome == "unsupported":
-                    adjust_capabilities_from_traffic(
-                        self.model_catalog,
-                        route_id=route.route_id,
-                        required_capabilities=required_capabilities,
-                        payload=payload,
-                        response_body=response.body,
-                    )
+                except httpx.RequestError as exc:
                     attempt = ProviderAttempt(
                         provider.name,
                         "failed",
-                        "invalid_tool_response",
+                        exc.__class__.__name__,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_failed",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                    )
+                    continue
+                except ProviderError as exc:
+                    if exc.status_code is not None and 500 <= exc.status_code < 600:
+                        attempt = ProviderAttempt(
+                            provider.name,
+                            "failed",
+                            "provider_5xx",
+                            exc.status_code,
+                            route.route_id,
+                            route.model_id,
+                        )
+                        attempts.append(attempt)
+                        yield RouteEvent(
+                            event_type="route_failed",
+                            provider_name=provider.name,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                            reason=attempt.reason,
+                            status_code=exc.status_code,
+                        )
+                        continue
+                    if exc.status_code == 413:
+                        attempt = ProviderAttempt(
+                            provider.name,
+                            "failed",
+                            "request_too_large",
+                            exc.status_code,
+                            route.route_id,
+                            route.model_id,
+                        )
+                        attempts.append(attempt)
+                        yield RouteEvent(
+                            event_type="route_failed",
+                            provider_name=provider.name,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                            reason=attempt.reason,
+                            status_code=exc.status_code,
+                        )
+                        if route_exhausted_for_request(attempt.reason):
+                            exhausted_routes[route.route_id] = attempt.reason
+                        continue
+                    if exc.status_code in {401, 403}:
+                        attempt = ProviderAttempt(
+                            provider.name,
+                            "failed",
+                            "auth_error",
+                            exc.status_code,
+                            route.route_id,
+                            route.model_id,
+                        )
+                        attempts.append(attempt)
+                        yield RouteEvent(
+                            event_type="route_failed",
+                            provider_name=provider.name,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                            reason=attempt.reason,
+                            status_code=exc.status_code,
+                        )
+                        if route_exhausted_for_request(attempt.reason):
+                            exhausted_routes[route.route_id] = attempt.reason
+                        continue
+                    if looks_like_missing_model(exc):
+                        route_state = await self.state.mark_route_not_found(
+                            route.route_id,
+                            provider.name,
+                            route.model_id,
+                            status_code=exc.status_code,
+                        )
+                        attempt = ProviderAttempt(
+                            provider.name,
+                            "failed",
+                            "model_not_found",
+                            exc.status_code,
+                            route.route_id,
+                            route.model_id,
+                        )
+                        attempts.append(attempt)
+                        yield RouteEvent(
+                            event_type="route_failed",
+                            provider_name=provider.name,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                            reason=attempt.reason,
+                            status_code=exc.status_code,
+                        )
+                        if route_state.status == "potentially_outdated":
+                            flagged = ProviderAttempt(
+                                provider.name,
+                                "flagged",
+                                "potentially_outdated",
+                                route_id=route.route_id,
+                                model_id=route.model_id,
+                            )
+                            attempts.append(flagged)
+                            yield RouteEvent(
+                                event_type="route_flagged",
+                                provider_name=provider.name,
+                                route_id=route.route_id,
+                                model_id=route.model_id,
+                                reason=flagged.reason,
+                            )
+                        if route_exhausted_for_request(attempt.reason):
+                            exhausted_routes[route.route_id] = attempt.reason
+                        continue
+                    if "tool-use" in required_capabilities and exc.status_code == 400:
+                        adjust_capabilities_from_traffic(
+                            self.model_catalog,
+                            route_id=route.route_id,
+                            required_capabilities=required_capabilities,
+                            payload=payload,
+                            error=exc,
+                        )
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "failed",
+                        "provider_error",
+                        exc.status_code,
+                        route.route_id,
+                        route.model_id,
+                    )
+                    attempts.append(attempt)
+                    yield RouteEvent(
+                        event_type="route_failed",
+                        provider_name=provider.name,
+                        route_id=route.route_id,
+                        model_id=route.model_id,
+                        reason=attempt.reason,
+                        status_code=exc.status_code,
+                    )
+                    if route_exhausted_for_request(attempt.reason):
+                        exhausted_routes[route.route_id] = attempt.reason
+                    continue
+
+                if require_assistant_content and not response_has_assistant_content(response.body):
+                    attempt = ProviderAttempt(
+                        provider.name,
+                        "failed",
+                        "empty_assistant_response",
                         response.status_code,
                         route.route_id,
                         route.model_id,
@@ -799,68 +842,91 @@ class WaterfallRouter:
                     )
                     continue
 
-            adjust_capabilities_from_traffic(
-                self.model_catalog,
-                route_id=route.route_id,
-                required_capabilities=required_capabilities,
-                payload=payload,
-                response_body=response.body,
-            )
-            usage = response.body.get("usage")
-            await self.state.record_route_success(
-                route.route_id,
-                provider.name,
-                route.model_id,
-                usage=usage if isinstance(usage, dict) else None,
-                status_code=response.status_code,
-            )
-            await self.state.record_success(
-                provider.name,
-                usage=usage if isinstance(usage, dict) else None,
-                headers=response.headers,
-                status_code=response.status_code,
-            )
-            selected = ProviderAttempt(
-                provider.name,
-                "selected",
-                route_id=route.route_id,
-                model_id=route.model_id,
-            )
-            attempts.append(selected)
-            yield RouteEvent(
-                event_type="route_selected",
-                provider_name=provider.name,
-                route_id=route.route_id,
-                model_id=route.model_id,
-                attempts=list(attempts),
-                response=response,
-            )
-            return
+                if payload_requires_function_tools(payload):
+                    tool_outcome = evaluate_tool_use_outcome(payload, response.body)
+                    if tool_outcome == "unsupported":
+                        adjust_capabilities_from_traffic(
+                            self.model_catalog,
+                            route_id=route.route_id,
+                            required_capabilities=required_capabilities,
+                            payload=payload,
+                            response_body=response.body,
+                        )
+                        attempt = ProviderAttempt(
+                            provider.name,
+                            "failed",
+                            "invalid_tool_response",
+                            response.status_code,
+                            route.route_id,
+                            route.model_id,
+                        )
+                        attempts.append(attempt)
+                        yield RouteEvent(
+                            event_type="route_failed",
+                            provider_name=provider.name,
+                            route_id=route.route_id,
+                            model_id=route.model_id,
+                            reason=attempt.reason,
+                            status_code=response.status_code,
+                        )
+                        continue
 
-        yield RouteEvent(event_type="routing_exhausted", attempts=list(attempts))
+                adjust_capabilities_from_traffic(
+                    self.model_catalog,
+                    route_id=route.route_id,
+                    required_capabilities=required_capabilities,
+                    payload=payload,
+                    response_body=response.body,
+                )
+                usage = response.body.get("usage")
+                await self.state.record_route_success(
+                    route.route_id,
+                    provider.name,
+                    route.model_id,
+                    usage=usage if isinstance(usage, dict) else None,
+                    status_code=response.status_code,
+                )
+                await self.state.record_success(
+                    provider.name,
+                    usage=usage if isinstance(usage, dict) else None,
+                    headers=response.headers,
+                    status_code=response.status_code,
+                )
+                selected = ProviderAttempt(
+                    provider.name,
+                    "selected",
+                    route_id=route.route_id,
+                    model_id=route.model_id,
+                )
+                attempts.append(selected)
+                yield RouteEvent(
+                    event_type="route_selected",
+                    provider_name=provider.name,
+                    route_id=route.route_id,
+                    model_id=route.model_id,
+                    attempts=list(attempts),
+                    response=response,
+                )
+                return
+
+            if pass_index + 1 >= MAX_WATERFALL_PASSES or not should_retry_waterfall(attempts):
+                break
+
+                yield RouteEvent(event_type="routing_exhausted", attempts=list(attempts))
         raise NoProviderAvailable(attempts)
 
+    def _route_requirements(self, requirements: RequestRequirements) -> RequestRequirements:
+        if requirements.request_class != "tool-use":
+            return requirements
+        return RequestRequirements(
+            required_capabilities=requirements.required_capabilities | self.tool_requests_require,
+            request_class=requirements.request_class,
+        )
 
-def estimate_prompt_tokens(payload: dict[str, Any]) -> int:
-    """Cheap local estimator used only for preflight routing decisions.
-
-    A provider's response usage remains authoritative for accounting. The rough 4 chars/token
-    heuristic avoids spending tokens on doomed calls when a request is obviously too large.
-    """
-
-    text_parts: list[str] = []
-    for message in payload.get("messages") or []:
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content", "")
-        text_parts.append(_content_to_text(content))
-
-    for item in payload.get("input") or []:
-        text_parts.append(_content_to_text(item))
-
-    character_count = sum(len(part) for part in text_parts)
-    message_overhead = 4 * len(payload.get("messages") or [])
-    return max(1, character_count // 4 + message_overhead)
+    def _avoid_capabilities_for(self, requirements: RequestRequirements) -> frozenset[str]:
+        if requirements.request_class != "normal":
+            return frozenset()
+        return self.normal_requests_avoid
 
 
 def _content_to_text(content: Any) -> str:

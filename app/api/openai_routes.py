@@ -158,6 +158,11 @@ async def chat_completions_stream_route(request: Request) -> Response:
     stream_settings = get_settings()
     lease = GatewayLimiterLease(limiter)
     routing = GatewayRoutingContext()
+    resolved_requirements = chat_request_requirements(payload)
+    routing.configure_request(
+        request_class=resolved_requirements.request_class,
+        required_capabilities=resolved_requirements.required_capabilities,
+    )
 
     async def on_stream_event(event_payload: dict[str, Any]) -> None:
         nonlocal done_published

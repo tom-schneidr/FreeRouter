@@ -350,6 +350,10 @@ async def _route_chat_completion_stream_request(
     settings = get_settings()
     lease = GatewayLimiterLease(limiter)
     routing = GatewayRoutingContext()
+    routing.configure_request(
+        request_class=resolved_requirements.request_class,
+        required_capabilities=resolved_requirements.required_capabilities,
+    )
     tracker = StreamMonitorTracker(requested_model=payload.get("model"))
 
     async def openai_sse_stream():
@@ -360,7 +364,7 @@ async def _route_chat_completion_stream_request(
             async for part in normalize_openai_sse_stream(
                 router.iter_chat_completion_openai_stream(
                     payload,
-                    requirements=requirements,
+                    requirements=resolved_requirements,
                     require_assistant_content=require_assistant_content,
                 ),
                 payload.get("model"),
@@ -528,7 +532,7 @@ async def _route_chat_completion_request(
             request,
             router.route_chat_completion(
                 payload,
-                requirements=requirements,
+                requirements=resolved_requirements,
                 require_assistant_content=require_assistant_content,
             ),
         )
@@ -655,6 +659,8 @@ async def _route_chat_completion_request(
                 provider_name=result.provider_name,
                 route_id=result.route_id,
                 model_id=result.model_id,
+                request_class=resolved_requirements.request_class,
+                required_capabilities=resolved_requirements.required_capabilities,
             )
         ),
     )
@@ -680,6 +686,7 @@ async def _route_responses_stream_request(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    resolved_requirements = chat_request_requirements(payload)
     await monitor.publish(
         event_type="request_started",
         request_id=request_id,
@@ -688,12 +695,19 @@ async def _route_responses_stream_request(
             "stream": True,
             "model": requested_model or payload.get("model"),
             "client_ip": client_ip,
+            "required_capabilities": _display_capabilities(
+                resolved_requirements.required_capabilities
+            ),
             "request_payload": monitor_live_value(payload),
         },
     )
 
     lease = GatewayLimiterLease(limiter)
     routing = GatewayRoutingContext()
+    routing.configure_request(
+        request_class=resolved_requirements.request_class,
+        required_capabilities=resolved_requirements.required_capabilities,
+    )
     tracker = StreamMonitorTracker(requested_model=requested_model or payload.get("model"))
     rejected_response = JSONResponse(
         status_code=429,
@@ -715,7 +729,10 @@ async def _route_responses_stream_request(
         try:
             yield responses_stream_start(response_id=response_id, model=requested_model)
             async for part in normalize_openai_sse_stream(
-                router.iter_chat_completion_openai_stream(payload),
+                router.iter_chat_completion_openai_stream(
+                    payload,
+                    requirements=resolved_requirements,
+                ),
                 requested_model,
             ):
                 if isinstance(part, RouteStreamDiag):

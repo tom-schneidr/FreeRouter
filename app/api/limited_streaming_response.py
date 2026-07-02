@@ -71,10 +71,18 @@ class RoutedLimitedStreamingResponse(LimitedStreamingResponse):
 
     def _response_headers(self) -> list[tuple[bytes, bytes]]:
         headers = list(self.raw_headers)
+        for name, value in self.routing.request_headers().items():
+            headers.append((name.lower().encode("latin-1"), value.encode("latin-1")))
         info = self.routing.info
         if info is not None:
             for name, value in gateway_route_headers(info).items():
-                headers.append((name.lower().encode("latin-1"), value.encode("latin-1")))
+                lower_name = name.lower()
+                if lower_name in {
+                    "x-gateway-request-class",
+                    "x-gateway-required-capabilities",
+                }:
+                    continue
+                headers.append((lower_name.encode("latin-1"), value.encode("latin-1")))
         return headers
 
     async def _send_body_chunk(self, send: Send, chunk: str | bytes | memoryview) -> None:
