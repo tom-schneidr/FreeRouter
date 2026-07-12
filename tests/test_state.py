@@ -160,6 +160,30 @@ async def test_mark_exhausted_respects_retry_after_header(tmp_path):
     assert availability.retry_after_seconds > 200
 
 
+async def test_route_rate_limit_normalizes_millisecond_epoch_reset_header(tmp_path):
+    state = StateManager(
+        str(tmp_path / "state.sqlite3"),
+        [
+            ProviderQuota(
+                "test", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
+    )
+    now = 1_782_970_000
+    state._now = lambda: now
+    await state.initialize()
+
+    route_state = await state.mark_route_rate_limited(
+        "route-a",
+        "test",
+        "model-a",
+        headers={"x-ratelimit-reset": str((now + 60) * 1000)},
+    )
+
+    assert route_state.rate_limited_until == now + 60
+    assert route_state.next_probe_at < now + 120
+
+
 async def test_record_success_accumulates_tokens(tmp_path):
     """Successful responses should accumulate token usage."""
     state = StateManager(

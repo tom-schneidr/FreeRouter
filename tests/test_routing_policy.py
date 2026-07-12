@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.capability_tags import CapabilityClaim, tags_to_capabilities
 from app.model_catalog import ModelCatalog, ModelRoute
 from app.routing_policy import (
     configured_provider_names,
@@ -119,6 +120,65 @@ def test_enabled_routes_for_request_filters_by_multiple_capabilities(tmp_path):
         required_capabilities=frozenset({"text", "vision", "tool-use"}),
     )
     assert [route.route_id for route in routes] == ["a"]
+
+
+def test_enabled_routes_can_append_unconfirmed_tool_use_fallbacks_after_confirmed(tmp_path):
+    catalog = ModelCatalog(str(tmp_path / "catalog.json"))
+    catalog._routes = [
+        ModelRoute(
+            route_id="hint",
+            provider_name="groq",
+            model_id="m1",
+            display_name="Hint",
+            rank=1,
+            tags=["text"],
+            capabilities={
+                **tags_to_capabilities(["text"], source="manual"),
+                "tool-use": CapabilityClaim(
+                    tag="tool-use",
+                    status="supported",
+                    source="registry",
+                    confidence="medium",
+                    checked_at=1,
+                    evidence="registry hint",
+                ),
+            },
+        ),
+        ModelRoute(
+            route_id="confirmed",
+            provider_name="groq",
+            model_id="m2",
+            display_name="Confirmed",
+            rank=2,
+            tags=["text", "tool-use"],
+            capabilities={
+                **tags_to_capabilities(["text"], source="manual"),
+                "tool-use": CapabilityClaim(
+                    tag="tool-use",
+                    status="supported",
+                    source="probe",
+                    confidence="high",
+                    checked_at=1,
+                    evidence="probe passed",
+                ),
+            },
+        ),
+    ]
+
+    strict = enabled_routes_for_request(
+        catalog,
+        requested_model="auto",
+        required_capabilities=frozenset({"text", "tool-use"}),
+    )
+    fallback = enabled_routes_for_request(
+        catalog,
+        requested_model="auto",
+        required_capabilities=frozenset({"text", "tool-use"}),
+        allow_unconfirmed_tool_use_fallback=True,
+    )
+
+    assert [route.route_id for route in strict] == ["confirmed"]
+    assert [route.route_id for route in fallback] == ["confirmed", "hint"]
 
 
 def test_enabled_routes_for_request_with_no_required_capabilities_returns_all_enabled(tmp_path):

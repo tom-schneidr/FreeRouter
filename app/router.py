@@ -24,6 +24,8 @@ from app.state import Availability, StateManager
 from app.tool_use_validation import (
     evaluate_tool_use_outcome,
     payload_requires_function_tools,
+    response_promises_action_in_text,
+    tool_loop_already_started,
 )
 from app.waterfall_resilience import (
     MAX_WATERFALL_PASSES,
@@ -261,6 +263,8 @@ class WaterfallRouter:
         http_client: httpx.AsyncClient | None = None,
         tool_requests_require: frozenset[str] | None = None,
         normal_requests_avoid: frozenset[str] | None = None,
+        reject_initial_action_promise: bool = False,
+        allow_unconfirmed_tool_use_fallback: bool = False,
     ) -> None:
         self.providers = providers
         self.provider_by_name = {provider.name: provider for provider in providers}
@@ -270,6 +274,8 @@ class WaterfallRouter:
         self._http_client = http_client
         self.tool_requests_require = tool_requests_require or frozenset({"tool-use"})
         self.normal_requests_avoid = normal_requests_avoid or frozenset({"tool-use"})
+        self.reject_initial_action_promise = reject_initial_action_promise
+        self.allow_unconfirmed_tool_use_fallback = allow_unconfirmed_tool_use_fallback
 
     async def route_chat_completion(
         self,
@@ -361,6 +367,8 @@ class WaterfallRouter:
                     require_assistant_content=require_assistant_content,
                     tool_requests_require=self.tool_requests_require,
                     normal_requests_avoid=self.normal_requests_avoid,
+                    reject_initial_action_promise=self.reject_initial_action_promise,
+                    allow_unconfirmed_tool_use_fallback=self.allow_unconfirmed_tool_use_fallback,
                 )
             ) as stream:
                 async for part in stream:
@@ -380,6 +388,8 @@ class WaterfallRouter:
                     require_assistant_content=require_assistant_content,
                     tool_requests_require=self.tool_requests_require,
                     normal_requests_avoid=self.normal_requests_avoid,
+                    reject_initial_action_promise=self.reject_initial_action_promise,
+                    allow_unconfirmed_tool_use_fallback=self.allow_unconfirmed_tool_use_fallback,
                 )
             ) as stream:
                 async for part in stream:
@@ -406,6 +416,7 @@ class WaterfallRouter:
             requested_model=requested_model,
             required_capabilities=required_capabilities,
             avoid_capabilities=self._avoid_capabilities_for(resolved_requirements),
+            allow_unconfirmed_tool_use_fallback=self.allow_unconfirmed_tool_use_fallback,
         )
         if not routes_list:
             raise UnsupportedCapabilities(
@@ -843,19 +854,31 @@ class WaterfallRouter:
                     continue
 
                 if payload_requires_function_tools(payload):
-                    tool_outcome = evaluate_tool_use_outcome(payload, response.body)
+                    tool_outcome = evaluate_tool_use_outcome(
+                        payload,
+                        response.body,
+                        reject_initial_action_promise=self.reject_initial_action_promise,
+                    )
                     if tool_outcome == "unsupported":
-                        adjust_capabilities_from_traffic(
-                            self.model_catalog,
-                            route_id=route.route_id,
-                            required_capabilities=required_capabilities,
-                            payload=payload,
-                            response_body=response.body,
+                        promise_rejected = (
+                            self.reject_initial_action_promise
+                            and not tool_loop_already_started(payload)
+                            and response_promises_action_in_text(response.body)
                         )
+                        if not promise_rejected:
+                            adjust_capabilities_from_traffic(
+                                self.model_catalog,
+                                route_id=route.route_id,
+                                required_capabilities=required_capabilities,
+                                payload=payload,
+                                response_body=response.body,
+                            )
                         attempt = ProviderAttempt(
                             provider.name,
                             "failed",
-                            "invalid_tool_response",
+                            "action_promise_without_tool_call"
+                            if promise_rejected
+                            else "invalid_tool_response",
                             response.status_code,
                             route.route_id,
                             route.model_id,

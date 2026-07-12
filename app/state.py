@@ -987,6 +987,8 @@ class StateManager:
         normalized = value.strip().lower()
         if normalized.isdigit():
             numeric = int(normalized)
+            if numeric > 10_000_000_000:
+                return numeric // 1000
             return numeric if numeric > 2_000_000_000 else int(time()) + numeric
 
         try:

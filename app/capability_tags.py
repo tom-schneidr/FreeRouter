@@ -232,10 +232,21 @@ def finalize_route(route: ModelRoute, *, metadata_tags: list[str] | None = None)
     return apply_capability_pipeline(route, metadata_tags=metadata_tags)
 
 
-def route_satisfies_capabilities(route: ModelRoute, required: frozenset[str]) -> bool:  # noqa: F821
+def route_satisfies_capabilities(
+    route: ModelRoute,  # noqa: F821
+    required: frozenset[str],
+    *,
+    allow_unconfirmed_tool_use: bool = False,
+) -> bool:
     """Return true when route tags cover requirements and hard tags are verified."""
     tag_set = set(route.tags)
-    if not required.issubset(tag_set):
+    for tag in required:
+        if tag in tag_set:
+            continue
+        if tag == "tool-use" and allow_unconfirmed_tool_use:
+            claim = route.capabilities.get("tool-use")
+            if claim is not None and claim.status == "supported":
+                continue
         return False
     if not route.capabilities:
         if "tool-use" in required:
@@ -246,6 +257,13 @@ def route_satisfies_capabilities(route: ModelRoute, required: frozenset[str]) ->
             continue
         claim = route.capabilities.get(tag)
         if tag in TAGS_REQUIRING_CONFIRMATION:
+            if (
+                allow_unconfirmed_tool_use
+                and tag == "tool-use"
+                and claim is not None
+                and claim.status == "supported"
+            ):
+                continue
             if claim is None or not capability_qualifies_for_tag(claim, tag):
                 return False
             continue

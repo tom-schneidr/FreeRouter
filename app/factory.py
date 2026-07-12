@@ -67,6 +67,8 @@ async def build_core_gateway_stack(
         http_client=http_client,
         tool_requests_require=frozenset(settings.routing_tool_requests_require),
         normal_requests_avoid=frozenset(settings.routing_normal_requests_avoid),
+        reject_initial_action_promise=settings.routing_reject_initial_action_promise,
+        allow_unconfirmed_tool_use_fallback=settings.routing_allow_unconfirmed_tool_use_fallback,
     )
     return CoreGatewayStack(
         settings=settings,

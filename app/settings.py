@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     benchmark_refresh_min_scores: int = 3
     routing_tool_requests_require: tuple[str, ...] = ("tool-use",)
     routing_normal_requests_avoid: tuple[str, ...] = ("tool-use",)
+    routing_reject_initial_action_promise: bool = False
+    routing_allow_unconfirmed_tool_use_fallback: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

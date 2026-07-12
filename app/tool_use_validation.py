@@ -31,6 +31,18 @@ _FAKE_TOOL_TEXT_RE = re.compile(
     r"(\{\s*\"name\"\s*:\s*\"[^\"]+\"\s*,\s*\"arguments\"|\[\s*\{\s*\"type\"\s*:\s*\"function\")",
     re.IGNORECASE,
 )
+_PROMISE_TO_ACT_RE = re.compile(
+    r"\b("
+    r"i\s*(?:will|'ll|am\s+going\s+to|m\s+going\s+to)\s+"
+    r"|let\s+me\s+"
+    r"|i\s+can\s+"
+    r"|i\s+should\s+"
+    r"|i\s+need\s+to\s+"
+    r")"
+    r"(?:actually\s+|now\s+|go\s+ahead\s+and\s+|just\s+)?"
+    r"(?:do|run|check|build|create|write|edit|update|fix|inspect|look|open|restart|install|configure|test|verify)\b",
+    re.IGNORECASE,
+)
 
 
 def payload_requires_function_tools(payload: dict[str, Any]) -> bool:
@@ -48,6 +60,20 @@ def tool_use_response_mandatory(payload: dict[str, Any]) -> bool:
     clients (e.g. OpenClaw) always send tool history while still allowing text.
     """
     return _tool_choice_requires_function_tools(payload.get("tool_choice"))
+
+
+def tool_loop_already_started(payload: dict[str, Any]) -> bool:
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "tool":
+            return True
+        if message.get("role") == "assistant" and isinstance(message.get("tool_calls"), list):
+            return True
+    return False
 
 
 def assistant_text_from_body(body: dict[str, Any]) -> str:
@@ -125,14 +151,29 @@ def response_fakes_tool_use_in_text(body: dict[str, Any]) -> bool:
     return _FAKE_TOOL_TEXT_RE.search(text) is not None
 
 
+def response_promises_action_in_text(body: dict[str, Any]) -> bool:
+    text = assistant_text_from_body(body).strip()
+    if not text or response_has_valid_function_tool_calls(body):
+        return False
+    return _PROMISE_TO_ACT_RE.search(text) is not None
+
+
 def evaluate_tool_use_outcome(
     payload: dict[str, Any],
     body: dict[str, Any],
+    *,
+    reject_initial_action_promise: bool = False,
 ) -> ToolUseOutcome:
     if not payload_requires_function_tools(payload):
         return "neutral"
     if response_has_valid_function_tool_calls(body):
         return "supported"
+    if (
+        reject_initial_action_promise
+        and not tool_loop_already_started(payload)
+        and response_promises_action_in_text(body)
+    ):
+        return "unsupported"
     if tool_use_response_mandatory(payload) or response_fakes_tool_use_in_text(body):
         return "unsupported"
     return "neutral"

@@ -36,7 +36,9 @@ from app.state import Availability, StateManager
 from app.tool_use_validation import (
     evaluate_tool_use_outcome,
     payload_requires_function_tools,
+    response_promises_action_in_text,
     should_abort_tool_stream_early,
+    tool_loop_already_started,
 )
 from app.waterfall_resilience import (
     MAX_WATERFALL_PASSES,
@@ -88,6 +90,8 @@ async def waterfall_openai_stream(
     require_assistant_content: bool = False,
     tool_requests_require: frozenset[str] | None = None,
     normal_requests_avoid: frozenset[str] | None = None,
+    reject_initial_action_promise: bool = False,
+    allow_unconfirmed_tool_use_fallback: bool = False,
 ) -> Any:
     """Yield :class:`RouteStreamDiag` plus raw OpenAI ``text/event-stream`` fragments (``str``)."""
     validate_chat_completion_payload(payload)
@@ -119,6 +123,7 @@ async def waterfall_openai_stream(
             if resolved_requirements.request_class == "normal"
             else frozenset()
         ),
+        allow_unconfirmed_tool_use_fallback=allow_unconfirmed_tool_use_fallback,
     )
     if not routes_list:
         raise UnsupportedCapabilities(
@@ -126,6 +131,11 @@ async def waterfall_openai_stream(
             requested_model if isinstance(requested_model, str) else None,
         )
     prefetch_provider_names = configured_provider_names(routes_list, providers_by_name)
+    defer_initial_tool_text_commit = (
+        reject_initial_action_promise
+        and payload_requires_function_tools(outbound_payload)
+        and not tool_loop_already_started(outbound_payload)
+    )
 
     for pass_index in range(MAX_WATERFALL_PASSES):
         if pass_index > 0:
@@ -362,6 +372,32 @@ async def waterfall_openai_stream(
                                         )
                                         stop_route_attempt = True
                                         break
+                                    if (
+                                        defer_initial_tool_text_commit
+                                        and response_promises_action_in_text(
+                                            _synthetic_stream_response_body(
+                                                saw_tool_calls=False,
+                                                text=precommit_text,
+                                            )
+                                        )
+                                    ):
+                                        attempt = ProviderAttempt(
+                                            provider.name,
+                                            "failed",
+                                            "action_promise_without_tool_call",
+                                            route_id=route.route_id,
+                                            model_id=route.model_id,
+                                        )
+                                        attempts.append(attempt)
+                                        yield RouteStreamDiag(
+                                            event_type="route_failed",
+                                            provider_name=provider.name,
+                                            route_id=route.route_id,
+                                            model_id=route.model_id,
+                                            reason=attempt.reason,
+                                        )
+                                        stop_route_attempt = True
+                                        break
                                 if pl is _SSE_DONE:
                                     fail_reason = "empty_stream"
                                     if payload_requires_function_tools(outbound_payload):
@@ -369,21 +405,66 @@ async def waterfall_openai_stream(
                                             saw_tool_calls=precommit_saw_tool_calls,
                                             text=precommit_text,
                                         )
-                                        if (
-                                            evaluate_tool_use_outcome(
-                                                outbound_payload,
-                                                synthetic_body,
+                                        tool_outcome = evaluate_tool_use_outcome(
+                                            outbound_payload,
+                                            synthetic_body,
+                                            reject_initial_action_promise=reject_initial_action_promise,
+                                        )
+                                        if tool_outcome == "unsupported":
+                                            promise_rejected = (
+                                                defer_initial_tool_text_commit
+                                                and response_promises_action_in_text(synthetic_body)
                                             )
-                                            == "unsupported"
-                                        ):
-                                            adjust_capabilities_from_traffic(
-                                                model_catalog,
+                                            if not promise_rejected:
+                                                adjust_capabilities_from_traffic(
+                                                    model_catalog,
+                                                    route_id=route.route_id,
+                                                    required_capabilities=required_capabilities,
+                                                    payload=outbound_payload,
+                                                    response_body=synthetic_body,
+                                                )
+                                            fail_reason = (
+                                                "action_promise_without_tool_call"
+                                                if promise_rejected
+                                                else "invalid_tool_response"
+                                            )
+                                        elif buffered_before_commit:
+                                            selected = ProviderAttempt(
+                                                provider.name,
+                                                "selected",
                                                 route_id=route.route_id,
-                                                required_capabilities=required_capabilities,
-                                                payload=outbound_payload,
-                                                response_body=synthetic_body,
+                                                model_id=route.model_id,
                                             )
-                                            fail_reason = "invalid_tool_response"
+                                            attempts.append(selected)
+                                            yield RouteStreamDiag(
+                                                event_type="route_selected",
+                                                provider_name=provider.name,
+                                                route_id=route.route_id,
+                                                model_id=route.model_id,
+                                                route_tags=tuple(route.tags),
+                                                required_capabilities=required_capabilities,
+                                            )
+                                            for b in buffered_before_commit:
+                                                yield b
+                                            buffered_before_commit.clear()
+                                            await state.record_route_success(
+                                                route.route_id,
+                                                provider.name,
+                                                route.model_id,
+                                                usage=usage,
+                                                status_code=last_status,
+                                            )
+                                            await state.record_success(
+                                                provider.name,
+                                                usage=usage,
+                                                headers={},
+                                                status_code=last_status,
+                                            )
+                                            summary = _usage_summary_diag(usage)
+                                            if summary is not None:
+                                                yield summary
+                                            yield text
+                                            return
                                     attempt = ProviderAttempt(
                                         provider.name,
                                         "failed",
@@ -423,6 +504,9 @@ async def waterfall_openai_stream(
                                     pl,
                                     require_substantive_assistant=require_assistant_content,
                                     outbound_payload=outbound_payload,
+                                ) and (
+                                    not defer_initial_tool_text_commit
+                                    or (isinstance(pl, dict) and _delta_has_tool_calls(pl))
                                 ):
                                     committed = True
                                     selected = ProviderAttempt(

@@ -290,6 +290,109 @@ async def test_router_routes_tool_request_to_tool_capable_route(tmp_path):
     assert result.model_id == "tool/model"
 
 
+async def test_router_retries_initial_action_promise_without_demoting_tool_route(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider(
+        "primary",
+        response={
+            "id": "promise",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Fair. Let me actually build the file right now.",
+                    }
+                }
+            ],
+        },
+    )
+    secondary = FakeProvider(
+        "fallback",
+        response={
+            "id": "tool",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {"name": "write_file", "arguments": "{}"},
+                            }
+                        ],
+                    }
+                }
+            ],
+        },
+    )
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes(
+        [
+            {
+                "route_id": "tool-a",
+                "provider_name": "primary",
+                "model_id": "tool/a",
+                "display_name": "Tool A",
+                "rank": 1,
+                "enabled": True,
+                "context_window": 8192,
+                "tags": ["text", "tool-use"],
+                "capabilities": {
+                    "tool-use": {
+                        "tag": "tool-use",
+                        "status": "supported",
+                        "source": "probe",
+                        "confidence": "high",
+                        "checked_at": 1,
+                    }
+                },
+            },
+            {
+                "route_id": "tool-b",
+                "provider_name": "fallback",
+                "model_id": "tool/b",
+                "display_name": "Tool B",
+                "rank": 2,
+                "enabled": True,
+                "context_window": 8192,
+                "tags": ["text", "tool-use"],
+                "capabilities": {
+                    "tool-use": {
+                        "tag": "tool-use",
+                        "status": "supported",
+                        "source": "probe",
+                        "confidence": "high",
+                        "checked_at": 1,
+                    }
+                },
+            },
+        ]
+    )
+    router = WaterfallRouter(
+        [primary, secondary],
+        catalog,
+        state,
+        request_timeout_seconds=5,
+        reject_initial_action_promise=True,
+    )
+    payload = {
+        **_payload(),
+        "messages": [{"role": "user", "content": "build the file"}],
+        "tools": [{"type": "function", "function": {"name": "write_file", "parameters": {}}}],
+        "tool_choice": "auto",
+    }
+
+    result = await router.route_chat_completion(payload)
+    route_a = next(route for route in catalog.all_routes() if route.route_id == "tool-a")
+
+    assert result.route_id == "tool-b"
+    assert result.attempts[0].reason == "action_promise_without_tool_call"
+    assert route_a.capabilities["tool-use"].status == "supported"
+
+
 async def test_router_prefers_normal_route_for_normal_request(tmp_path):
     state = await _state(tmp_path)
     primary = FakeProvider("primary")
@@ -884,6 +987,153 @@ async def test_openai_stream_preserves_fragmented_dual_tool_call_bytes(tmp_path)
     assert '"arguments":"1}"' in compact
     assert '"arguments":"{\\"b\\":' in compact or '"arguments":"{"b":' in compact
     assert '"arguments":"2}"' in compact
+
+
+async def test_openai_stream_retries_initial_action_promise_without_demoting_tool_route(tmp_path):
+    state = await _state(tmp_path)
+    primary = FakeProvider(
+        "primary",
+        response={
+            "id": "promise",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Fair. Let me actually build the file right now.",
+                    }
+                }
+            ],
+        },
+    )
+    fallback = FragmentedToolStreamProvider("fallback")
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.replace_routes(
+        [
+            {
+                "route_id": "tool-a",
+                "provider_name": "primary",
+                "model_id": "tool/a",
+                "display_name": "Tool A",
+                "rank": 1,
+                "enabled": True,
+                "context_window": 8192,
+                "tags": ["text", "tool-use"],
+                "capabilities": {
+                    "tool-use": {
+                        "tag": "tool-use",
+                        "status": "supported",
+                        "source": "probe",
+                        "confidence": "high",
+                        "checked_at": 1,
+                    }
+                },
+            },
+            {
+                "route_id": "tool-b",
+                "provider_name": "fallback",
+                "model_id": "tool/b",
+                "display_name": "Tool B",
+                "rank": 2,
+                "enabled": True,
+                "context_window": 8192,
+                "tags": ["text", "tool-use"],
+                "capabilities": {
+                    "tool-use": {
+                        "tag": "tool-use",
+                        "status": "supported",
+                        "source": "probe",
+                        "confidence": "high",
+                        "checked_at": 1,
+                    }
+                },
+            },
+        ]
+    )
+    router = WaterfallRouter(
+        [primary, fallback],
+        catalog,
+        state,
+        request_timeout_seconds=5,
+        reject_initial_action_promise=True,
+    )
+    payload = {
+        **_payload(),
+        "messages": [{"role": "user", "content": "build the file"}],
+        "tools": [{"type": "function", "function": {"name": "write_file", "parameters": {}}}],
+        "tool_choice": "auto",
+    }
+
+    parts = [p async for p in router.iter_chat_completion_openai_stream(payload)]
+    failed = [
+        p
+        for p in parts
+        if isinstance(p, RouteStreamDiag)
+        and p.event_type == "route_failed"
+        and p.route_id == "tool-a"
+    ]
+    selected = [
+        p
+        for p in parts
+        if isinstance(p, RouteStreamDiag)
+        and p.event_type == "route_selected"
+        and p.route_id == "tool-b"
+    ]
+    route_a = next(route for route in catalog.all_routes() if route.route_id == "tool-a")
+    sse = "".join(p for p in parts if isinstance(p, str))
+
+    assert primary.stream_calls == 1
+    assert fallback.stream_calls == 1
+    assert failed[0].reason == "action_promise_without_tool_call"
+    assert selected
+    assert '"tool_calls"' in sse
+    assert route_a.capabilities["tool-use"].status == "supported"
+
+
+async def test_openai_stream_accepts_harmless_initial_tool_text_when_promise_guard_enabled(
+    tmp_path,
+):
+    state = await _state(tmp_path)
+    provider = FakeProvider(
+        "fallback",
+        response={
+            "id": "explain",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I can explain how to build it.",
+                    }
+                }
+            ],
+        },
+    )
+    router = WaterfallRouter(
+        [provider],
+        _tool_catalog(tmp_path),
+        state,
+        request_timeout_seconds=5,
+        reject_initial_action_promise=True,
+    )
+    payload = {
+        **_payload(),
+        "messages": [{"role": "user", "content": "how should I build it?"}],
+        "tools": [{"type": "function", "function": {"name": "write_file", "parameters": {}}}],
+        "tool_choice": "auto",
+    }
+
+    parts = [p async for p in router.iter_chat_completion_openai_stream(payload)]
+    sse = "".join(p for p in parts if isinstance(p, str))
+
+    assert provider.stream_calls == 1
+    assert "I can explain how to build it." in sse
+    assert any(
+        isinstance(p, RouteStreamDiag)
+        and p.event_type == "route_selected"
+        and p.route_id == "tool-test"
+        for p in parts
+    )
 
 
 class PostCommitFailureStreamProvider(FakeProvider):

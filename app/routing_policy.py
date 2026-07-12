@@ -22,14 +22,28 @@ def enabled_routes_for_request(
     requested_model: Any,
     required_capabilities: frozenset[str] | None = None,
     avoid_capabilities: frozenset[str] | None = None,
+    allow_unconfirmed_tool_use_fallback: bool = False,
 ) -> list[ModelRoute]:
     required = required_capabilities or frozenset()
     requested_model_value = requested_model if isinstance(requested_model, str) else None
+    base_routes = list(catalog.enabled_routes(requested_model_value))
     routes = [
         route
-        for route in catalog.enabled_routes(requested_model_value)
+        for route in base_routes
         if route_satisfies_capabilities(route, required)
     ]
+    if allow_unconfirmed_tool_use_fallback and "tool-use" in required:
+        confirmed_ids = {route.route_id for route in routes}
+        routes.extend(
+            route
+            for route in base_routes
+            if route.route_id not in confirmed_ids
+            and route_satisfies_capabilities(
+                route,
+                required,
+                allow_unconfirmed_tool_use=True,
+            )
+        )
     avoided = avoid_capabilities or frozenset()
     if not avoided or (requested_model_value and requested_model_value != "auto"):
         return routes

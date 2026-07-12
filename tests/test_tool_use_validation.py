@@ -6,6 +6,7 @@ from app.model_catalog import ModelCatalog, route_id_for
 from app.tool_use_validation import (
     evaluate_tool_use_outcome,
     response_fakes_tool_use_in_text,
+    response_promises_action_in_text,
     should_abort_tool_stream_early,
     tool_use_response_mandatory,
 )
@@ -63,6 +64,62 @@ def test_text_reply_with_tools_and_auto_choice_is_neutral():
     }
     body = {"choices": [{"message": {"content": "Here is what I found for you."}}]}
     assert evaluate_tool_use_outcome(payload, body) == "neutral"
+
+
+def test_initial_action_promise_can_be_rejected_for_auto_tool_choice():
+    payload = {
+        "tools": [{"type": "function", "function": {"name": "write_file", "parameters": {}}}],
+        "tool_choice": "auto",
+        "messages": [{"role": "user", "content": "build the file"}],
+    }
+    body = {"choices": [{"message": {"content": "Fair. Let me actually build the file right now."}}]}
+
+    assert response_promises_action_in_text(body) is True
+    assert evaluate_tool_use_outcome(payload, body) == "neutral"
+    assert (
+        evaluate_tool_use_outcome(
+            payload,
+            body,
+            reject_initial_action_promise=True,
+        )
+        == "unsupported"
+    )
+
+
+def test_explanatory_build_text_is_not_action_promise():
+    body = {"choices": [{"message": {"content": "I can explain how to build it."}}]}
+
+    assert response_promises_action_in_text(body) is False
+
+
+def test_action_promise_after_tool_loop_remains_neutral():
+    payload = {
+        "tools": [{"type": "function", "function": {"name": "write_file", "parameters": {}}}],
+        "tool_choice": "auto",
+        "messages": [
+            {"role": "user", "content": "build the file"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "write_file", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "content": "ok", "tool_call_id": "1"},
+        ],
+    }
+    body = {"choices": [{"message": {"content": "I will verify it now."}}]}
+
+    assert (
+        evaluate_tool_use_outcome(
+            payload,
+            body,
+            reject_initial_action_promise=True,
+        )
+        == "neutral"
+    )
 
 
 def test_detects_fake_tool_json_in_assistant_text():
