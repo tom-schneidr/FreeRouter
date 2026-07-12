@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.capability_tags import apply_capability_pipeline
+from app.capability_tags import CapabilityStatus, apply_capability_pipeline
 from app.model_catalog import ModelRoute, route_from_discovered_model
 from app.providers.base import ProviderAdapter
 
@@ -41,6 +41,7 @@ def route_from_catalog_item(
     route_model_id = route_model_id_from_catalog_id(model_id)
     display_name = str(item.get("name") or route_model_id)
     tags = tags_for_model(item)
+    tool_use_status = tool_use_metadata_status(item)
 
     if provider.name == "openrouter":
         enabled = True
@@ -77,7 +78,20 @@ def route_from_catalog_item(
     from app.capability_tags import normalize_route_tool_use_policy
 
     return normalize_route_tool_use_policy(
-        apply_capability_pipeline(route, metadata_tags=tags)
+        apply_capability_pipeline(
+            route,
+            metadata_tags=tags,
+            metadata_claims={
+                "tool-use": (
+                    tool_use_status,
+                    "Provider model catalog explicitly reports tool-use support"
+                    if tool_use_status == "supported"
+                    else "Provider model catalog explicitly reports tool-use as unavailable",
+                )
+            }
+            if tool_use_status != "unknown"
+            else None,
+        )
     )
 
 
@@ -279,13 +293,116 @@ def _flatten_text_values(value: Any) -> list[str]:
 
 
 def _supports_tool_use_from_item(item: dict[str, Any]) -> bool:
-    params = item.get("supported_parameters")
-    if isinstance(params, list):
-        normalized = {str(param).lower() for param in params}
-        if "tools" in normalized or "tool_choice" in normalized:
-            return True
-    capability_text = _capability_search_text(item)
-    return _supports_tool_use(capability_text)
+    return tool_use_metadata_status(item) == "supported"
+
+
+_TOOL_CAPABILITY_NAMES = frozenset(
+    {
+        "tools",
+        "tool_choice",
+        "tool_use",
+        "function_call",
+        "function_calls",
+        "function_calling",
+    }
+)
+_POSITIVE_STATUS_VALUES = frozenset({"true", "yes", "supported", "enabled", "available"})
+_NEGATIVE_STATUS_VALUES = frozenset(
+    {"false", "no", "unsupported", "disabled", "unavailable", "none"}
+)
+
+
+def tool_use_metadata_status(item: dict[str, Any]) -> CapabilityStatus:
+    """Read provider model metadata as a semantic supported/unsupported/unknown value.
+
+    In particular, keys are not treated as capabilities by mere presence: values
+    such as ``{"capabilities": {"tools": false}}`` are explicit negative evidence.
+    """
+    findings: list[CapabilityStatus] = []
+    for field in (
+        "supported_parameters",
+        "supported_features",
+        "capabilities",
+        "features",
+        "tools",
+        "tool_types",
+    ):
+        value = item.get(field)
+        if field in {"tools", "tool_types"}:
+            status = _support_status_from_value(value, list_presence_means_supported=True)
+            if status != "unknown":
+                findings.append(status)
+        findings.extend(_tool_support_findings(value, list_items_are_capability_names=True))
+
+    if "unsupported" in findings:
+        return "unsupported"
+    if "supported" in findings:
+        return "supported"
+    return "unknown"
+
+
+def _tool_support_findings(
+    value: Any,
+    *,
+    list_items_are_capability_names: bool = False,
+) -> list[CapabilityStatus]:
+    findings: list[CapabilityStatus] = []
+    if isinstance(value, dict):
+        for raw_key, child in value.items():
+            key = str(raw_key).strip().lower().replace("-", "_").replace(" ", "_")
+            if key in _TOOL_CAPABILITY_NAMES:
+                status = _support_status_from_value(child, list_presence_means_supported=True)
+                if status != "unknown":
+                    findings.append(status)
+            elif isinstance(child, (dict, list)):
+                findings.extend(_tool_support_findings(child))
+        return findings
+    if isinstance(value, list):
+        for child in value:
+            if isinstance(child, str) and list_items_are_capability_names:
+                normalized = child.strip().lower().replace("-", "_").replace(" ", "_")
+                if normalized in _TOOL_CAPABILITY_NAMES or _supports_tool_use(normalized):
+                    findings.append("supported")
+            elif isinstance(child, (dict, list)):
+                findings.extend(_tool_support_findings(child))
+    elif (
+        isinstance(value, str)
+        and list_items_are_capability_names
+        and _supports_tool_use(value.lower())
+    ):
+        findings.append("supported")
+    return findings
+
+
+def _support_status_from_value(
+    value: Any,
+    *,
+    list_presence_means_supported: bool = False,
+) -> CapabilityStatus:
+    if isinstance(value, bool):
+        return "supported" if value else "unsupported"
+    if isinstance(value, (int, float)):
+        return "supported" if value else "unsupported"
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _POSITIVE_STATUS_VALUES:
+            return "supported"
+        if normalized in _NEGATIVE_STATUS_VALUES:
+            return "unsupported"
+        if _supports_tool_use(normalized):
+            return "supported"
+        return "unknown"
+    if isinstance(value, list):
+        return "supported" if list_presence_means_supported and bool(value) else "unknown"
+    if isinstance(value, dict):
+        for status_key in ("supported", "enabled", "available", "status"):
+            if status_key in value:
+                status = _support_status_from_value(value[status_key])
+                if status != "unknown":
+                    return status
+        if list_presence_means_supported and value:
+            return "supported"
+    return "unknown"
 
 
 def _supports_tool_use(capability_text: str) -> bool:

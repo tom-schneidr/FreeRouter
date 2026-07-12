@@ -18,9 +18,7 @@ def request_requires_tool_use(payload: dict[str, Any]) -> bool:
     if isinstance(tools, list) and any(_tool_definition_requires_tool_use(tool) for tool in tools):
         return True
     tool_choice = payload.get("tool_choice")
-    if _tool_choice_requires_tool_route(tool_choice):
-        return True
-    if isinstance(payload.get("previous_response_id"), str):
+    if _tool_choice_requires_tool_route(tool_choice) and _payload_has_function_tools(payload):
         return True
     return _messages_include_tool_loop(payload.get("messages"))
 
@@ -126,7 +124,14 @@ def _capabilities_from_tools(payload: dict[str, Any]) -> set[str]:
 def _tool_definition_requires_tool_use(tool: Any) -> bool:
     if not isinstance(tool, dict):
         return False
-    return tool.get("type") not in {"web_search_preview", "openrouter:web_search"}
+    return tool.get("type") == "function" and isinstance(tool.get("function"), dict)
+
+
+def _payload_has_function_tools(payload: dict[str, Any]) -> bool:
+    tools = payload.get("tools")
+    return isinstance(tools, list) and any(
+        _tool_definition_requires_tool_use(tool) for tool in tools
+    )
 
 
 def _tool_choice_requires_tool_route(tool_choice: Any) -> bool:

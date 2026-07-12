@@ -92,7 +92,13 @@ def messages_payload_to_chat(payload: dict[str, Any]) -> dict[str, Any]:
     if "tools" in payload:
         chat_payload["tools"] = _anthropic_tools_to_chat(payload["tools"])
     if "tool_choice" in payload:
-        chat_payload["tool_choice"] = _anthropic_tool_choice_to_chat(payload["tool_choice"])
+        tool_choice = payload["tool_choice"]
+        chat_payload["tool_choice"] = _anthropic_tool_choice_to_chat(tool_choice)
+        if isinstance(tool_choice, dict) and "disable_parallel_tool_use" in tool_choice:
+            disabled = tool_choice["disable_parallel_tool_use"]
+            if not isinstance(disabled, bool):
+                raise ValueError("tool_choice.disable_parallel_tool_use must be a boolean")
+            chat_payload["parallel_tool_calls"] = not disabled
     return chat_payload
 
 
@@ -112,9 +118,7 @@ def chat_body_to_anthropic_message(
     finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
     has_tool_use = any(block.get("type") == "tool_use" for block in content)
     stop_reason = (
-        "tool_use"
-        if has_tool_use
-        else _FINISH_REASON_TO_STOP.get(str(finish_reason), "end_turn")
+        "tool_use" if has_tool_use else _FINISH_REASON_TO_STOP.get(str(finish_reason), "end_turn")
     )
 
     return {
@@ -147,7 +151,9 @@ def _system_to_chat_content(system: Any) -> str:
     raise ValueError("system must be a string or an array of text blocks")
 
 
-def _anthropic_message_to_chat_messages(message: dict[str, Any], index: int) -> list[dict[str, Any]]:
+def _anthropic_message_to_chat_messages(
+    message: dict[str, Any], index: int
+) -> list[dict[str, Any]]:
     role = message["role"]
     content = message.get("content")
     if isinstance(content, str):
@@ -193,7 +199,7 @@ def _assistant_blocks_to_chat_message(blocks: list[Any], message_index: int) -> 
                     "type": "function",
                     "function": {
                         "name": name,
-                        "arguments": json.dumps(tool_input, separators=(",", ":")),
+                        "arguments": _canonical_tool_arguments(tool_input),
                     },
                 }
             )
@@ -240,7 +246,11 @@ def _user_blocks_to_chat_messages(blocks: list[Any], message_index: int) -> list
                 {
                     "role": "tool",
                     "tool_call_id": tool_use_id,
-                    "content": _tool_result_content_to_text(block.get("content")),
+                    "content": _tool_result_content_to_chat_content(
+                        block,
+                        message_index=message_index,
+                        block_index=block_index,
+                    ),
                 }
             )
             continue
@@ -254,10 +264,14 @@ def _user_blocks_to_chat_messages(blocks: list[Any], message_index: int) -> list
     return out
 
 
-def _image_block_to_openai_part(block: dict[str, Any], message_index: int, block_index: int) -> dict[str, Any]:
+def _image_block_to_openai_part(
+    block: dict[str, Any], message_index: int, block_index: int
+) -> dict[str, Any]:
     source = block.get("source")
     if not isinstance(source, dict):
-        raise ValueError(f"messages[{message_index}].content[{block_index}].source must be an object")
+        raise ValueError(
+            f"messages[{message_index}].content[{block_index}].source must be an object"
+        )
     source_type = source.get("type")
     if source_type == "base64":
         media_type = source.get("media_type")
@@ -273,23 +287,69 @@ def _image_block_to_openai_part(block: dict[str, Any], message_index: int, block
     if source_type == "url":
         url = source.get("url")
         if not isinstance(url, str):
-            raise ValueError(f"messages[{message_index}].content[{block_index}] url source requires url")
+            raise ValueError(
+                f"messages[{message_index}].content[{block_index}] url source requires url"
+            )
         return {"type": "image_url", "image_url": {"url": url}}
     raise ValueError(f"Unsupported image source type: {source_type}")
 
 
-def _tool_result_content_to_text(content: Any) -> str:
+def _tool_result_content_to_chat_content(
+    block: dict[str, Any],
+    *,
+    message_index: int,
+    block_index: int,
+) -> Any:
+    content = block.get("content")
+    is_error = block.get("is_error", False)
+    if not isinstance(is_error, bool):
+        raise ValueError(
+            f"messages[{message_index}].content[{block_index}].is_error must be a boolean"
+        )
     if isinstance(content, str):
-        return content
+        return f"Tool result status: error\n{content}" if is_error else content
     if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
+        parts: list[dict[str, Any]] = []
+        saw_non_text = False
+        if is_error:
+            parts.append({"type": "text", "text": "Tool result status: error"})
+        for item_index, item in enumerate(content):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"messages[{message_index}].content[{block_index}].content[{item_index}] "
+                    "must be an object"
+                )
+            item_type = item.get("type")
+            if item_type == "text":
                 text = item.get("text")
                 if isinstance(text, str):
-                    parts.append(text)
-        return "\n".join(parts)
-    return "" if content is None else str(content)
+                    parts.append({"type": "text", "text": text})
+                continue
+            if item_type == "image":
+                saw_non_text = True
+                parts.append(_image_block_to_openai_part(item, message_index, block_index))
+                continue
+            # Keep future Anthropic result block types visible to the model
+            # instead of silently discarding potentially important tool output.
+            saw_non_text = True
+            parts.append(
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        item,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                }
+            )
+        if not is_error and not saw_non_text:
+            return "\n".join(part["text"] for part in parts)
+        return parts
+    if content is None:
+        return "Tool result status: error" if is_error else ""
+    serialized = json.dumps(content, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return f"Tool result status: error\n{serialized}" if is_error else serialized
 
 
 def _anthropic_tools_to_chat(tools: Any) -> list[dict[str, Any]]:
@@ -370,7 +430,7 @@ def _assistant_message_to_anthropic_content(message: dict[str, Any]) -> list[dic
             arguments = function.get("arguments")
             if not isinstance(name, str):
                 continue
-            parsed_input: Any = {}
+            parsed_input: Any = arguments if isinstance(arguments, dict) else {}
             if isinstance(arguments, str) and arguments.strip():
                 try:
                     parsed_input = json.loads(arguments)
@@ -381,7 +441,9 @@ def _assistant_message_to_anthropic_content(message: dict[str, Any]) -> list[dic
             content_blocks.append(
                 {
                     "type": "tool_use",
-                    "id": call.get("id") if isinstance(call.get("id"), str) else f"toolu_{uuid.uuid4().hex[:12]}",
+                    "id": call.get("id")
+                    if isinstance(call.get("id"), str) and call.get("id")
+                    else f"toolu_{uuid.uuid4().hex[:12]}",
                     "name": name,
                     "input": parsed_input,
                 }
@@ -414,6 +476,8 @@ class AnthropicStreamMapper:
         self.finish_reason: str | None = None
         self.usage: dict[str, int] | None = None
         self._next_block_index = 0
+        self.terminal = False
+        self.failed = False
 
     def events_from_openai_sse(self, event_block: str) -> list[str]:
         payload = _event_block_data_payload(event_block)
@@ -421,6 +485,25 @@ class AnthropicStreamMapper:
             return self._completion_events()
         if not isinstance(payload, dict):
             return []
+
+        upstream_error = payload.get("error")
+        if isinstance(upstream_error, dict):
+            if self.terminal:
+                return []
+            self.terminal = True
+            self.failed = True
+            message = upstream_error.get("message")
+            return [
+                anthropic_stream_event(
+                    "error",
+                    anthropic_error_body(
+                        "api_error",
+                        message
+                        if isinstance(message, str)
+                        else "The upstream model stream failed.",
+                    ),
+                )
+            ]
 
         usage = payload.get("usage")
         if isinstance(usage, dict):
@@ -514,6 +597,7 @@ class AnthropicStreamMapper:
                     "id": "",
                     "name": "",
                     "pending_arguments": [],
+                    "arguments": "",
                     "started": False,
                     "stopped": False,
                 },
@@ -522,14 +606,15 @@ class AnthropicStreamMapper:
                 state["anthropic_index"] = self._next_block_index
                 self._next_block_index += 1
 
-            if isinstance(chunk.get("id"), str):
+            if isinstance(chunk.get("id"), str) and not state["started"]:
                 state["id"] = chunk["id"]
             function = chunk.get("function")
             if isinstance(function, dict):
                 if isinstance(function.get("name"), str):
                     state["name"] = function["name"]
-                arguments = function.get("arguments")
-                if isinstance(arguments, str) and arguments:
+                arguments = _canonical_tool_arguments(function.get("arguments"), default="")
+                if arguments:
+                    state["arguments"] += arguments
                     state["pending_arguments"].append(arguments)
                     if not state["started"] and state["id"] and state["name"]:
                         state["started"] = True
@@ -570,7 +655,10 @@ class AnthropicStreamMapper:
                                 {
                                     "type": "content_block_delta",
                                     "index": state["anthropic_index"],
-                                    "delta": {"type": "input_json_delta", "partial_json": arguments},
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": arguments,
+                                    },
                                 },
                             )
                         )
@@ -610,6 +698,9 @@ class AnthropicStreamMapper:
         return events
 
     def _completion_events(self) -> list[str]:
+        if self.terminal:
+            return []
+        self.terminal = True
         events: list[str] = []
         if not self.message_started:
             events.extend(self._ensure_message_start())
@@ -623,7 +714,9 @@ class AnthropicStreamMapper:
                 )
             )
 
-        for state in sorted(self.tool_blocks.values(), key=lambda item: item["anthropic_index"] or 0):
+        for state in sorted(
+            self.tool_blocks.values(), key=lambda item: item["anthropic_index"] or 0
+        ):
             if state["started"] and not state["stopped"] and state["anthropic_index"] is not None:
                 state["stopped"] = True
                 events.append(
@@ -632,6 +725,17 @@ class AnthropicStreamMapper:
                         {"type": "content_block_stop", "index": state["anthropic_index"]},
                     )
                 )
+
+        invalid_reason = self._invalid_tool_stream_reason()
+        if invalid_reason is not None:
+            self.failed = True
+            events.append(
+                anthropic_stream_event(
+                    "error",
+                    anthropic_error_body("api_error", invalid_reason),
+                )
+            )
+            return events
 
         stop_reason = (
             "tool_use"
@@ -651,3 +755,35 @@ class AnthropicStreamMapper:
         )
         events.append(anthropic_stream_event("message_stop", {"type": "message_stop"}))
         return events
+
+    def _invalid_tool_stream_reason(self) -> str | None:
+        if self.finish_reason == "tool_calls" and not self.tool_blocks:
+            return "The upstream stream ended with tool_calls but contained no tool call"
+        for index, state in self.tool_blocks.items():
+            if not state.get("id"):
+                return f"Tool call at index {index} ended without an ID"
+            if not state.get("name"):
+                return f"Tool call at index {index} ended without a function name"
+            arguments = state.get("arguments")
+            if not isinstance(arguments, str) or not arguments:
+                return f"Tool call at index {index} ended without arguments"
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError:
+                return f"Tool call at index {index} ended with malformed JSON arguments"
+            if not isinstance(parsed, dict):
+                return f"Tool call at index {index} arguments must decode to an object"
+        return None
+
+
+def _canonical_tool_arguments(arguments: Any, *, default: str = "{}") -> str:
+    if isinstance(arguments, str):
+        return arguments
+    if isinstance(arguments, dict):
+        return json.dumps(
+            arguments,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    return default

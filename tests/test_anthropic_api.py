@@ -420,8 +420,21 @@ async def test_messages_stream_tool_call_lifecycle(tmp_path, monkeypatch):
                 {
                     "name": "alpha",
                     "description": "A",
-                    "input_schema": {"type": "object", "properties": {}},
-                }
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"a": {"type": "number"}},
+                        "required": ["a"],
+                    },
+                },
+                {
+                    "name": "beta",
+                    "description": "B",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"b": {"type": "number"}},
+                        "required": ["b"],
+                    },
+                },
             ],
         },
     )

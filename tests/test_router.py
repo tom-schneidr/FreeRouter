@@ -95,6 +95,37 @@ def _payload() -> dict[str, Any]:
     return {"model": "auto", "messages": [{"role": "user", "content": "hello"}]}
 
 
+def _dual_tool_payload() -> dict[str, Any]:
+    return {
+        **_payload(),
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "alpha",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"a": {"type": "number"}},
+                        "required": ["a"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "beta",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"b": {"type": "number"}},
+                        "required": ["b"],
+                    },
+                },
+            },
+        ],
+        "tool_choice": "auto",
+    }
+
+
 async def _state(tmp_path, providers=None) -> StateManager:
     providers = providers or [
         ProviderQuota(
@@ -831,7 +862,9 @@ async def test_openai_stream_falls_back_on_stream_429_before_commit(tmp_path):
             "usage": {"total_tokens": 3},
         },
     )
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
     parts: list[Any] = [p async for p in router.iter_chat_completion_openai_stream(_payload())]
 
     assert primary.stream_calls == 1
@@ -928,8 +961,18 @@ class FragmentedToolStreamProvider(FakeProvider):
                         "index": 0,
                         "delta": {
                             "tool_calls": [
-                                {"index": 0, "id": "call_a", "type": "function", "function": {"name": "alpha", "arguments": ""}},
-                                {"index": 1, "id": "call_b", "type": "function", "function": {"name": "beta", "arguments": ""}},
+                                {
+                                    "index": 0,
+                                    "id": "call_a",
+                                    "type": "function",
+                                    "function": {"name": "alpha", "arguments": ""},
+                                },
+                                {
+                                    "index": 1,
+                                    "id": "call_b",
+                                    "type": "function",
+                                    "function": {"name": "beta", "arguments": ""},
+                                },
                             ]
                         },
                     }
@@ -958,10 +1001,11 @@ class FragmentedToolStreamProvider(FakeProvider):
                         "index": 0,
                         "delta": {
                             "tool_calls": [
-                                {"index": 0, "function": {"arguments": '1}'}},
-                                {"index": 1, "function": {"arguments": '2}'}},
+                                {"index": 0, "function": {"arguments": "1}"}},
+                                {"index": 1, "function": {"arguments": "2}"}},
                             ]
                         },
+                        "finish_reason": "tool_calls",
                     }
                 ],
             },
@@ -971,22 +1015,46 @@ class FragmentedToolStreamProvider(FakeProvider):
         yield "data: [DONE]\n\n"
 
 
+class TerminalWithoutDoneToolStreamProvider(FragmentedToolStreamProvider):
+    async def chat_completion_stream(self, client, payload, target_model=None):
+        async for piece in super().chat_completion_stream(client, payload, target_model):
+            if "[DONE]" not in piece:
+                yield piece
+
+
 async def test_openai_stream_preserves_fragmented_dual_tool_call_bytes(tmp_path):
     state = await _state(tmp_path)
-    provider = FragmentedToolStreamProvider("primary")
-    router = WaterfallRouter([provider], _catalog(tmp_path), state, request_timeout_seconds=5)
+    provider = FragmentedToolStreamProvider("fallback")
+    router = WaterfallRouter([provider], _tool_catalog(tmp_path), state, request_timeout_seconds=5)
+    payload = _dual_tool_payload()
 
-    parts = [p async for p in router.iter_chat_completion_openai_stream(_payload())]
+    parts = [p async for p in router.iter_chat_completion_openai_stream(payload)]
     sse = "".join(p for p in parts if isinstance(p, str))
 
     assert provider.stream_calls == 1
     assert '"call_a"' in sse
     assert '"call_b"' in sse
     compact = sse.replace(" ", "")
-    assert '"arguments":"{\\"a\\":' in compact or '"arguments":"{"a":' in compact
-    assert '"arguments":"1}"' in compact
-    assert '"arguments":"{\\"b\\":' in compact or '"arguments":"{"b":' in compact
-    assert '"arguments":"2}"' in compact
+    assert '"id":"chatcmpl-frag"' in compact
+    assert '"model":"tool/model"' in compact
+    assert '"created":' in compact
+    assert '"arguments":"{\\"a\\":1}"' in compact
+    assert '"arguments":"{\\"b\\":2}"' in compact
+
+
+async def test_openai_stream_accepts_terminal_finish_reason_without_done(tmp_path):
+    state = await _state(tmp_path)
+    provider = TerminalWithoutDoneToolStreamProvider("fallback")
+    router = WaterfallRouter([provider], _tool_catalog(tmp_path), state, request_timeout_seconds=5)
+
+    parts = [p async for p in router.iter_chat_completion_openai_stream(_dual_tool_payload())]
+    sse = "".join(p for p in parts if isinstance(p, str))
+
+    assert '"finish_reason":"tool_calls"' in sse
+    assert "data: [DONE]" in sse
+    assert any(
+        isinstance(part, RouteStreamDiag) and part.event_type == "route_selected" for part in parts
+    )
 
 
 async def test_openai_stream_retries_initial_action_promise_without_demoting_tool_route(tmp_path):
@@ -1060,7 +1128,30 @@ async def test_openai_stream_retries_initial_action_promise_without_demoting_too
     payload = {
         **_payload(),
         "messages": [{"role": "user", "content": "build the file"}],
-        "tools": [{"type": "function", "function": {"name": "write_file", "parameters": {}}}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "alpha",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"a": {"type": "number"}},
+                        "required": ["a"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "beta",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"b": {"type": "number"}},
+                        "required": ["b"],
+                    },
+                },
+            },
+        ],
         "tool_choice": "auto",
     }
 
@@ -1160,7 +1251,9 @@ async def test_openai_stream_does_not_switch_providers_after_commit(tmp_path):
     state = await _state(tmp_path)
     primary = PostCommitFailureStreamProvider("primary")
     fallback = FakeProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
 
     parts = [p async for p in router.iter_chat_completion_openai_stream(_payload())]
     sse = "".join(p for p in parts if isinstance(p, str))
@@ -1168,7 +1261,8 @@ async def test_openai_stream_does_not_switch_providers_after_commit(tmp_path):
     assert primary.stream_calls == 1
     assert fallback.stream_calls == 0
     assert "partial" in sse
-    assert "[DONE]" in sse
+    assert "timeout_after_commit" in sse
+    assert "[DONE]" not in sse
 
 
 async def test_router_forwards_multiple_tool_calls_in_non_stream_response(tmp_path):
@@ -1260,10 +1354,10 @@ async def test_router_excludes_non_vision_routes_for_image_payload(tmp_path):
 
 async def test_openai_stream_tool_call_delta_commits_selected_route(tmp_path):
     state = await _state(tmp_path)
-    provider = FragmentedToolStreamProvider("primary")
-    router = WaterfallRouter([provider], _catalog(tmp_path), state, request_timeout_seconds=5)
+    provider = FragmentedToolStreamProvider("fallback")
+    router = WaterfallRouter([provider], _tool_catalog(tmp_path), state, request_timeout_seconds=5)
 
-    parts = [p async for p in router.iter_chat_completion_openai_stream(_payload())]
+    parts = [p async for p in router.iter_chat_completion_openai_stream(_dual_tool_payload())]
     diags = [p for p in parts if isinstance(p, RouteStreamDiag)]
 
     assert any(d.event_type == "route_selected" for d in diags)

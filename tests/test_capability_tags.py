@@ -4,17 +4,17 @@ from dataclasses import dataclass
 
 from app.capability_registry import registry_claims_for
 from app.capability_tags import (
+    CapabilityClaim,
     apply_capability_pipeline,
     derive_tags_from_capabilities,
+    should_probe_tool_use,
     tags_to_capabilities,
 )
 from app.model_catalog import ModelRoute, route_id_for
 
 
 def test_registry_marks_groq_compound_web_search_without_tool_use():
-    claims = dict(
-        (tag, status) for tag, status, _ in registry_claims_for("groq", "groq/compound")
-    )
+    claims = dict((tag, status) for tag, status, _ in registry_claims_for("groq", "groq/compound"))
     assert claims["web-search"] == "supported"
     assert claims["tool-use"] == "unsupported"
 
@@ -142,3 +142,38 @@ def test_openrouter_discovered_route_does_not_blanket_tag_tools():
     assert "text" in route.tags
     assert "tool-use" not in route.tags
     assert "web-search" not in route.tags
+
+
+def test_unknown_text_route_is_eligible_for_exploratory_tool_probe():
+    route = ModelRoute(
+        route_id="unknown-text",
+        provider_name="unknown-provider",
+        model_id="new-chat-model",
+        display_name="New Chat Model",
+        rank=1,
+        tags=["text"],
+        capabilities=tags_to_capabilities(["text"], source="provider_metadata"),
+    )
+    assert should_probe_tool_use(route)
+
+
+def test_explicit_provider_tool_negative_skips_exploratory_probe():
+    route = ModelRoute(
+        route_id="no-tools",
+        provider_name="unknown-provider",
+        model_id="no-tools-model",
+        display_name="No Tools",
+        rank=1,
+        tags=["text"],
+        capabilities={
+            **tags_to_capabilities(["text"], source="provider_metadata"),
+            "tool-use": CapabilityClaim(
+                tag="tool-use",
+                status="unsupported",
+                source="provider_metadata",
+                confidence="high",
+                evidence="tools=false",
+            ),
+        },
+    )
+    assert not should_probe_tool_use(route)

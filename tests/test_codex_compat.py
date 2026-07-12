@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.codex_compat import (
     ResponsesStreamMapper,
     chat_body_to_response,
@@ -90,6 +92,51 @@ def test_responses_payload_to_chat_maps_function_call_outputs():
     ]
 
 
+def test_responses_payload_to_chat_canonicalizes_object_function_arguments():
+    payload = responses_payload_to_chat(
+        {
+            "model": "auto",
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "shell",
+                    "arguments": {"z": 2, "a": 1},
+                }
+            ],
+        }
+    )
+
+    arguments = payload["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert arguments == '{"a":1,"z":2}'
+
+
+def test_responses_payload_to_chat_rejects_unbacked_previous_response_id():
+    with pytest.raises(ValueError, match="previous_response_id is not supported"):
+        responses_payload_to_chat(
+            {
+                "model": "auto",
+                "previous_response_id": "resp_prior",
+                "input": "continue",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "function_call",
+    [
+        {"type": "function_call", "name": "shell", "arguments": {}},
+        {"type": "function_call", "call_id": "call_1", "arguments": {}},
+        {"type": "function_call", "call_id": "call_1", "name": "shell"},
+    ],
+)
+def test_responses_payload_to_chat_rejects_incomplete_function_call(
+    function_call: dict[str, object],
+):
+    with pytest.raises(ValueError, match="function_call"):
+        responses_payload_to_chat({"model": "auto", "input": [function_call]})
+
+
 def test_responses_payload_to_chat_maps_text_format_to_response_format():
     payload = responses_payload_to_chat(
         {
@@ -173,6 +220,34 @@ def test_chat_body_to_response_maps_tool_calls():
     ]
 
 
+def test_chat_body_to_response_canonicalizes_object_tool_arguments():
+    response = chat_body_to_response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "shell",
+                                    "arguments": {"z": 2, "a": 1},
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        requested_model="auto",
+    )
+
+    assert response["output"][0]["arguments"] == '{"a":1,"z":2}'
+
+
 def test_responses_stream_delta_from_openai_sse_maps_text_delta():
     mapper = ResponsesStreamMapper(response_id="resp_test")
     block = "data: " + json.dumps(
@@ -230,8 +305,117 @@ def test_responses_stream_mapper_emits_tool_call_argument_deltas_and_done():
     assert '"arguments": "{\\"cmd\\":\\"pwd\\"}"' in done_events
 
 
+def test_responses_stream_mapper_waits_for_metadata_and_keeps_one_call_id():
+    mapper = ResponsesStreamMapper(response_id="resp_test")
+    arguments_first = {
+        "choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"q"'}}]}}]
+    }
+    metadata_later = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_late",
+                            "function": {"name": "lookup", "arguments": ':"x"}'},
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+
+    assert mapper.events_from_openai_sse(f"data: {json.dumps(arguments_first)}") == []
+    streamed = "".join(
+        mapper.events_from_openai_sse(f"data: {json.dumps(metadata_later)}")
+        + mapper.events_from_openai_sse("data: [DONE]")
+    )
+
+    assert '"item_id": ""' not in streamed
+    assert '"id": "call_late"' in streamed
+    assert '"item_id": "call_late"' in streamed
+    assert '"call_id": "call_late"' in streamed
+    assert "response.failed" not in streamed
+
+
+def test_responses_stream_mapper_canonicalizes_object_argument_delta():
+    mapper = ResponsesStreamMapper(response_id="resp_test")
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "lookup", "arguments": {"z": 2, "a": 1}},
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+
+    streamed = "".join(
+        mapper.events_from_openai_sse(f"data: {json.dumps(chunk)}")
+        + mapper.events_from_openai_sse("data: [DONE]")
+    )
+
+    assert '{\\"a\\":1,\\"z\\":2}' in streamed
+    assert "response.failed" not in streamed
+
+
+def test_responses_stream_mapper_fails_malformed_terminal_tool_call():
+    mapper = ResponsesStreamMapper(response_id="resp_bad")
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_1",
+                            "function": {"name": "lookup", "arguments": '{"q":'},
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+    mapper.events_from_openai_sse(f"data: {json.dumps(chunk)}")
+
+    terminal = "".join(mapper.events_from_openai_sse("data: [DONE]"))
+
+    assert "event: response.failed" in terminal
+    assert '"status": "failed"' in terminal
+    assert "malformed JSON arguments" in terminal
+    assert "response.completed" not in terminal
+
+
+def test_responses_stream_mapper_preserves_upstream_failure_terminal():
+    mapper = ResponsesStreamMapper(response_id="resp_error")
+
+    failed = "".join(
+        mapper.events_from_openai_sse(
+            'data: {"error":{"type":"stream_error","code":"timeout_after_commit",'
+            '"message":"timed out"}}\n\n'
+        )
+    )
+    after_done = mapper.events_from_openai_sse("data: [DONE]\n\n")
+
+    assert "event: response.failed" in failed
+    assert "timeout_after_commit" in failed
+    assert "response.completed" not in failed
+    assert after_done == []
+
+
 def test_responses_payload_to_chat_empty_or_invalid_input():
     import pytest
+
     with pytest.raises(ValueError, match="Responses payload must include non-empty 'input'"):
         responses_payload_to_chat({"model": "auto", "input": []})
 
@@ -252,13 +436,13 @@ def test_responses_payload_to_chat_complex_inputs():
                         {"type": "input_text", "text": "hello"},
                         {"type": "input_image", "image_url": "data:image/png;base64,abc"},
                         "just raw string in array",
-                    ]
+                    ],
                 },
                 {
                     "type": "function_call_output",
                     "call_id": "call_99",
                     "output": {"status": "success", "data": [1, 2, 3]},
-                }
+                },
             ],
             "max_tokens": 500,
         }

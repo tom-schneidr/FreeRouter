@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.model_discovery import route_from_catalog_item, routes_from_payload
+from app.model_discovery import (
+    route_from_catalog_item,
+    routes_from_payload,
+    tool_use_metadata_status,
+)
 
 
 @dataclass
@@ -204,6 +208,52 @@ def test_catalog_payload_does_not_treat_generic_tools_as_web_search():
     assert "tool-use" not in routes[0].tags
     assert routes[0].capabilities["tool-use"].source == "provider_metadata"
     assert "web-search" not in routes[0].tags
+
+
+def test_tool_metadata_false_is_explicitly_unsupported_not_a_false_positive():
+    provider = FakeProvider("openrouter")
+    for metadata in (
+        {"capabilities": {"tools": False}},
+        {"features": {"function_calling": {"supported": False}}},
+        {"tools": False},
+        {"supported_parameters": {"tool_choice": "unsupported"}},
+    ):
+        item = {
+            "id": "tool-disabled/model:free",
+            "name": "Tool Disabled Model",
+            "architecture": {"modality": "text->text"},
+            "pricing": {"prompt": "0", "completion": "0"},
+            **metadata,
+        }
+        route = route_from_catalog_item(provider, item)
+        assert route is not None
+        assert "tool-use" not in route.tags
+        assert route.capabilities["tool-use"].status == "unsupported"
+        assert route.capabilities["tool-use"].source == "provider_metadata"
+
+
+def test_tool_metadata_parser_distinguishes_positive_negative_and_unknown():
+    assert tool_use_metadata_status({"supported_parameters": ["tools"]}) == "supported"
+    assert tool_use_metadata_status({"capabilities": {"tools": {"enabled": True}}}) == "supported"
+    assert tool_use_metadata_status({"capabilities": {"tools": False}}) == "unsupported"
+    assert tool_use_metadata_status({"capabilities": {"vision": True}}) == "unknown"
+    assert tool_use_metadata_status({}) == "unknown"
+
+
+def test_explicit_provider_negative_overrides_registry_family_hint():
+    route = route_from_catalog_item(
+        FakeProvider("openrouter"),
+        {
+            "id": "openrouter/free",
+            "name": "OpenRouter Free Router",
+            "architecture": {"modality": "text->text"},
+            "pricing": {"prompt": "0", "completion": "0"},
+            "capabilities": {"tools": False},
+        },
+    )
+    assert route is not None
+    assert route.capabilities["tool-use"].status == "unsupported"
+    assert route.capabilities["tool-use"].source == "provider_metadata"
 
 
 def test_catalog_payload_allows_multimodal_text_exchange_models():

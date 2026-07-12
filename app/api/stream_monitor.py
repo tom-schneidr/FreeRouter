@@ -10,6 +10,7 @@ from app.router import (
     _event_block_data_payload,
     _split_sse_event_blocks,
 )
+from app.tool_call_stream import ToolCallStreamAccumulator
 
 
 def monitor_live_value(value: Any) -> Any:
@@ -22,7 +23,9 @@ class StreamMonitorTracker:
 
     def __init__(self, *, requested_model: Any) -> None:
         self.requested_model = (
-            requested_model if isinstance(requested_model, str) and requested_model.strip() else "auto"
+            requested_model
+            if isinstance(requested_model, str) and requested_model.strip()
+            else "auto"
         )
         self.attempts: list[dict[str, Any]] = []
         self.assistant_text = ""
@@ -31,6 +34,7 @@ class StreamMonitorTracker:
         self.route_id = ""
         self.model_id = ""
         self._sse_carry = ""
+        self._tool_calls = ToolCallStreamAccumulator()
 
     def record_diag(self, diag: RouteStreamDiag) -> None:
         if diag.event_type == "usage_summary":
@@ -56,6 +60,7 @@ class StreamMonitorTracker:
             payload = _event_block_data_payload(block)
             if not isinstance(payload, dict):
                 continue
+            self._tool_calls.ingest(payload)
             delta = _delta_visible_text_from_chunk(payload)
             if delta:
                 self.assistant_text += delta
@@ -80,24 +85,19 @@ class StreamMonitorTracker:
             except json.JSONDecodeError:
                 continue
             if isinstance(payload, dict):
+                self._tool_calls.ingest(payload)
                 delta = _delta_visible_text_from_chunk(payload)
                 if delta:
                     self.assistant_text += delta
 
     def build_response_body(self) -> dict[str, Any] | None:
-        if not self.assistant_text and not self.usage:
+        if not self.assistant_text and not self.usage and not self._tool_calls.has_tool_calls:
             return None
-        body: dict[str, Any] = {
-            "object": "chat.completion",
-            "model": self.requested_model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": self.assistant_text},
-                    "finish_reason": "stop",
-                }
-            ],
-        }
+        body = self._tool_calls.to_chat_body(text=self.assistant_text)
+        body["object"] = "chat.completion"
+        body["model"] = self.requested_model
+        if not self._tool_calls.has_tool_calls:
+            body["choices"][0]["finish_reason"] = body["choices"][0].get("finish_reason") or "stop"
         if self.usage:
             body["usage"] = dict(self.usage)
         return body
@@ -157,4 +157,7 @@ def _status_from_skip_reason(reason: str | None) -> str:
 
 
 def attempts_detail_from_provider_attempts(attempts: list[Any]) -> list[dict[str, Any]]:
-    return [asdict(attempt) if hasattr(attempt, "__dataclass_fields__") else dict(attempt) for attempt in attempts]
+    return [
+        asdict(attempt) if hasattr(attempt, "__dataclass_fields__") else dict(attempt)
+        for attempt in attempts
+    ]

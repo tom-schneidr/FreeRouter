@@ -9,21 +9,23 @@ from app.capability_registry import registry_claims_for
 if TYPE_CHECKING:
     from app.model_catalog import ModelRoute
 
-CANONICAL_MODEL_TAGS = frozenset({
-    "text",
-    "reasoning",
-    "coding",
-    "tool-use",
-    "json-schema",
-    "web-search",
-    "vision",
-    "audio",
-    "safety",
-    "moderation",
-    "translation",
-    "classification",
-    "rag",
-})
+CANONICAL_MODEL_TAGS = frozenset(
+    {
+        "text",
+        "reasoning",
+        "coding",
+        "tool-use",
+        "json-schema",
+        "web-search",
+        "vision",
+        "audio",
+        "safety",
+        "moderation",
+        "translation",
+        "classification",
+        "rag",
+    }
+)
 
 CapabilityStatus = Literal["unknown", "supported", "unsupported", "inconclusive"]
 CapabilitySource = Literal["provider_metadata", "registry", "probe", "runtime", "manual"]
@@ -57,20 +59,27 @@ def derive_tags_from_capabilities(capabilities: dict[str, CapabilityClaim]) -> l
     return [
         tag
         for tag in sorted(capabilities)
-        if tag in CANONICAL_MODEL_TAGS
-        and capability_qualifies_for_tag(capabilities[tag], tag)
+        if tag in CANONICAL_MODEL_TAGS and capability_qualifies_for_tag(capabilities[tag], tag)
     ]
 
 
 def should_probe_tool_use(route: ModelRoute) -> bool:  # noqa: F821
-    """Probe tool-use when the registry hints support or a prior probe needs refresh."""
+    """Return whether a text route is eligible for an exploratory tool-use probe.
+
+    Provider catalogs are frequently incomplete, so absence of a tool-use claim is
+    not negative evidence.  Explicit unsupported claims remain an opt-out while
+    probe/runtime claims are periodically refreshed regardless of their outcome.
+    """
     claim = route.capabilities.get("tool-use")
     if claim and claim.source in CONFIRMED_CAPABILITY_SOURCES:
         return True
+    if claim and claim.status == "unsupported":
+        return False
     for tag, status, _ in registry_claims_for(route.provider_name, route.model_id):
         if tag == "tool-use":
             return status != "unsupported"
-    return False
+    text_claim = route.capabilities.get("text")
+    return "text" in route.tags or bool(text_claim and text_claim.status == "supported")
 
 
 def normalize_route_tool_use_policy(route: ModelRoute) -> ModelRoute:  # noqa: F821
@@ -153,6 +162,23 @@ def merge_capability_claim(
         and existing.status == "supported"
     ):
         return incoming
+    # A route-specific provider flag such as ``capabilities.tools: false`` is
+    # stronger than a broad model-family registry hint.  Confirmed runtime/probe
+    # evidence still wins through the normal source priority below.
+    if (
+        incoming.status == "unsupported"
+        and incoming.source == "provider_metadata"
+        and existing.status == "supported"
+        and existing.source == "registry"
+    ):
+        return incoming
+    if (
+        existing.status == "unsupported"
+        and existing.source == "provider_metadata"
+        and incoming.status == "supported"
+        and incoming.source == "registry"
+    ):
+        return existing
     priority = {
         "manual": 5,
         "probe": 4,
@@ -174,6 +200,7 @@ def apply_capability_pipeline(
     route: ModelRoute,
     *,
     metadata_tags: list[str] | None = None,
+    metadata_claims: dict[str, tuple[CapabilityStatus, str]] | None = None,
 ) -> ModelRoute:  # noqa: F821
     """Merge manual tags, provider metadata, and registry into capabilities + derived tags."""
     capabilities = dict(route.capabilities)
@@ -223,6 +250,24 @@ def apply_capability_pipeline(
             claim,
             locked=tag in route.tag_locks,
         )
+
+    if metadata_claims:
+        for tag, (status, evidence) in metadata_claims.items():
+            if tag not in CANONICAL_MODEL_TAGS:
+                continue
+            claim = CapabilityClaim(
+                tag=tag,
+                status=status,
+                source="provider_metadata",
+                confidence="high" if status == "unsupported" else "medium",
+                checked_at=int(time.time()),
+                evidence=evidence,
+            )
+            capabilities[tag] = merge_capability_claim(
+                capabilities.get(tag),
+                claim,
+                locked=tag in route.tag_locks,
+            )
 
     derived_tags = derive_tags_from_capabilities(capabilities)
     return replace(route, capabilities=capabilities, tags=derived_tags)
@@ -312,7 +357,9 @@ def apply_runtime_claim(
         evidence=evidence[:240],
     )
     capabilities[tag] = merge_capability_claim(capabilities.get(tag), claim, locked=False)
-    return replace(route, capabilities=capabilities, tags=derive_tags_from_capabilities(capabilities))
+    return replace(
+        route, capabilities=capabilities, tags=derive_tags_from_capabilities(capabilities)
+    )
 
 
 def with_manual_tags(

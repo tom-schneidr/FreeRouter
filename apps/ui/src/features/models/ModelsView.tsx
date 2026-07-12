@@ -621,6 +621,14 @@ export function ModelsView() {
                   <span>{route.rank_score ?? "Unknown"}</span>
                 </div>
                 <div>
+                  <span className="meta-label">Tool reliability</span>
+                  <span>
+                    {route.tool_reliability
+                      ? `${Math.round(route.tool_reliability.score * 100)}% (${route.tool_reliability.observations} weighted observations)`
+                      : "No evidence"}
+                  </span>
+                </div>
+                <div>
                   <span className="meta-label">Notes</span>
                   <span>{route.notes || "None"}</span>
                 </div>

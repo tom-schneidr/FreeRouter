@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-
 import pytest
 
 from app.model_catalog import ModelCatalog
@@ -27,7 +24,9 @@ class _SiblingRouteProvider:
     async def chat_completion(self, client, payload, model_id: str) -> ProviderResponse:
         self.calls[model_id] = self.calls.get(model_id, 0) + 1
         if model_id in self.error_for:
-            raise ProviderRateLimited("rate limited", status_code=429, headers={"retry-after": "120"})
+            raise ProviderRateLimited(
+                "rate limited", status_code=429, headers={"retry-after": "120"}
+            )
         return ProviderResponse(
             provider_name=self.name,
             status_code=200,
@@ -71,7 +70,11 @@ def _catalog(tmp_path) -> ModelCatalog:
 async def _state(tmp_path) -> StateManager:
     state = StateManager(
         str(tmp_path / "state.sqlite3"),
-        quotas=[ProviderQuota(name="nvidia", tokens_per_day=None, requests_per_day=None, requests_per_minute=None)],
+        quotas=[
+            ProviderQuota(
+                name="nvidia", tokens_per_day=None, requests_per_day=None, requests_per_minute=None
+            )
+        ],
     )
     await state.initialize()
     return state
@@ -83,7 +86,9 @@ async def test_route_429_does_not_block_sibling_route_on_same_provider(tmp_path)
     state = await _state(tmp_path)
     router = WaterfallRouter([provider], _catalog(tmp_path), state, request_timeout_seconds=5)
 
-    result = await router.route_chat_completion({"model": "auto", "messages": [{"role": "user", "content": "hi"}]})
+    result = await router.route_chat_completion(
+        {"model": "auto", "messages": [{"role": "user", "content": "hi"}]}
+    )
 
     assert result.model_id == "model-b"
     assert provider.calls == {"model-a": 1, "model-b": 1}

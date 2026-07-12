@@ -77,7 +77,7 @@ class FakeAdversarialProvider:
             return
         if self.error:
             raise self.error
-        
+
         body = dict(self.response)
         content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
         chunk = json.dumps(
@@ -99,8 +99,12 @@ def _payload(messages: Any = None) -> dict[str, Any]:
 
 async def _state(tmp_path) -> StateManager:
     providers = [
-        ProviderQuota("primary", tokens_per_day=None, requests_per_day=None, requests_per_minute=30),
-        ProviderQuota("fallback", tokens_per_day=None, requests_per_day=None, requests_per_minute=30),
+        ProviderQuota(
+            "primary", tokens_per_day=None, requests_per_day=None, requests_per_minute=30
+        ),
+        ProviderQuota(
+            "fallback", tokens_per_day=None, requests_per_day=None, requests_per_minute=30
+        ),
     ]
     state = StateManager(str(tmp_path / "state.sqlite3"), providers)
     await state.initialize()
@@ -137,6 +141,7 @@ def _catalog(tmp_path) -> ModelCatalog:
 
 # ─── 1. Malformed Payloads & Empty/Missing Fields ───
 
+
 def test_validation_non_dict_payload():
     with pytest.raises(ValueError, match="Request body must be a JSON object"):
         validate_chat_completion_payload(["not a dict"])  # type: ignore
@@ -169,6 +174,7 @@ def test_validation_missing_content():
 
 # ─── 2. Invalid Roles & Unknown Blocks ───
 
+
 def test_invalid_role_rejected():
     """Invalid role strings are rejected before any provider request is attempted."""
     payload = {"model": "auto", "messages": [{"role": "invalid_role", "content": "hello"}]}
@@ -181,14 +187,14 @@ async def test_unknown_blocks_forwarded_safely(tmp_path):
     state = await _state(tmp_path)
     primary = FakeAdversarialProvider("primary")
     router = WaterfallRouter([primary], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+
     payload = {
         "model": "auto",
         "messages": [{"role": "user", "content": "hello", "extra_message_key": 123}],
-        "extra_root_key": "ignored_or_forwarded"
+        "extra_root_key": "ignored_or_forwarded",
     }
     validate_chat_completion_payload(payload)
-    
+
     result = await router.route_chat_completion(payload)
     assert result.provider_name == "primary"
     assert primary.calls == 1
@@ -196,17 +202,18 @@ async def test_unknown_blocks_forwarded_safely(tmp_path):
 
 # ─── 3. Unsupported Capabilities & No Capable Route ───
 
+
 async def test_unsupported_capabilities_raises(tmp_path):
     """If the client requests capabilities not supported by any routes, UnsupportedCapabilities is raised."""
     state = await _state(tmp_path)
     primary = FakeAdversarialProvider("primary")
     router = WaterfallRouter([primary], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+
     # "json-schema" capability is not defined in any route of _catalog (they only have text and fallback has web-search)
     reqs = RequestRequirements(required_capabilities=frozenset({"text", "json-schema"}))
     with pytest.raises(UnsupportedCapabilities) as exc_info:
         await router.route_chat_completion(_payload(), requirements=reqs)
-    
+
     assert "json-schema" in exc_info.value.required
 
 
@@ -216,23 +223,30 @@ async def test_no_capable_route_raised(tmp_path):
     # Mark both primary and fallback exhausted
     await state.mark_exhausted("primary", cooldown_seconds=60)
     await state.mark_exhausted("fallback", cooldown_seconds=60)
-    
+
     primary = FakeAdversarialProvider("primary")
     fallback = FakeAdversarialProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
     with pytest.raises(NoProviderAvailable):
         await router.route_chat_completion(_payload())
 
 
 # ─── 4. Provider Errors ───
 
+
 async def test_provider_500_cascades_to_fallback(tmp_path):
     state = await _state(tmp_path)
-    primary = FakeAdversarialProvider("primary", error=ProviderError("internal error", status_code=500))
+    primary = FakeAdversarialProvider(
+        "primary", error=ProviderError("internal error", status_code=500)
+    )
     fallback = FakeAdversarialProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
     result = await router.route_chat_completion(_payload())
     assert result.provider_name == "fallback"
     assert primary.calls == 1
@@ -243,10 +257,14 @@ async def test_provider_500_cascades_to_fallback(tmp_path):
 
 async def test_provider_401_auth_cascades_to_fallback(tmp_path):
     state = await _state(tmp_path)
-    primary = FakeAdversarialProvider("primary", error=ProviderError("unauthorized", status_code=401))
+    primary = FakeAdversarialProvider(
+        "primary", error=ProviderError("unauthorized", status_code=401)
+    )
     fallback = FakeAdversarialProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
     result = await router.route_chat_completion(_payload())
     assert result.provider_name == "fallback"
     assert primary.calls == 1
@@ -257,16 +275,20 @@ async def test_provider_401_auth_cascades_to_fallback(tmp_path):
 
 async def test_provider_429_rate_limit_cascades_and_cooldowns(tmp_path):
     state = await _state(tmp_path)
-    primary = FakeAdversarialProvider("primary", error=ProviderRateLimited("limit", status_code=429))
+    primary = FakeAdversarialProvider(
+        "primary", error=ProviderRateLimited("limit", status_code=429)
+    )
     fallback = FakeAdversarialProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
     result = await router.route_chat_completion(_payload())
     assert result.provider_name == "fallback"
     assert primary.calls == 1
     assert fallback.calls == 1
     assert result.attempts[0].status == "rate_limited"
-    
+
     # Route-level rate limit should be recorded without provider-wide cooldown.
     p_state = await state.get_state("primary")
     route_state = await state.get_route_state("primary-test", "primary", "primary/model")
@@ -276,13 +298,16 @@ async def test_provider_429_rate_limit_cascades_and_cooldowns(tmp_path):
 
 # ─── 5. Disconnects & Stream Errors ───
 
+
 async def test_disconnect_connection_refused_cascades(tmp_path):
     """Connection errors (like ConnectError) should cause cascade to fallback."""
     state = await _state(tmp_path)
     primary = FakeAdversarialProvider("primary", error=httpx.ConnectError("refused"))
     fallback = FakeAdversarialProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
     result = await router.route_chat_completion(_payload())
     assert result.provider_name == "fallback"
     assert primary.calls == 1
@@ -296,8 +321,10 @@ async def test_stream_error_before_commit_cascades(tmp_path):
     state = await _state(tmp_path)
     primary = FakeAdversarialProvider("primary", error=httpx.ReadTimeout("read timeout"))
     fallback = FakeAdversarialProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
     events = [event async for event in router.iter_chat_completion_openai_stream(_payload())]
     # Verify that stream results came from fallback
     fallback_received = False
@@ -317,19 +344,21 @@ async def test_stream_error_after_commit_does_not_cascade(tmp_path):
         yields_before_error=[
             'data: {"id": "chatcmpl-primary", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": "hello"}}]}\n\n'
         ],
-        error=httpx.ReadTimeout("mid-stream timeout")
+        error=httpx.ReadTimeout("mid-stream timeout"),
     )
     fallback = FakeAdversarialProvider("fallback")
-    router = WaterfallRouter([primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5)
-    
+    router = WaterfallRouter(
+        [primary, fallback], _catalog(tmp_path), state, request_timeout_seconds=5
+    )
+
     events = [event async for event in router.iter_chat_completion_openai_stream(_payload())]
-    
+
     # We should see content from primary
     primary_seen = any("hello" in chunk for chunk in events if isinstance(chunk, str))
     assert primary_seen
-    
+
     # Fallback should NOT have been called
     assert fallback.stream_calls == 0
-    
-    # Done message should be appended to clean up
-    assert any("[DONE]" in chunk for chunk in events if isinstance(chunk, str))
+
+    assert any("timeout_after_commit" in chunk for chunk in events if isinstance(chunk, str))
+    assert not any("[DONE]" in chunk for chunk in events if isinstance(chunk, str))

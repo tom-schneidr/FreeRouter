@@ -16,6 +16,7 @@ from app.router import (
     _event_block_data_payload,
     _split_sse_event_blocks,
 )
+from app.tool_call_stream import ToolCallStreamAccumulator
 
 
 async def stream_route_chat(
@@ -39,6 +40,8 @@ async def stream_route_chat(
     final_route = ""
     full_text = ""
     carry = ""
+    tool_calls = ToolCallStreamAccumulator()
+    stream_failed = False
 
     try:
         async for part in router.iter_chat_completion_openai_stream(payload):
@@ -112,6 +115,28 @@ async def stream_route_chat(
                 if pl is _SSE_DONE:
                     continue
                 if isinstance(pl, dict):
+                    upstream_error = pl.get("error")
+                    if isinstance(upstream_error, dict):
+                        stream_failed = True
+                        yield await emit(
+                            {
+                                "type": "error",
+                                "code": upstream_error.get("code") or "stream_error",
+                                "message": upstream_error.get("message")
+                                or "The upstream model stream failed.",
+                            }
+                        )
+                        continue
+                    tool_calls.ingest(pl)
+                    choices = pl.get("choices")
+                    if isinstance(choices, list):
+                        for choice in choices:
+                            delta_obj = choice.get("delta") if isinstance(choice, dict) else None
+                            chunks = (
+                                delta_obj.get("tool_calls") if isinstance(delta_obj, dict) else None
+                            )
+                            if isinstance(chunks, list) and chunks:
+                                yield await emit({"type": "tool_call_delta", "tool_calls": chunks})
                     delta = _delta_visible_text_from_chunk(pl)
                     if delta:
                         full_text += delta
@@ -132,6 +157,19 @@ async def stream_route_chat(
                 except json.JSONDecodeError:
                     continue
                 if isinstance(pl, dict):
+                    upstream_error = pl.get("error")
+                    if isinstance(upstream_error, dict):
+                        stream_failed = True
+                        yield await emit(
+                            {
+                                "type": "error",
+                                "code": upstream_error.get("code") or "stream_error",
+                                "message": upstream_error.get("message")
+                                or "The upstream model stream failed.",
+                            }
+                        )
+                        continue
+                    tool_calls.ingest(pl)
                     delta = _delta_visible_text_from_chunk(pl)
                     if delta:
                         full_text += delta
@@ -139,15 +177,20 @@ async def stream_route_chat(
                         if chunk_replay_sleep_seconds > 0:
                             await asyncio.sleep(chunk_replay_sleep_seconds)
 
-        yield await emit(
-            {
-                "type": "done",
-                "content": full_text,
-                "provider": final_provider,
-                "model_id": final_model,
-                "route_id": final_route,
-            }
-        )
+        if stream_failed:
+            return
+        done_payload: dict[str, Any] = {
+            "type": "done",
+            "content": full_text,
+            "provider": final_provider,
+            "model_id": final_model,
+            "route_id": final_route,
+        }
+        if tool_calls.has_tool_calls:
+            done_payload["tool_calls"] = tool_calls.to_chat_body(text=full_text)["choices"][0][
+                "message"
+            ]["tool_calls"]
+        yield await emit(done_payload)
     except ValueError as exc:
         yield await emit({"type": "error", "message": str(exc)})
     except ProviderError as exc:

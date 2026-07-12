@@ -47,7 +47,9 @@ from app.tool_use_validation import ROUTING_SSE_KEEPALIVE
 router = APIRouter()
 
 
-def _unsupported_capabilities_anthropic_error(exc: UnsupportedCapabilities) -> tuple[int, dict[str, Any]]:
+def _unsupported_capabilities_anthropic_error(
+    exc: UnsupportedCapabilities,
+) -> tuple[int, dict[str, Any]]:
     caps = sorted(cap for cap in exc.required if cap != "text") or sorted(exc.required)
     message = f"No enabled route supports all required capabilities: {', '.join(caps)}"
     return 400, anthropic_error_body("invalid_request_error", message)
@@ -299,6 +301,7 @@ async def _route_anthropic_stream(
     async def anthropic_sse_stream():
         carry = ""
         completed = False
+        failed = False
         terminal_published = False
         mapper = AnthropicStreamMapper(message_id=message_id, model=requested_model)
         yield ROUTING_SSE_KEEPALIVE
@@ -326,10 +329,7 @@ async def _route_anthropic_stream(
                             part.route_id or "",
                             part.model_id or "",
                         )
-                        if (
-                            settings.streaming_release_slot_after_route_selected
-                            and lease.held
-                        ):
+                        if settings.streaming_release_slot_after_route_selected and lease.held:
                             lease.release()
                     continue
                 tracker.record_openai_sse(part)
@@ -338,13 +338,15 @@ async def _route_anthropic_stream(
                 for block in blocks:
                     for event in mapper.events_from_openai_sse(block):
                         yield event
-                        if "message_stop" in event:
-                            completed = True
+                    if mapper.terminal:
+                        completed = True
+                        failed = mapper.failed
             if not completed:
                 for event in mapper.events_from_openai_sse("data: [DONE]\n\n"):
                     yield event
-                    if "message_stop" in event:
-                        completed = True
+                if mapper.terminal:
+                    completed = True
+                    failed = mapper.failed
         except UnsupportedCapabilities as exc:
             _, body = _unsupported_capabilities_anthropic_error(exc)
             await monitor.publish(
@@ -403,7 +405,18 @@ async def _route_anthropic_stream(
             yield anthropic_stream_event("error", body)
         finally:
             lease.release()
-            if completed:
+            if completed and failed:
+                await monitor.publish(
+                    event_type="request_failed",
+                    request_id=request_id,
+                    payload={
+                        "status_code": 502,
+                        "reason": "stream_failed",
+                        "latency_ms": round((perf_counter() - started_at) * 1000),
+                    },
+                )
+                terminal_published = True
+            elif completed:
                 await monitor.publish(
                     event_type="request_completed",
                     request_id=request_id,

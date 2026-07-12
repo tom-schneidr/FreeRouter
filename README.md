@@ -216,6 +216,14 @@ or function-call items. FreeRouter still sends the actual model work through Ope
 `/v1/chat/completions` upstream providers, so provider quality depends on how well the selected
 free-tier route follows tool-calling instructions.
 
+### OpenClaw
+
+OpenClaw should use FreeRouter as a custom `openai-completions` provider with model `auto` and
+`compat.supportsTools: true`. FreeRouter validates complete streamed tool calls before committing a
+route, probes autonomous selection and continuation behavior, and learns a separate reliability order
+for tool-bearing work. See [OpenClaw integration and reliability](docs/openclaw.md) for configuration,
+strict-mode settings, and the verification model.
+
 For Python projects running in the same environment, there is also a small programmatic wrapper:
 
 ```python

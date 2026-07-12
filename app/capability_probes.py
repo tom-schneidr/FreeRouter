@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import httpx
@@ -18,10 +20,12 @@ from app.tool_use_validation import (
 
 PROBE_TAGS = ("text", "tool-use", "vision", "json-schema")
 
+ECHO_PROBE_MESSAGE = "openclaw-probe-7f3a"
+ADD_PROBE_ARGUMENTS = {"a": 17, "b": 25}
+CONTINUATION_PROBE_REPLY = "OPENCLAW_TOOL_RESULT_OK_42"
+
 # 1x1 red PNG
-_TINY_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-)
+_TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 ECHO_TOOL = {
     "type": "function",
@@ -51,6 +55,32 @@ ADD_TOOL = {
         },
     },
 }
+
+
+@dataclass(frozen=True)
+class ToolUseProbeProfile:
+    """Feature-level results collapsed into the legacy ``tool-use`` capability."""
+
+    required_exact_call: CapabilityStatus = "inconclusive"
+    auto_selection: CapabilityStatus = "inconclusive"
+    tool_result_continuation: CapabilityStatus = "inconclusive"
+
+    @property
+    def status(self) -> CapabilityStatus:
+        # The forced exact call establishes transport/schema compatibility. The
+        # autonomous selection and continuation checks measure behavioral quality
+        # and are retained as evidence for ranking, not used to erase capability.
+        if self.required_exact_call == "supported":
+            return "supported"
+        return "inconclusive"
+
+    def evidence(self) -> str:
+        return (
+            "OpenClaw tool profile: "
+            f"required_exact_call={self.required_exact_call}; "
+            f"auto_selection={self.auto_selection}; "
+            f"tool_result_continuation={self.tool_result_continuation}"
+        )
 
 
 def probe_payload_for(tag: str, model_id: str) -> dict[str, Any] | None:
@@ -110,7 +140,15 @@ def tool_use_probe_payloads(model_id: str) -> list[tuple[str, dict[str, Any]]]:
             "echo",
             {
                 "model": model_id,
-                "messages": [{"role": "user", "content": "Call echo with message ping"}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Call the echo tool exactly once with message "
+                            f"{ECHO_PROBE_MESSAGE}. Do not answer in text."
+                        ),
+                    }
+                ],
                 "tools": [ECHO_TOOL],
                 "tool_choice": "required",
                 "max_tokens": 96,
@@ -121,9 +159,19 @@ def tool_use_probe_payloads(model_id: str) -> list[tuple[str, dict[str, Any]]]:
             "add",
             {
                 "model": model_id,
-                "messages": [{"role": "user", "content": "Call add with a=2 and b=3"}],
-                "tools": [ADD_TOOL],
-                "tool_choice": "required",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Use the appropriate tool to add 17 and 25. "
+                            "Do not call echo and do not answer in text."
+                        ),
+                    }
+                ],
+                # The distractor and auto choice verify autonomous selection, which
+                # is the path used by OpenClaw-style agents in normal operation.
+                "tools": [ECHO_TOOL, ADD_TOOL],
+                "tool_choice": "auto",
                 "max_tokens": 96,
                 "temperature": 0,
             },
@@ -141,7 +189,12 @@ def evaluate_tool_use_probe_response(
     if not response_has_valid_function_tool_calls(body):
         return "unsupported"
     calls = function_tool_calls_from_body(body)
+    if len(calls) != 1:
+        return "inconclusive"
     first = calls[0]
+    call_id = first.get("id")
+    if not isinstance(call_id, str) or not call_id.strip():
+        return "inconclusive"
     fn = first.get("function")
     if not isinstance(fn, dict) or fn.get("name") != expected_function:
         return "inconclusive"
@@ -149,14 +202,47 @@ def evaluate_tool_use_probe_response(
     if args is None:
         return "inconclusive"
     if expected_function == "echo":
-        return "supported" if isinstance(args.get("message"), str) else "inconclusive"
+        return "supported" if args == {"message": ECHO_PROBE_MESSAGE} else "inconclusive"
     if expected_function == "add":
-        a = args.get("a")
-        b = args.get("b")
-        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-            return "supported"
-        return "inconclusive"
+        return "supported" if args == ADD_PROBE_ARGUMENTS else "inconclusive"
     return "inconclusive"
+
+
+def tool_result_continuation_probe_payload(
+    model_id: str,
+    add_call: dict[str, Any],
+) -> dict[str, Any]:
+    """Continue the exact tool call using its provider-generated call ID."""
+    call_id = add_call.get("id")
+    return {
+        "model": model_id,
+        "messages": [
+            {"role": "user", "content": "Use the appropriate tool to add 17 and 25."},
+            {"role": "assistant", "content": None, "tool_calls": [add_call]},
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": json.dumps({"sum": 42, "receipt": CONTINUATION_PROBE_REPLY}),
+            },
+            {
+                "role": "user",
+                "content": "Reply with exactly the receipt string from the tool result.",
+            },
+        ],
+        "tools": [ECHO_TOOL, ADD_TOOL],
+        "tool_choice": "auto",
+        "max_tokens": 48,
+        "temperature": 0,
+    }
+
+
+def evaluate_tool_result_continuation_response(body: dict[str, Any]) -> CapabilityStatus:
+    if function_tool_calls_from_body(body):
+        return "unsupported"
+    text = _assistant_text(body).strip()
+    if text == CONTINUATION_PROBE_REPLY:
+        return "supported"
+    return "unsupported" if text else "inconclusive"
 
 
 def evaluate_probe_response(tag: str, body: dict[str, Any]) -> CapabilityStatus:
@@ -177,7 +263,11 @@ def evaluate_probe_response(tag: str, body: dict[str, Any]) -> CapabilityStatus:
             parsed = json.loads(text)
         except json.JSONDecodeError:
             return "unsupported"
-        return "supported" if isinstance(parsed, dict) and isinstance(parsed.get("x"), str) else "unsupported"
+        return (
+            "supported"
+            if isinstance(parsed, dict) and isinstance(parsed.get("x"), str)
+            else "unsupported"
+        )
 
     return "inconclusive"
 
@@ -196,15 +286,17 @@ def _assistant_text(body: dict[str, Any]) -> str:
 def _provider_error_indicates_unsupported(tag: str, exc: ProviderError) -> bool:
     haystack = f"{exc} {exc.body or ''}".lower()
     if tag == "tool-use":
-        return any(
-            term in haystack
-            for term in (
-                "tool",
-                "function",
-                "tools are not",
-                "does not support tools",
-                "unsupported tool",
-            )
+        feature_words = ("tool", "tools", "function", "function calling")
+        unsupported_phrases = (
+            "does not support",
+            "doesn't support",
+            "not supported",
+            "unsupported",
+            "not available for",
+            "tools are disabled",
+        )
+        return any(word in haystack for word in feature_words) and any(
+            phrase in haystack for phrase in unsupported_phrases
         )
     if tag == "vision":
         return any(term in haystack for term in ("image", "vision", "multimodal", "unsupported"))
@@ -245,16 +337,17 @@ async def probe_route_tag(
             evidence="Provider missing API key",
         )
     try:
-        if tag == "tool-use":
-            status, evidence = await _probe_tool_use_variants(
-                provider,
-                client,
-                route.model_id,
-            )
-        else:
-            response = await provider.chat_completion(client, payload, route.model_id)
-            status = evaluate_probe_response(tag, response.body)
-            evidence = f"Probe HTTP {response.status_code}"
+        async with asyncio.timeout(timeout_seconds):
+            if tag == "tool-use":
+                status, evidence = await _probe_tool_use_variants(
+                    provider,
+                    client,
+                    route.model_id,
+                )
+            else:
+                response = await provider.chat_completion(client, payload, route.model_id)
+                status = evaluate_probe_response(tag, response.body)
+                evidence = f"Probe HTTP {response.status_code}"
     except ProviderRateLimited as exc:
         return CapabilityClaim(
             tag=tag,
@@ -271,7 +364,7 @@ async def probe_route_tag(
         else:
             status = "inconclusive"
             evidence = str(exc)[:240]
-    except httpx.TimeoutException:
+    except (httpx.TimeoutException, TimeoutError):
         return CapabilityClaim(
             tag=tag,
             status="inconclusive",
@@ -308,17 +401,45 @@ async def _probe_tool_use_variants(
     client: httpx.AsyncClient,
     model_id: str,
 ) -> tuple[CapabilityStatus, str]:
-    last_status: CapabilityStatus = "unsupported"
-    for probe_name, probe_payload in tool_use_probe_payloads(model_id):
-        response = await provider.chat_completion(client, probe_payload, model_id)
-        status = evaluate_tool_use_probe_response(
-            response.body,
-            expected_function=probe_name,
-        )
-        if status != "supported":
-            return status, f"{probe_name} probe HTTP {response.status_code}: {status}"
-        last_status = status
-    return last_status, "echo+add tool probes passed"
+    payloads = tool_use_probe_payloads(model_id)
+
+    echo_name, echo_payload = payloads[0]
+    echo_response = await provider.chat_completion(client, echo_payload, model_id)
+    echo_status = evaluate_tool_use_probe_response(
+        echo_response.body,
+        expected_function=echo_name,
+    )
+    profile = ToolUseProbeProfile(required_exact_call=echo_status)
+    if echo_status != "supported":
+        return profile.status, profile.evidence()
+
+    add_name, add_payload = payloads[1]
+    add_response = await provider.chat_completion(client, add_payload, model_id)
+    add_status = evaluate_tool_use_probe_response(
+        add_response.body,
+        expected_function=add_name,
+    )
+    profile = ToolUseProbeProfile(
+        required_exact_call=echo_status,
+        auto_selection=add_status,
+    )
+    if add_status != "supported":
+        return profile.status, profile.evidence()
+
+    add_call = function_tool_calls_from_body(add_response.body)[0]
+    continuation_payload = tool_result_continuation_probe_payload(model_id, add_call)
+    continuation_response = await provider.chat_completion(
+        client,
+        continuation_payload,
+        model_id,
+    )
+    continuation_status = evaluate_tool_result_continuation_response(continuation_response.body)
+    profile = ToolUseProbeProfile(
+        required_exact_call=echo_status,
+        auto_selection=add_status,
+        tool_result_continuation=continuation_status,
+    )
+    return profile.status, profile.evidence()
 
 
 async def probe_route_capabilities(

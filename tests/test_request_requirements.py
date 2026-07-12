@@ -34,8 +34,8 @@ from app.request_requirements import (
                 "messages": [{"role": "user", "content": "hi"}],
                 "tool_choice": {"type": "function", "function": {"name": "lookup"}},
             },
-            frozenset({"text", "tool-use"}),
-            id="function-tool-choice",
+            frozenset({"text"}),
+            id="function-tool-choice-without-tools",
         ),
         pytest.param(
             {
@@ -66,7 +66,10 @@ from app.request_requirements import (
                         "role": "user",
                         "content": [
                             {"type": "text", "text": "what is this"},
-                            {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://example.com/a.png"},
+                            },
                         ],
                     }
                 ],
@@ -152,7 +155,7 @@ def test_chat_request_requirements(payload: dict, expected: frozenset[str]) -> N
                 "messages": [{"role": "user", "content": "hi"}],
                 "tool_choice": "auto",
             },
-            True,
+            False,
         ),
         (
             {
@@ -176,7 +179,7 @@ def test_chat_request_requirements(payload: dict, expected: frozenset[str]) -> N
                 "previous_response_id": "resp_123",
                 "messages": [{"role": "user", "content": "continue"}],
             },
-            True,
+            False,
         ),
         (
             {

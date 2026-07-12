@@ -75,6 +75,41 @@ def test_messages_payload_to_chat_tools_and_tool_choice():
     assert chat["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
 
 
+@pytest.mark.parametrize(
+    ("disabled", "expected"),
+    [(True, False), (False, True)],
+)
+def test_messages_payload_maps_disable_parallel_tool_use(disabled: bool, expected: bool):
+    chat = messages_payload_to_chat(
+        {
+            "model": "auto",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": "weather?"}],
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
+            "tool_choice": {"type": "auto", "disable_parallel_tool_use": disabled},
+        }
+    )
+
+    assert chat["parallel_tool_calls"] is expected
+
+
+def test_messages_payload_rejects_invalid_disable_parallel_tool_use():
+    with pytest.raises(ValueError, match="disable_parallel_tool_use"):
+        messages_payload_to_chat(
+            {
+                "model": "auto",
+                "max_tokens": 128,
+                "messages": [{"role": "user", "content": "weather?"}],
+                "tool_choice": {"type": "auto", "disable_parallel_tool_use": "yes"},
+            }
+        )
+
+
 def test_messages_payload_to_chat_assistant_tool_use_and_user_tool_result():
     chat = messages_payload_to_chat(
         {
@@ -320,6 +355,112 @@ def test_chat_body_to_anthropic_message_tool_calls():
     }
 
 
+def test_messages_payload_preserves_error_and_image_tool_results():
+    chat = messages_payload_to_chat(
+        {
+            "model": "auto",
+            "max_tokens": 128,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01",
+                            "is_error": True,
+                            "content": [
+                                {"type": "text", "text": "screenshot failed"},
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": "abc",
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    result = chat["messages"][0]
+    assert result["role"] == "tool"
+    assert result["tool_call_id"] == "toolu_01"
+    assert result["content"][0] == {"type": "text", "text": "Tool result status: error"}
+    assert result["content"][1] == {"type": "text", "text": "screenshot failed"}
+    assert result["content"][2]["image_url"]["url"] == "data:image/png;base64,abc"
+
+
+def test_anthropic_tool_call_round_trip_preserves_object_arguments():
+    chat = messages_payload_to_chat(
+        {
+            "model": "auto",
+            "max_tokens": 128,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_01",
+                            "name": "lookup",
+                            "input": {"z": 2, "a": 1},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    response = chat_body_to_anthropic_message(
+        {
+            "choices": [
+                {
+                    "message": chat["messages"][0],
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+        requested_model="auto",
+    )
+
+    assert chat["messages"][0]["tool_calls"][0]["function"]["arguments"] == '{"a":1,"z":2}'
+    assert response["content"] == [
+        {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "lookup",
+            "input": {"a": 1, "z": 2},
+        }
+    ]
+
+
+def test_chat_body_to_anthropic_message_preserves_object_arguments():
+    message = chat_body_to_anthropic_message(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "id": "call_a",
+                                "type": "function",
+                                "function": {"name": "alpha", "arguments": {"x": 1}},
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+        requested_model="auto",
+    )
+
+    assert message["content"][0]["input"] == {"x": 1}
+
+
 def test_chat_body_to_anthropic_message_tool_calls_override_incorrect_stop_reason():
     message = chat_body_to_anthropic_message(
         {
@@ -446,13 +587,7 @@ def test_anthropic_stream_mapper_dual_tool_calls_with_fragmented_json():
 def test_anthropic_stream_mapper_waits_for_tool_metadata_before_start():
     mapper = AnthropicStreamMapper(message_id="msg_tools", model="auto")
     arguments_first = {
-        "choices": [
-            {
-                "delta": {
-                    "tool_calls": [{"index": 0, "function": {"arguments": '{"q"'}}]
-                }
-            }
-        ]
+        "choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"q"'}}]}}]
     }
     metadata_later = {
         "choices": [
@@ -482,15 +617,61 @@ def test_anthropic_stream_mapper_waits_for_tool_metadata_before_start():
     assert '"partial_json":":\\"x\\"}"' in combined
 
 
-def test_anthropic_stream_mapper_ignores_incomplete_tool_call_for_stop_reason():
+def test_anthropic_stream_mapper_fails_incomplete_tool_call():
     mapper = AnthropicStreamMapper(message_id="msg_tools", model="auto")
     chunk = {"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]}
     mapper.events_from_openai_sse(f"data: {json.dumps(chunk)}")
 
     completed = "".join(mapper.events_from_openai_sse("data: [DONE]"))
 
-    assert '"stop_reason":"end_turn"' in completed
-    assert "tool_use" not in completed
+    assert "event: error" in completed
+    assert '"type":"api_error"' in completed
+    assert "ended without an ID" in completed
+    assert "message_stop" not in completed
+
+
+def test_anthropic_stream_mapper_preserves_upstream_failure_terminal():
+    mapper = AnthropicStreamMapper(message_id="msg_error", model="auto")
+
+    failed = "".join(
+        mapper.events_from_openai_sse(
+            'data: {"error":{"type":"stream_error","code":"timeout_after_commit",'
+            '"message":"timed out"}}\n\n'
+        )
+    )
+    after_done = mapper.events_from_openai_sse("data: [DONE]\n\n")
+
+    assert "event: error" in failed
+    assert "timed out" in failed
+    assert "message_stop" not in failed
+    assert after_done == []
+
+
+def test_anthropic_stream_mapper_fails_malformed_tool_arguments():
+    mapper = AnthropicStreamMapper(message_id="msg_tools", model="auto")
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_a",
+                            "function": {"name": "alpha", "arguments": '{"x":'},
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+    mapper.events_from_openai_sse(f"data: {json.dumps(chunk)}")
+
+    completed = "".join(mapper.events_from_openai_sse("data: [DONE]"))
+
+    assert "event: error" in completed
+    assert "malformed JSON arguments" in completed
+    assert "message_stop" not in completed
 
 
 def test_anthropic_stream_event_format():
