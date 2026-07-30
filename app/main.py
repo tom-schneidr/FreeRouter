@@ -11,6 +11,7 @@ from app.api import (
     diagnosis_routes,
     monitoring_routes,
     openai_routes,
+    sentinel_routes,
     static_routes,
 )
 from app.api.chat_handlers import (
@@ -53,5 +54,6 @@ app.include_router(desktop_routes.router)
 app.include_router(monitoring_routes.router)
 app.include_router(catalog_routes.router)
 app.include_router(diagnosis_routes.router)
+app.include_router(sentinel_routes.router)
 app.include_router(openai_routes.router)
 app.include_router(anthropic_routes.router)

@@ -13,6 +13,7 @@ from app.live_monitor import APILiveMonitor
 from app.model_catalog import ModelCatalog
 from app.request_limiter import GatewayRequestLimiter
 from app.router import WaterfallRouter
+from app.sentinel_service import SentinelService
 from app.state import StateManager
 
 APP_SERVICES_STATE_KEY = "services"
@@ -29,6 +30,7 @@ class AppServices:
     endpoint_diagnosis: EndpointDiagnosisService
     background_endpoint_diagnosis: BackgroundEndpointDiagnosis | None
     benchmark_research: BenchmarkResearchService | None
+    sentinel: SentinelService | None = None
 
     async def shutdown(self) -> None:
         background = self.background_endpoint_diagnosis

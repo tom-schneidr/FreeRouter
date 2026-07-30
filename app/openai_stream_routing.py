@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from app.agent_profiles import AGENT_PROFILES, is_agent_profile
 from app.capability_runtime import adjust_capabilities_from_traffic
 from app.provider_errors import looks_like_missing_model
 from app.providers.base import ProviderError, ProviderRateLimited
@@ -16,6 +17,7 @@ from app.request_sizing import estimate_total_request_tokens
 from app.router import (
     _SSE_DONE,
     NoProviderAvailable,
+    NoQualifiedRoute,
     ProviderAttempt,
     RouteStreamDiag,
     UnsupportedCapabilities,
@@ -32,6 +34,7 @@ from app.routing_policy import (
     enabled_routes_for_request,
     static_route_skip_reason,
 )
+from app.sentinel_store import SentinelStore
 from app.state import Availability, StateManager
 from app.tool_use_validation import (
     evaluate_tool_use_outcome,
@@ -92,6 +95,7 @@ async def waterfall_openai_stream(
     normal_requests_avoid: frozenset[str] | None = None,
     reject_initial_action_promise: bool = False,
     allow_unconfirmed_tool_use_fallback: bool = False,
+    sentinel_store: SentinelStore | None = None,
 ) -> Any:
     """Yield :class:`RouteStreamDiag` plus raw OpenAI ``text/event-stream`` fragments (``str``)."""
     validate_chat_completion_payload(payload)
@@ -114,6 +118,11 @@ async def waterfall_openai_stream(
         )
     required_capabilities = resolved_requirements.required_capabilities
     requested_model = outbound_payload.get("model")
+    sentinel_evaluations = None
+    if is_agent_profile(requested_model) and sentinel_store is not None:
+        sentinel_evaluations = await sentinel_store.latest_for_routes(
+            [route.route_id for route in model_catalog.enabled_routes()]
+        )
     routes_list = enabled_routes_for_request(
         model_catalog,
         requested_model=requested_model,
@@ -124,8 +133,15 @@ async def waterfall_openai_stream(
             else frozenset()
         ),
         allow_unconfirmed_tool_use_fallback=allow_unconfirmed_tool_use_fallback,
+        sentinel_evaluations=sentinel_evaluations,
     )
     if not routes_list:
+        if is_agent_profile(requested_model):
+            raise NoQualifiedRoute(
+                requested_model,
+                required_capabilities
+                | frozenset(AGENT_PROFILES[requested_model].required_checks),
+            )
         raise UnsupportedCapabilities(
             required_capabilities,
             requested_model if isinstance(requested_model, str) else None,

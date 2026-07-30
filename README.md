@@ -183,6 +183,28 @@ base_url = http://localhost:8000/v1
 model = auto
 ```
 
+### Sentinel agent profiles
+
+FreeRouter Sentinel evaluates each route with four deterministic, low-token checks: native tool
+calls, strict JSON, OpenAI-compatible streaming, and synthetic-canary non-exfiltration. Evidence and
+timestamps are stored locally in the existing SQLite runtime database.
+
+- `safe-coding` requires all four checks and a current score of at least 80.
+- `fast-coding` requires tools, streaming, canary privacy, and a score of at least 70.
+- Both profiles enforce a hard `$0` guard and fail closed when no free-tier route qualifies.
+
+Use either profile anywhere a client accepts an OpenAI-compatible model ID:
+
+```text
+model = safe-coding
+model = fast-coding
+```
+
+If no route qualifies, the API returns `no_qualifying_route` with an explicit remediation instead
+of silently using an untested or non-free route.
+
+See [docs/sentinel.md](docs/sentinel.md) for the runnable UI, API, doctor, and OpenCode workflow.
+
 ### Codex CLI
 
 Codex's current custom-provider config expects the Responses wire API. FreeRouter supports that
@@ -426,6 +448,9 @@ GET  /v1/models
 POST /v1/responses
 GET  /v1/gateway/health.json
 GET  /v1/gateway/models
+GET  /v1/gateway/sentinel
+GET  /v1/gateway/sentinel/doctor?profile=safe-coding
+POST /v1/gateway/sentinel/routes/{route_id}/evaluate
 PUT  /v1/gateway/models
 POST /v1/gateway/models/reset
 POST /v1/gateway/models/auto-rank
