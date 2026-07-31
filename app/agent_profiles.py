@@ -22,6 +22,10 @@ class AgentProfile:
     required_checks: tuple[str, ...]
     zero_cost_only: bool = True
     preferred_speed: tuple[str, ...] = ()
+    consumer_id: str | None = None
+    tool_policy: str = "declared"
+    timeout_seconds: int = 90
+    max_retries: int = 2
 
 
 AGENT_PROFILES = {
@@ -40,6 +44,32 @@ AGENT_PROFILES = {
         required_checks=("tool_call", "streaming", "canary"),
         preferred_speed=("fast", "very-fast"),
     ),
+    "safe-study": AgentProfile(
+        profile_id="safe-study",
+        name="Safe study",
+        description=(
+            "Structured, citation-friendly study planning with streaming and privacy evidence."
+        ),
+        minimum_score=80,
+        required_checks=("structured_json", "streaming", "canary"),
+        consumer_id="semesteros",
+        tool_policy="none",
+        timeout_seconds=60,
+        max_retries=1,
+    ),
+    "safe-security": AgentProfile(
+        profile_id="safe-security",
+        name="Safe security",
+        description=(
+            "Evidence-backed security planning with proposal-only tools and explicit approval."
+        ),
+        minimum_score=85,
+        required_checks=("tool_call", "structured_json", "streaming", "canary"),
+        consumer_id="agentrange",
+        tool_policy="proposal-only",
+        timeout_seconds=90,
+        max_retries=2,
+    ),
 }
 
 
@@ -49,6 +79,21 @@ def is_agent_profile(model: Any) -> TypeGuard[str]:
 
 def route_is_zero_cost(route: ModelRoute) -> bool:
     return route.cost.strip().lower() in FREE_COST_LABELS
+
+
+def validate_profile_request(payload: dict[str, Any]) -> None:
+    """Enforce consumer policy before a request can enter the waterfall."""
+    requested_model = payload.get("model")
+    if not is_agent_profile(requested_model):
+        return
+    profile = AGENT_PROFILES[requested_model]
+    tools = payload.get("tools")
+    has_tools = isinstance(tools, list) and bool(tools)
+    if profile.tool_policy == "none" and has_tools:
+        raise ValueError(
+            f"{profile.profile_id} does not permit tool calls. "
+            "Ask the model for a structured plan, then execute actions in the consumer."
+        )
 
 
 def evaluation_is_fresh(

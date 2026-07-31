@@ -73,13 +73,15 @@ def test_gateway_route_headers_shape():
             model_id="llama-3.3-70b-versatile",
         )
     )
-    assert headers == {
-        "X-Gateway-Provider": "groq",
-        "X-Gateway-Route": "groq-llama-3-3-70b",
-        "X-Gateway-Model": "llama-3.3-70b-versatile",
-        "X-Gateway-Request-Class": "normal",
-        "X-Gateway-Required-Capabilities": "",
-    }
+    assert headers["X-Gateway-Provider"] == "groq"
+    assert headers["X-Gateway-Route"] == "groq-llama-3-3-70b"
+    assert headers["X-Gateway-Model"] == "llama-3.3-70b-versatile"
+    assert headers["X-Gateway-Request-Class"] == "normal"
+    assert headers["X-Gateway-Required-Capabilities"] == ""
+    assert headers["X-FreeRouter-Contract-Version"] == "1"
+    assert headers["X-FreeRouter-Provider"] == "groq"
+    assert headers["X-FreeRouter-Route"] == "groq-llama-3-3-70b"
+    assert headers["X-FreeRouter-Model"] == "llama-3.3-70b-versatile"
     assert "X-Gateway-Attempts" not in headers
 
 
@@ -370,6 +372,7 @@ async def test_chat_completions_stream_exposes_gateway_headers(tmp_path, monkeyp
     assert "freerouter routing" in body
     assert "data:" in body
 
+
 class _SlowStreamingProvider(_FakeProvider):
     async def chat_completion(self, client, payload, target_model=None):
         await asyncio.sleep(30)
@@ -386,7 +389,6 @@ class _SlowStreamingProvider(_FakeProvider):
         yield f"data: {chunk}\n\n"
         await asyncio.sleep(30)
         yield "data: [DONE]\n\n"
-
 
 
 async def _post_then_disconnect(path: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -430,6 +432,7 @@ async def _post_then_disconnect(path: str, payload: dict[str, Any]) -> list[dict
     await asyncio.wait_for(app(scope, receive, send), timeout=5)
     assert sent_disconnect, "test request did not emit disconnect"
     return sent
+
 
 async def _post_stream_until_marker_then_disconnect(
     path: str,
@@ -562,6 +565,7 @@ async def test_responses_stream_publishes_closed_when_client_disconnects(tmp_pat
     assert closed["payload"]["status_code"] == 499
     assert closed["payload"]["reason"] == "client_closed_or_stream_interrupted"
 
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_stream_publishes_closed_when_client_disconnects(
     tmp_path, monkeypatch
@@ -585,6 +589,7 @@ async def test_anthropic_messages_stream_publishes_closed_when_client_disconnect
     assert closed["payload"]["status_code"] == 499
     assert closed["payload"]["reason"] == "client_closed_or_stream_interrupted"
 
+
 @pytest.mark.asyncio
 async def test_chat_completions_non_stream_publishes_closed_when_client_disconnects(
     tmp_path, monkeypatch
@@ -604,9 +609,7 @@ async def test_chat_completions_non_stream_publishes_closed_when_client_disconne
 
 
 @pytest.mark.asyncio
-async def test_responses_non_stream_publishes_closed_when_client_disconnects(
-    tmp_path, monkeypatch
-):
+async def test_responses_non_stream_publishes_closed_when_client_disconnects(tmp_path, monkeypatch):
     services = await _services_with_slow_stream(tmp_path, monkeypatch)
     attach_app_services(app, services)
 
@@ -641,3 +644,31 @@ async def test_anthropic_messages_non_stream_publishes_closed_when_client_discon
     closed = await _closed_event_for_path(services, "/v1/messages")
     assert closed["payload"]["status_code"] == 499
     assert closed["payload"]["reason"] == "client_closed_or_stream_interrupted"
+
+
+def test_consumer_receipt_headers_are_stable_and_complete():
+    headers = gateway_route_headers(
+        GatewayRouteInfo(
+            provider_name="openrouter",
+            route_id="free-route",
+            model_id="model:free",
+            request_class="tool",
+            required_capabilities=frozenset({"text", "json-schema", "tool-use"}),
+            run_id="run-contract-1",
+            requested_model="safe-security",
+            latency_ms=314,
+            attempts=2,
+            fallback_used=True,
+            fallback_reason="primary: rate_limited",
+        )
+    )
+
+    assert headers["X-FreeRouter-Run-Id"] == "run-contract-1"
+    assert headers["X-FreeRouter-Profile"] == "safe-security"
+    assert headers["X-FreeRouter-Policy-Verdict"] == "allowed"
+    assert headers["X-FreeRouter-Tool-Policy"] == "proposal-only"
+    assert headers["X-FreeRouter-Latency-Ms"] == "314"
+    assert headers["X-FreeRouter-Attempts"] == "2"
+    assert headers["X-FreeRouter-Fallback"] == "fallback"
+    assert headers["X-FreeRouter-Fallback-Reason"] == "primary: rate_limited"
+    assert headers["X-FreeRouter-Capabilities"] == "json-schema, tool-use"

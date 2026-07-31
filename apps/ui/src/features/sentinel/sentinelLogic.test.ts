@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   filterSentinelRoutes,
   formatEvidenceAge,
+  receiptStatusLabel,
+  receiptStatusTone,
   routeTrustLabel,
+  type SentinelReceipt,
   type SentinelRoute,
 } from "./sentinelLogic";
 
@@ -54,5 +57,33 @@ describe("Sentinel route presentation", () => {
     expect(formatEvidenceAge(950, 1000)).toBe("just now");
     expect(formatEvidenceAge(100, 1000)).toBe("15m ago");
     expect(formatEvidenceAge(0, 90000)).toBe("1d ago");
+  });
+});
+
+describe("Sentinel consumer receipts", () => {
+  const receipt: SentinelReceipt = {
+    run_id: "run-1",
+    created_at: 100,
+    consumer_id: "agentrange",
+    profile_id: "safe-security",
+    status: "degraded",
+    policy_verdict: "allowed",
+    provider_name: "openrouter",
+    route_id: "route-1",
+    model_id: "model:free",
+    latency_ms: 400,
+    attempts: 2,
+    fallback_used: true,
+    fallback_reason: "primary: rate_limited",
+    stream: false,
+    capabilities: ["tool-use"],
+    tool_policy: "proposal-only",
+    request_path: "/v1/responses",
+  };
+
+  it("makes fallback receipts scan-friendly", () => {
+    expect(receiptStatusLabel(receipt)).toBe("Fallback used");
+    expect(receiptStatusTone(receipt)).toBe("warn");
+    expect(receiptStatusTone({ ...receipt, status: "blocked" })).toBe("bad");
   });
 });

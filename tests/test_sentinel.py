@@ -6,12 +6,18 @@ import time
 import httpx
 import pytest
 
-from app.agent_profiles import AGENT_PROFILES, filter_routes_for_profile, route_qualifies
-from app.model_catalog import ModelRoute
+from app.agent_profiles import (
+    AGENT_PROFILES,
+    filter_routes_for_profile,
+    route_qualifies,
+    validate_profile_request,
+)
+from app.live_monitor import APILiveMonitor
+from app.model_catalog import ModelCatalog, ModelRoute
 from app.providers.base import ProviderAdapter
 from app.router import NoQualifiedRoute, unsupported_capabilities_error_body
 from app.sentinel import SentinelEvaluator
-from app.sentinel_service import opencode_setup
+from app.sentinel_service import SentinelService, opencode_setup
 from app.sentinel_store import SentinelStore
 from app.sentinel_types import SentinelEvaluation, SentinelProbeResult
 
@@ -84,8 +90,7 @@ async def test_evaluator_passes_all_deterministic_agent_checks(tmp_path):
             return httpx.Response(
                 200,
                 text=(
-                    'data: {"choices":[{"delta":{"content":"stream-ready"}}]}\n\n'
-                    "data: [DONE]\n\n"
+                    'data: {"choices":[{"delta":{"content":"stream-ready"}}]}\n\ndata: [DONE]\n\n'
                 ),
                 headers={"content-type": "text/event-stream"},
             )
@@ -218,4 +223,99 @@ def test_opencode_setup_uses_generic_compatible_provider_and_profile():
     assert setup["config"]["model"] == "freerouter/safe-coding"
     assert provider["npm"] == "@ai-sdk/openai-compatible"
     assert provider["options"]["baseURL"] == "http://127.0.0.1:8000/v1"
-    assert set(provider["models"]) == {"safe-coding", "fast-coding"}
+    assert set(provider["models"]) == set(AGENT_PROFILES)
+
+
+def test_safe_study_blocks_tools_but_safe_security_allows_proposals():
+    tool_payload = {
+        "messages": [{"role": "user", "content": "plan"}],
+        "tools": [{"type": "function", "function": {"name": "inspect", "parameters": {}}}],
+    }
+    with pytest.raises(ValueError, match="safe-study does not permit tool calls"):
+        validate_profile_request({**tool_payload, "model": "safe-study"})
+
+    validate_profile_request({**tool_payload, "model": "safe-security"})
+
+
+@pytest.mark.asyncio
+async def test_consumer_preflight_reports_degraded_single_route_and_policy_block(tmp_path):
+    route = _route()
+    catalog = ModelCatalog(str(tmp_path / "models.json"))
+    catalog.initialize()
+    catalog.replace_routes(
+        [
+            {
+                "route_id": route.route_id,
+                "provider_name": route.provider_name,
+                "model_id": route.model_id,
+                "display_name": route.display_name,
+                "rank": route.rank,
+                "enabled": True,
+                "cost": route.cost,
+                "speed": route.speed,
+                "tags": route.tags,
+            }
+        ]
+    )
+    store = SentinelStore(str(tmp_path / "gateway.sqlite3"))
+    await store.initialize()
+    await store.save(_evaluation(route))
+    provider = ProviderAdapter("mock", "test-key", "https://mock.test/v1", route.model_id)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200))
+    ) as client:
+        service = SentinelService([provider], catalog, client, store)
+        study = await service.preflight("safe-study", tools=False)
+        blocked = await service.preflight("safe-study", tools=True)
+        security = await service.preflight("safe-security", tools=True)
+
+    assert study["status"] == "degraded"
+    assert study["ok"] is True
+    assert study["fallback"]["model"] == "auto"
+    assert blocked["status"] == "blocked"
+    assert "deliberately blocks" in blocked["reason"]
+    assert security["status"] == "degraded"
+    assert (
+        next(check for check in security["checks"] if check["id"] == "tool_call")["status"]
+        == "pass"
+    )
+
+
+@pytest.mark.asyncio
+async def test_receipt_monitor_persists_metadata_without_content_or_secrets(tmp_path):
+    store = SentinelStore(str(tmp_path / "gateway.sqlite3"))
+    await store.initialize()
+    monitor = APILiveMonitor(receipt_sink=store.save_receipt)
+    await monitor.publish(
+        event_type="request_started",
+        request_id="run-safe-study",
+        payload={
+            "path": "/v1/chat/completions",
+            "stream": False,
+            "model": "safe-study",
+            "required_capabilities": ["json-schema"],
+            "request_payload": {"messages": [{"content": "private study notes"}]},
+        },
+    )
+    await monitor.publish(
+        event_type="request_completed",
+        request_id="run-safe-study",
+        payload={
+            "provider_name": "mock",
+            "route_id": "mock-coder",
+            "model_id": "coder-v1",
+            "latency_ms": 41,
+            "attempts": 1,
+            "attempts_detail": [{"status": "selected", "route_id": "mock-coder"}],
+            "response_body": {"secret": "never-persist-this"},
+        },
+    )
+
+    receipts = await store.recent_receipts()
+    assert receipts[0]["run_id"] == "run-safe-study"
+    assert receipts[0]["profile_id"] == "safe-study"
+    assert receipts[0]["policy_verdict"] == "allowed"
+    assert receipts[0]["capabilities"] == ["json-schema"]
+    serialized = json.dumps(receipts)
+    assert "private study notes" not in serialized
+    assert "never-persist-this" not in serialized

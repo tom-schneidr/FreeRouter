@@ -28,6 +28,27 @@ async def sentinel_doctor(request: Request, profile: str = "safe-coding"):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/v1/gateway/sentinel/preflight")
+async def sentinel_preflight(
+    request: Request,
+    profile: str = "safe-study",
+    chat: bool = True,
+    json: bool = True,
+    stream: bool = True,
+    tools: bool = False,
+):
+    try:
+        return await _sentinel(request).preflight(
+            profile,
+            chat=chat,
+            json_output=json,
+            stream=stream,
+            tools=tools,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/v1/gateway/sentinel/routes/{route_id}/evaluate")
 async def sentinel_evaluate_route(route_id: str, request: Request):
     try:

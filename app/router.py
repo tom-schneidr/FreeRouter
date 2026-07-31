@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from app.agent_profiles import AGENT_PROFILES, is_agent_profile
+from app.agent_profiles import AGENT_PROFILES, is_agent_profile, validate_profile_request
 from app.capability_runtime import adjust_capabilities_from_traffic
 from app.model_catalog import ModelCatalog
 from app.provider_errors import looks_like_missing_model
@@ -354,6 +354,7 @@ class WaterfallRouter:
     ) -> AsyncGenerator[RouteEvent, None]:
         """Yield structured route events while executing waterfall routing."""
         validate_chat_completion_payload(payload)
+        validate_profile_request(payload)
         if payload.get("stream"):
             raise ValueError(
                 "iter_route_events does not accept stream:true; use iter_chat_completion_openai_stream instead"
@@ -389,6 +390,7 @@ class WaterfallRouter:
         """Stream OpenAI-compatible SSE; routing diagnostics as :class:`RouteStreamDiag`."""
         from app.openai_stream_routing import waterfall_openai_stream
 
+        validate_profile_request(payload)
         outbound = dict(payload)
         outbound["stream"] = True
         if self._http_client is not None:

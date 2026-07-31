@@ -136,3 +136,15 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 This demo writes only to the paths supplied on the command line. It never changes the normal
 `data/` database or catalog.
+
+
+## Shared consumer runtime
+
+Round 2 adds the `safe-study` and `safe-security` OpenAI-compatible models, capability preflight, contract-v1 response receipts, and the SemesterOS/AgentRange control-plane dashboard. Profiles remain fail-closed and may never silently downgrade to `auto`.
+
+See [consumer-integrations.md](consumer-integrations.md) for exact StudyShell and ClusterLab recipes, header semantics, JSON validation, timeout/retry rules, and explicit auto fallback. Use [DEMO.md](DEMO.md) for the approval walkthrough.
+
+```text
+GET /v1/gateway/sentinel/preflight?profile=safe-study&chat=true&json=true&stream=true&tools=false
+GET /v1/gateway/sentinel/preflight?profile=safe-security&chat=true&json=true&stream=true&tools=true
+```

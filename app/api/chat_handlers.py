@@ -11,7 +11,12 @@ from typing import Any
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from app.api.gateway_headers import GatewayRouteInfo, GatewayRoutingContext, gateway_route_headers
+from app.api.gateway_headers import (
+    GatewayRouteInfo,
+    GatewayRoutingContext,
+    gateway_route_headers,
+    route_fallback_headers,
+)
 from app.api.gateway_response import normalize_chat_completion_body, normalize_openai_sse_stream
 from app.api.limited_streaming_response import (
     GatewayLimiterLease,
@@ -353,6 +358,8 @@ async def _route_chat_completion_stream_request(
     routing.configure_request(
         request_class=resolved_requirements.request_class,
         required_capabilities=resolved_requirements.required_capabilities,
+        run_id=request_id,
+        requested_model=payload.get("model"),
     )
     tracker = StreamMonitorTracker(requested_model=payload.get("model"))
 
@@ -631,6 +638,8 @@ async def _route_chat_completion_request(
         limiter.release()
 
     response_body = normalize_chat_completion_body(result.body, payload.get("model"))
+    latency_ms = round((perf_counter() - started_at) * 1000)
+    fallback_used, fallback_reason = route_fallback_headers(result.attempts)
     await monitor.publish(
         event_type="request_completed",
         request_id=request_id,
@@ -648,7 +657,7 @@ async def _route_chat_completion_request(
                 "attempts_detail": [asdict(attempt) for attempt in result.attempts],
                 "assistant_text": _assistant_text_from_response_body(response_body),
                 "response_body": response_body,
-                "latency_ms": round((perf_counter() - started_at) * 1000),
+                "latency_ms": latency_ms,
             }
         ),
     )
@@ -661,6 +670,12 @@ async def _route_chat_completion_request(
                 model_id=result.model_id,
                 request_class=resolved_requirements.request_class,
                 required_capabilities=resolved_requirements.required_capabilities,
+                run_id=request_id,
+                requested_model=payload.get("model"),
+                latency_ms=latency_ms,
+                attempts=len(result.attempts),
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
             )
         ),
     )
@@ -707,6 +722,8 @@ async def _route_responses_stream_request(
     routing.configure_request(
         request_class=resolved_requirements.request_class,
         required_capabilities=resolved_requirements.required_capabilities,
+        run_id=request_id,
+        requested_model=requested_model or payload.get("model"),
     )
     tracker = StreamMonitorTracker(requested_model=requested_model or payload.get("model"))
     rejected_response = JSONResponse(

@@ -7,7 +7,18 @@ from typing import Any
 
 import httpx
 
-from app.agent_profiles import AGENT_PROFILES, profile_diagnostic, route_is_zero_cost
+from app.agent_profiles import (
+    AGENT_PROFILES,
+    filter_routes_for_profile,
+    profile_diagnostic,
+    route_is_zero_cost,
+)
+from app.consumer_contracts import (
+    CONSUMERS,
+    CONTRACT_VERSION,
+    consumer_connection,
+    profile_contract,
+)
 from app.model_catalog import ModelCatalog, ModelRoute
 from app.providers.base import ProviderAdapter
 from app.sentinel import SentinelEvaluator
@@ -60,8 +71,22 @@ class SentinelService:
             profile_diagnostic(profile, routes, evaluations, configured)
             for profile in AGENT_PROFILES.values()
         ]
+        receipts = await self.store.recent_receipts(limit=12)
+        consumers = []
+        for consumer in CONSUMERS.values():
+            profile = AGENT_PROFILES[consumer.profile_id]
+            diagnostic = next(
+                row for row in profiles if row["profile_id"] == profile.profile_id
+            )
+            consumers.append(
+                {
+                    **consumer_connection(consumer, base_url),
+                    "readiness": diagnostic,
+                }
+            )
         return {
             "object": "sentinel.snapshot",
+            "contract_version": CONTRACT_VERSION,
             "zero_cost_guard": {
                 "enabled": True,
                 "message": (
@@ -85,8 +110,144 @@ class SentinelService:
                 ),
             },
             "profiles": profiles,
+            "consumers": consumers,
+            "receipts": receipts,
             "routes": route_rows,
             "opencode": opencode_setup(base_url),
+        }
+
+    async def preflight(
+        self,
+        profile_id: str,
+        *,
+        chat: bool = True,
+        json_output: bool = True,
+        stream: bool = True,
+        tools: bool = False,
+    ) -> dict[str, Any]:
+        profile = AGENT_PROFILES.get(profile_id)
+        if profile is None:
+            raise KeyError(f"Unknown Sentinel profile: {profile_id}")
+        routes = self.catalog.all_routes()
+        evaluations = await self.store.latest_for_routes([route.route_id for route in routes])
+        configured = {
+            provider.name for provider in self.providers if provider.is_configured
+        }
+        configured_routes = [
+            route
+            for route in routes
+            if route.enabled and route.provider_name in configured
+        ]
+        qualified = filter_routes_for_profile(
+            configured_routes, evaluations, profile.profile_id
+        )
+
+        def capability_ready(check_id: str) -> bool:
+            for route in qualified:
+                evaluation = evaluations.get(route.route_id)
+                if evaluation is None:
+                    continue
+                probes = {probe.check_id: probe for probe in evaluation.probes}
+                if check_id in probes and probes[check_id].status == "pass":
+                    return True
+            return False
+
+        checks: list[dict[str, Any]] = []
+        if chat:
+            checks.append(
+                {
+                    "id": "chat",
+                    "status": "pass" if qualified else "fail",
+                    "message": (
+                        f"{len(qualified)} evidence-backed route(s) support chat."
+                        if qualified
+                        else "No configured route currently satisfies the profile contract."
+                    ),
+                    "action": "Run Sentinel on a configured free-tier route." if not qualified else "",
+                }
+            )
+        desired = (
+            ("structured_json", json_output, "Structured JSON"),
+            ("streaming", stream, "Streaming"),
+        )
+        for check_id, requested, label in desired:
+            if not requested:
+                continue
+            ready = capability_ready(check_id)
+            checks.append(
+                {
+                    "id": check_id,
+                    "status": "pass" if ready else "fail",
+                    "message": f"{label} evidence is current." if ready else f"{label} is not verified on a qualified route.",
+                    "action": "Run the route evaluation and resolve the failed probe." if not ready else "",
+                }
+            )
+        if tools:
+            allowed = profile.tool_policy != "none"
+            ready = allowed and capability_ready("tool_call")
+            checks.append(
+                {
+                    "id": "tool_call",
+                    "status": "pass" if ready else "fail",
+                    "message": (
+                        f"Tool calls are {profile.tool_policy} and verified."
+                        if ready
+                        else (
+                            "This profile deliberately blocks tool calls."
+                            if not allowed
+                            else "Tool-call conformance is not verified."
+                        )
+                    ),
+                    "action": (
+                        "Use structured output for a plan, or select safe-security."
+                        if not allowed
+                        else ("Run Sentinel and resolve the tool-call probe." if not ready else "")
+                    ),
+                }
+            )
+        failures = [check for check in checks if check["status"] == "fail"]
+        if failures:
+            status = "blocked"
+            reason = failures[0]["message"]
+            action = failures[0]["action"]
+        elif len(qualified) == 1:
+            status = "degraded"
+            reason = "Contract is healthy, but only one route currently qualifies."
+            action = "Evaluate another configured free-tier route for fallback resilience."
+            checks.append(
+                {
+                    "id": "route_resilience",
+                    "status": "warn",
+                    "message": reason,
+                    "action": action,
+                }
+            )
+        else:
+            status = "healthy"
+            reason = f"{len(qualified)} routes satisfy every requested capability."
+            action = "No action required."
+        return {
+            "ok": status != "blocked",
+            "status": status,
+            "profile": profile_contract(profile),
+            "requested": {
+                "chat": chat,
+                "structured_json": json_output,
+                "streaming": stream,
+                "tool_calling": tools,
+            },
+            "checks": checks,
+            "qualified_route_ids": [route.route_id for route in qualified],
+            "reason": reason,
+            "next_action": action,
+            "fallback": {
+                "model": "auto",
+                "mode": "consumer-controlled",
+                "message": (
+                    "Profiles never silently bypass policy. A consumer may explicitly retry "
+                    "with its configured auto model and must retain the blocked/degraded reason."
+                ),
+            },
         }
 
     async def doctor(self, profile_id: str) -> dict[str, Any]:
@@ -180,8 +341,8 @@ def opencode_setup(base_url: str) -> dict[str, Any]:
                     "apiKey": "sk-local",
                 },
                 "models": {
-                    "safe-coding": {"name": "Sentinel · Safe coding"},
-                    "fast-coding": {"name": "Sentinel · Fast coding"},
+                    profile_id: {"name": f"Sentinel · {profile.name}"}
+                    for profile_id, profile in AGENT_PROFILES.items()
                 },
             }
         },
@@ -192,7 +353,7 @@ def opencode_setup(base_url: str) -> dict[str, Any]:
         "steps": [
             "Run the Sentinel doctor and evaluate routes until your profile is ready.",
             "Copy this JSON into opencode.json in your project.",
-            "Start OpenCode and select freerouter/safe-coding or freerouter/fast-coding.",
+            "Start OpenCode and select any evidence-backed Sentinel profile.",
         ],
         "doctor_url": f"{root}/gateway/sentinel/doctor?profile=safe-coding",
     }

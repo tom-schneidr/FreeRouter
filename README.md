@@ -516,3 +516,8 @@ Linux/macOS:
 ./backup-local-state.sh
 ./restore-local-state.sh ./backups/freerouter-local-state-YYYYMMDD-HHMMSS.zip --overwrite
 ```
+
+
+### Sentinel shared runtime
+
+Use `safe-study` for SemesterOS and `safe-security` for AgentRange. Both are evidence-backed, zero-cost virtual models with preflight health and versioned response receipts. See [consumer integration contracts](docs/consumer-integrations.md) and the [approval demo checklist](docs/DEMO.md).

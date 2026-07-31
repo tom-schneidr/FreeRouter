@@ -80,7 +80,71 @@ async def seed(database_path: Path, catalog_path: Path) -> None:
     routes = catalog.enabled_routes()[:3]
     for index, route in enumerate(routes):
         await store.save(_evaluation(route, index))
-    print(f"Seeded {len(routes)} Sentinel demo evaluations in {database_path}")
+    receipts = (
+        {
+            "run_id": "demo-semesteros-healthy",
+            "created_at": int(time.time()) - 95,
+            "consumer_id": "semesteros",
+            "profile_id": "safe-study",
+            "status": "healthy",
+            "policy_verdict": "allowed",
+            "provider_name": routes[0].provider_name,
+            "route_id": routes[0].route_id,
+            "model_id": routes[0].model_id,
+            "latency_ms": 842,
+            "attempts": 1,
+            "fallback_used": False,
+            "fallback_reason": "",
+            "stream": True,
+            "capabilities": ["json-schema"],
+            "tool_policy": "none",
+            "request_path": "/v1/chat/completions",
+        },
+        {
+            "run_id": "demo-agentrange-fallback",
+            "created_at": int(time.time()) - 420,
+            "consumer_id": "agentrange",
+            "profile_id": "safe-security",
+            "status": "degraded",
+            "policy_verdict": "allowed",
+            "provider_name": routes[0].provider_name,
+            "route_id": routes[0].route_id,
+            "model_id": routes[0].model_id,
+            "latency_ms": 1634,
+            "attempts": 2,
+            "fallback_used": True,
+            "fallback_reason": "nvidia-kimi-k2-6: rate_limited",
+            "stream": False,
+            "capabilities": ["json-schema", "tool-use"],
+            "tool_policy": "proposal-only",
+            "request_path": "/v1/responses",
+        },
+        {
+            "run_id": "demo-semesteros-blocked",
+            "created_at": int(time.time()) - 1100,
+            "consumer_id": "semesteros",
+            "profile_id": "safe-study",
+            "status": "blocked",
+            "policy_verdict": "blocked",
+            "provider_name": "",
+            "route_id": "",
+            "model_id": "",
+            "latency_ms": 18,
+            "attempts": 0,
+            "fallback_used": False,
+            "fallback_reason": "structured_json_not_verified",
+            "stream": False,
+            "capabilities": ["json-schema"],
+            "tool_policy": "none",
+            "request_path": "/v1/chat/completions",
+        },
+    )
+    for receipt in receipts:
+        await store.save_receipt(receipt)
+    print(
+        f"Seeded {len(routes)} evaluations and {len(receipts)} safe consumer receipts "
+        f"in {database_path}"
+    )
 
 
 def main() -> None:

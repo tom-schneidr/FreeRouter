@@ -99,7 +99,10 @@ async def build_app_services(settings: Settings | None = None) -> AppServices:
         resolved_settings.request_queue_timeout_seconds,
         resolved_settings.request_queue_max_waiting_requests,
     )
-    monitor = APILiveMonitor(max_events=1000)
+    monitor = APILiveMonitor(
+        max_events=1000,
+        receipt_sink=stack.sentinel_store.save_receipt,
+    )
     sentinel = SentinelService(
         providers,
         stack.model_catalog,

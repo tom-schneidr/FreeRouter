@@ -73,14 +73,12 @@ class RoutedLimitedStreamingResponse(LimitedStreamingResponse):
         headers = list(self.raw_headers)
         for name, value in self.routing.request_headers().items():
             headers.append((name.lower().encode("latin-1"), value.encode("latin-1")))
+        existing = {name.decode("latin-1").lower() for name, _ in headers}
         info = self.routing.info
         if info is not None:
             for name, value in gateway_route_headers(info).items():
                 lower_name = name.lower()
-                if lower_name in {
-                    "x-gateway-request-class",
-                    "x-gateway-required-capabilities",
-                }:
+                if lower_name in existing:
                     continue
                 headers.append((lower_name.encode("latin-1"), value.encode("latin-1")))
         return headers

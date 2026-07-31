@@ -55,6 +55,35 @@ class SentinelStore:
                 ON sentinel_evaluations (route_id, completed_at DESC)
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sentinel_consumer_receipts (
+                    run_id TEXT PRIMARY KEY,
+                    created_at INTEGER NOT NULL,
+                    consumer_id TEXT,
+                    profile_id TEXT,
+                    status TEXT NOT NULL,
+                    policy_verdict TEXT NOT NULL,
+                    provider_name TEXT NOT NULL,
+                    route_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    latency_ms INTEGER NOT NULL,
+                    attempts INTEGER NOT NULL,
+                    fallback_used INTEGER NOT NULL,
+                    fallback_reason TEXT NOT NULL,
+                    stream INTEGER NOT NULL,
+                    capabilities_json TEXT NOT NULL,
+                    tool_policy TEXT NOT NULL,
+                    request_path TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sentinel_receipts_created
+                ON sentinel_consumer_receipts (created_at DESC)
+                """
+            )
             await db.commit()
 
     async def save(self, evaluation: SentinelEvaluation) -> None:
@@ -151,6 +180,64 @@ class SentinelStore:
             )
             rows = await cursor.fetchall()
             return [await self._row_to_evaluation(db, row) for row in rows]
+
+    async def save_receipt(self, receipt: dict) -> None:
+        """Persist only the safe metadata produced by consumer_contracts.safe_receipt."""
+        async with aiosqlite.connect(self.database_path) as db:
+            await self._configure(db)
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO sentinel_consumer_receipts (
+                    run_id, created_at, consumer_id, profile_id, status, policy_verdict,
+                    provider_name, route_id, model_id, latency_ms, attempts,
+                    fallback_used, fallback_reason, stream, capabilities_json,
+                    tool_policy, request_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    receipt["run_id"],
+                    receipt["created_at"],
+                    receipt.get("consumer_id"),
+                    receipt.get("profile_id"),
+                    receipt["status"],
+                    receipt["policy_verdict"],
+                    receipt.get("provider_name", ""),
+                    receipt.get("route_id", ""),
+                    receipt.get("model_id", ""),
+                    receipt.get("latency_ms", 0),
+                    receipt.get("attempts", 0),
+                    int(bool(receipt.get("fallback_used"))),
+                    receipt.get("fallback_reason", ""),
+                    int(bool(receipt.get("stream"))),
+                    json.dumps(receipt.get("capabilities", []), separators=(",", ":")),
+                    receipt.get("tool_policy", "unmanaged"),
+                    receipt.get("request_path", ""),
+                ),
+            )
+            await db.commit()
+
+    async def recent_receipts(self, *, limit: int = 12) -> list[dict]:
+        async with aiosqlite.connect(self.database_path) as db:
+            await self._configure(db)
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT * FROM sentinel_consumer_receipts
+                ORDER BY created_at DESC, run_id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 50)),),
+            )
+            rows = await cursor.fetchall()
+        receipts: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            item["fallback_used"] = bool(item["fallback_used"])
+            item["stream"] = bool(item["stream"])
+            item["capabilities"] = json.loads(item.pop("capabilities_json"))
+            receipts.append(item)
+        return receipts
+
 
     async def _row_to_evaluation(
         self, db: aiosqlite.Connection, row: aiosqlite.Row
