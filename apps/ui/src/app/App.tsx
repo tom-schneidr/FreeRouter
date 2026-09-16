@@ -13,6 +13,7 @@ import { HealthView } from "../features/health/HealthView";
 import { LiveView } from "../features/live/LiveView";
 import { LogsView } from "../features/logs/LogsView";
 import { ModelsView } from "../features/models/ModelsView";
+import { SentinelView } from "../features/sentinel/SentinelView";
 import { SettingsView } from "../features/settings/SettingsView";
 import { UsageView } from "../features/usage/UsageView";
 import { useDesktopReady, useDesktopToken, useGatewayQuery } from "../hooks/useDesktop";
@@ -179,15 +180,16 @@ function FreeRouterShell() {
                 {actionNotice}
               </span>
             ) : null}
-            <button type="button" onClick={openDocs} aria-pressed={docsOpen}>
+            <button className="docs-action" type="button" onClick={openDocs} aria-pressed={docsOpen}>
               {docsOpen ? "Close docs" : "API Docs"}
             </button>
-            <button type="button" onClick={refreshAll}>
+            <button className="refresh-action" type="button" onClick={refreshAll} aria-label="Refresh">
               <RefreshCw size={16} />
               Refresh
             </button>
             <button
               type="button"
+              className="restart-action"
               disabled={!desktopToken || restarting}
               onClick={() => void restartServer()}
               title={
@@ -215,6 +217,7 @@ function FreeRouterShell() {
               providers={providerRows}
             />
           )}
+          {activeSection === "sentinel" && <SentinelView />}
           {activeSection === "chat" && <ChatView />}
           {activeSection === "models" && <ModelsView />}
           {activeSection === "usage" && (

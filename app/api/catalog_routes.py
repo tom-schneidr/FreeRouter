@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.agent_profiles import AGENT_PROFILES
 from app.api.chat_handlers import _catalog_payload_with_health
 from app.app_services import get_app_services
 from app.capability_probes import PROBE_TAGS, probe_route_capabilities
@@ -50,6 +51,15 @@ async def models(request: Request) -> dict[str, Any]:
                     else ["messages", "stream"]
                 ),
             }
+        ]
+        + [
+            {
+                "id": profile_id,
+                "object": "model",
+                "created": created,
+                "owned_by": "freerouter-sentinel",
+            }
+            for profile_id in AGENT_PROFILES
         ]
         + [
             {

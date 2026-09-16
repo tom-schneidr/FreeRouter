@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from app.agent_profiles import AGENT_PROFILES, is_agent_profile, validate_profile_request
 from app.capability_runtime import adjust_capabilities_from_traffic
 from app.model_catalog import ModelCatalog
 from app.provider_errors import looks_like_missing_model
@@ -20,6 +21,7 @@ from app.routing_policy import (
     enabled_routes_for_request,
     static_route_skip_reason,
 )
+from app.sentinel_store import SentinelStore
 from app.state import Availability, StateManager
 from app.tool_reliability import (
     tool_failure_outcome_category,
@@ -51,12 +53,44 @@ class UnsupportedCapabilities(RuntimeError):
         super().__init__(f"No enabled route supports all required capabilities: {', '.join(caps)}")
 
 
+class NoQualifiedRoute(UnsupportedCapabilities):
+    """Raised when a virtual agent profile has no evidence-backed $0 route."""
+
+    def __init__(self, profile_id: str, required: frozenset[str]) -> None:
+        self.profile_id = profile_id
+        self.required = required
+        self.requested_model = profile_id
+        RuntimeError.__init__(
+            self,
+            (
+                f"No route qualifies for {profile_id}. The hard $0 guard remains active. "
+                "Configure a free-tier provider and run Sentinel on an enabled route."
+            ),
+        )
+
+
+
 def _display_capabilities(required: frozenset[str]) -> list[str]:
     distinctive = sorted(cap for cap in required if cap != "text")
     return distinctive if distinctive else sorted(required)
 
 
 def unsupported_capabilities_error_body(exc: UnsupportedCapabilities) -> dict[str, Any]:
+    if isinstance(exc, NoQualifiedRoute):
+        return {
+            "error": {
+                "message": str(exc),
+                "type": "invalid_request_error",
+                "code": "no_qualifying_route",
+                "param": "model",
+                "profile": exc.profile_id,
+                "zero_cost_guard": True,
+                "required_capabilities": _display_capabilities(exc.required),
+                "remediation": (
+                    "Open Sentinel, configure a free-tier route, and run all four readiness checks."
+                ),
+            }
+        }
     caps = _display_capabilities(exc.required)
     return {
         "error": {
@@ -269,6 +303,7 @@ class WaterfallRouter:
         normal_requests_avoid: frozenset[str] | None = None,
         reject_initial_action_promise: bool = False,
         allow_unconfirmed_tool_use_fallback: bool = False,
+        sentinel_store: SentinelStore | None = None,
     ) -> None:
         self.providers = providers
         self.provider_by_name = {provider.name: provider for provider in providers}
@@ -280,6 +315,7 @@ class WaterfallRouter:
         self.normal_requests_avoid = normal_requests_avoid or frozenset({"tool-use"})
         self.reject_initial_action_promise = reject_initial_action_promise
         self.allow_unconfirmed_tool_use_fallback = allow_unconfirmed_tool_use_fallback
+        self.sentinel_store = sentinel_store
 
     async def route_chat_completion(
         self,
@@ -322,6 +358,7 @@ class WaterfallRouter:
     ) -> AsyncGenerator[RouteEvent, None]:
         """Yield structured route events while executing waterfall routing."""
         validate_chat_completion_payload(payload)
+        validate_profile_request(payload)
         if payload.get("stream"):
             raise ValueError(
                 "iter_route_events does not accept stream:true; use iter_chat_completion_openai_stream instead"
@@ -357,6 +394,7 @@ class WaterfallRouter:
         """Stream OpenAI-compatible SSE; routing diagnostics as :class:`RouteStreamDiag`."""
         from app.openai_stream_routing import waterfall_openai_stream
 
+        validate_profile_request(payload)
         outbound = dict(payload)
         outbound["stream"] = True
         if self._http_client is not None:
@@ -373,6 +411,7 @@ class WaterfallRouter:
                     normal_requests_avoid=self.normal_requests_avoid,
                     reject_initial_action_promise=self.reject_initial_action_promise,
                     allow_unconfirmed_tool_use_fallback=self.allow_unconfirmed_tool_use_fallback,
+                    sentinel_store=self.sentinel_store,
                 )
             ) as stream:
                 async for part in stream:
@@ -394,6 +433,7 @@ class WaterfallRouter:
                     normal_requests_avoid=self.normal_requests_avoid,
                     reject_initial_action_promise=self.reject_initial_action_promise,
                     allow_unconfirmed_tool_use_fallback=self.allow_unconfirmed_tool_use_fallback,
+                    sentinel_store=self.sentinel_store,
                 )
             ) as stream:
                 async for part in stream:
@@ -418,14 +458,26 @@ class WaterfallRouter:
         required_capabilities = resolved_requirements.required_capabilities
         request_tool_fingerprint = tool_request_fingerprint(payload)
         requested_model = payload.get("model")
+        sentinel_evaluations = None
+        if is_agent_profile(requested_model) and self.sentinel_store is not None:
+            sentinel_evaluations = await self.sentinel_store.latest_for_routes(
+                [route.route_id for route in self.model_catalog.enabled_routes()]
+            )
         routes_list = enabled_routes_for_request(
             self.model_catalog,
             requested_model=requested_model,
             required_capabilities=required_capabilities,
             avoid_capabilities=self._avoid_capabilities_for(resolved_requirements),
             allow_unconfirmed_tool_use_fallback=self.allow_unconfirmed_tool_use_fallback,
+            sentinel_evaluations=sentinel_evaluations,
         )
         if not routes_list:
+            if is_agent_profile(requested_model):
+                raise NoQualifiedRoute(
+                    requested_model,
+                    required_capabilities
+                    | frozenset(AGENT_PROFILES[requested_model].required_checks),
+                )
             raise UnsupportedCapabilities(
                 required_capabilities,
                 requested_model if isinstance(requested_model, str) else None,

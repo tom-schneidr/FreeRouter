@@ -81,7 +81,7 @@ async def responses(request: Request) -> Response:
         headers={
             key: value
             for key, value in chat_response.headers.items()
-            if key.lower().startswith("x-gateway-")
+            if key.lower().startswith(("x-gateway-", "x-freerouter-"))
         },
     )
 
@@ -162,6 +162,8 @@ async def chat_completions_stream_route(request: Request) -> Response:
     routing.configure_request(
         request_class=resolved_requirements.request_class,
         required_capabilities=resolved_requirements.required_capabilities,
+        run_id=request_id,
+        requested_model=payload.get("model"),
     )
 
     async def on_stream_event(event_payload: dict[str, Any]) -> None:

@@ -7,12 +7,14 @@ import {
   HeartPulse,
   MessageSquareText,
   ScrollText,
+  ShieldCheck,
   Settings,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export const PRIMARY_NAV_ITEMS = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
+  { id: "sentinel", label: "Sentinel", icon: ShieldCheck },
   { id: "chat", label: "Chat", icon: MessageSquareText },
   { id: "models", label: "Models", icon: Bot },
   { id: "usage", label: "Usage", icon: BarChart3 },
@@ -31,6 +33,7 @@ export type SectionId = (typeof NAV_ITEMS)[number]["id"];
 /** Sections that fill the main pane edge-to-edge. */
 export const FILL_SECTIONS = new Set<SectionId>([
   "models",
+  "sentinel",
   "chat",
   "usage",
   "health",

@@ -20,6 +20,8 @@ from app.providers import PROVIDER_QUOTAS, build_provider_adapters
 from app.providers.base import ProviderAdapter
 from app.request_limiter import GatewayRequestLimiter
 from app.router import WaterfallRouter
+from app.sentinel_service import SentinelService
+from app.sentinel_store import SentinelStore
 from app.settings import Settings, get_settings
 from app.state import StateManager
 
@@ -32,6 +34,7 @@ class CoreGatewayStack:
     providers: list[ProviderAdapter]
     http_client: httpx.AsyncClient
     waterfall_router: WaterfallRouter
+    sentinel_store: SentinelStore
 
 
 async def build_core_gateway_stack(
@@ -47,6 +50,11 @@ async def build_core_gateway_stack(
         busy_timeout_ms=settings.sqlite_busy_timeout_ms,
     )
     await state.initialize()
+    sentinel_store = SentinelStore(
+        settings.database_path,
+        busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+    )
+    await sentinel_store.initialize()
     model_catalog = model_catalog or ModelCatalog(settings.model_catalog_path)
     model_catalog.initialize()
     limits = httpx.Limits(
@@ -69,6 +77,7 @@ async def build_core_gateway_stack(
         normal_requests_avoid=frozenset(settings.routing_normal_requests_avoid),
         reject_initial_action_promise=settings.routing_reject_initial_action_promise,
         allow_unconfirmed_tool_use_fallback=settings.routing_allow_unconfirmed_tool_use_fallback,
+        sentinel_store=sentinel_store,
     )
     return CoreGatewayStack(
         settings=settings,
@@ -77,6 +86,7 @@ async def build_core_gateway_stack(
         providers=providers,
         http_client=http_client,
         waterfall_router=router,
+        sentinel_store=sentinel_store,
     )
 
 
@@ -89,7 +99,17 @@ async def build_app_services(settings: Settings | None = None) -> AppServices:
         resolved_settings.request_queue_timeout_seconds,
         resolved_settings.request_queue_max_waiting_requests,
     )
-    monitor = APILiveMonitor(max_events=1000)
+    monitor = APILiveMonitor(
+        max_events=1000,
+        receipt_sink=stack.sentinel_store.save_receipt,
+    )
+    sentinel = SentinelService(
+        providers,
+        stack.model_catalog,
+        stack.http_client,
+        stack.sentinel_store,
+        timeout_seconds=min(resolved_settings.request_timeout_seconds, 45.0),
+    )
     diagnosis = EndpointDiagnosisService(
         providers,
         stack.model_catalog,
@@ -136,4 +156,5 @@ async def build_app_services(settings: Settings | None = None) -> AppServices:
         endpoint_diagnosis=diagnosis,
         background_endpoint_diagnosis=background,
         benchmark_research=benchmark_research,
+        sentinel=sentinel,
     )
