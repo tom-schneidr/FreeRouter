@@ -63,6 +63,13 @@ export type ModelRoute = {
   rank_source: string;
   health?: RouteHealth;
   usage?: RouteUsage;
+  tool_reliability?: {
+    score: number;
+    successes: number;
+    failures: number;
+    observations: number;
+    last_observed_at: number | null;
+  };
 };
 
 export type ModelsListResponse = {

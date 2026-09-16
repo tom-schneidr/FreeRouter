@@ -29,8 +29,11 @@ def responses_payload_to_chat(payload: dict[str, Any]) -> dict[str, Any]:
         "model": model,
         "messages": messages,
     }
-    if "previous_response_id" in payload:
-        chat_payload["previous_response_id"] = payload["previous_response_id"]
+    if payload.get("previous_response_id") is not None:
+        raise ValueError(
+            "previous_response_id is not supported by the chat-completions adapter; "
+            "include the prior response items in 'input'"
+        )
     for key in (
         "temperature",
         "top_p",
@@ -126,6 +129,9 @@ class ResponsesStreamMapper:
         self.message_started = False
         self.text_parts: list[str] = []
         self.tool_calls: dict[int, dict[str, Any]] = {}
+        self.finish_reason: str | None = None
+        self.terminal = False
+        self.failed = False
 
     def events_from_openai_sse(self, event_block: str) -> list[str]:
         payload = _event_block_data_payload(event_block)
@@ -134,7 +140,46 @@ class ResponsesStreamMapper:
         if not isinstance(payload, dict):
             return []
 
+        upstream_error = payload.get("error")
+        if isinstance(upstream_error, dict):
+            if self.terminal:
+                return []
+            self.terminal = True
+            self.failed = True
+            message = upstream_error.get("message")
+            code = upstream_error.get("code")
+            error_type = upstream_error.get("type")
+            return [
+                self._event(
+                    "response.failed",
+                    {
+                        "type": "response.failed",
+                        "response": {
+                            "id": self.response_id,
+                            "object": "response",
+                            "status": "failed",
+                            "error": {
+                                "type": error_type
+                                if isinstance(error_type, str)
+                                else "provider_error",
+                                "code": code if isinstance(code, str) else "provider_error",
+                                "message": (
+                                    message
+                                    if isinstance(message, str)
+                                    else "The upstream model stream failed."
+                                ),
+                            },
+                        },
+                    },
+                )
+            ]
+
         events: list[str] = []
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            finish_reason = choices[0].get("finish_reason")
+            if isinstance(finish_reason, str):
+                self.finish_reason = finish_reason
         delta = _delta_visible_text_from_chunk(payload)
         if delta:
             events.extend(self._text_delta_events(delta))
@@ -212,23 +257,50 @@ class ResponsesStreamMapper:
             state = self.tool_calls.setdefault(
                 index,
                 {
-                    "id": chunk.get("id") if isinstance(chunk.get("id"), str) else "",
+                    "id": (
+                        chunk.get("id")
+                        if isinstance(chunk.get("id"), str) and chunk.get("id")
+                        else f"call_{uuid.uuid4().hex}"
+                    ),
                     "name": "",
                     "arguments": "",
+                    "pending_arguments": [],
                     "started": False,
                     "output_index": None,
                 },
             )
-            if isinstance(chunk.get("id"), str):
+            # Once an item has been exposed its ID is immutable. Some providers
+            # send arguments before metadata, so use the generated ID in that
+            # case instead of changing identity halfway through the stream.
+            if isinstance(chunk.get("id"), str) and chunk.get("id") and not state["started"]:
                 state["id"] = chunk["id"]
             function = chunk.get("function")
             if isinstance(function, dict):
                 if isinstance(function.get("name"), str):
                     state["name"] += function["name"]
                 arguments = function.get("arguments")
-                if isinstance(arguments, str):
-                    state["arguments"] += arguments
-                    events.extend(self._function_call_argument_delta_events(index, state, arguments))
+                argument_delta = _canonical_tool_arguments(arguments, default="")
+                if argument_delta:
+                    state["arguments"] += argument_delta
+                    if state["started"]:
+                        events.extend(
+                            self._function_call_argument_delta_events(index, state, argument_delta)
+                        )
+                    else:
+                        state["pending_arguments"].append(argument_delta)
+                if not state["started"] and state["name"]:
+                    events.extend(self._start_function_call_events(index, state))
+        return events
+
+    def _start_function_call_events(
+        self,
+        index: int,
+        state: dict[str, Any],
+    ) -> list[str]:
+        events = self._function_call_argument_delta_events(index, state, "")
+        for pending in state["pending_arguments"]:
+            events.extend(self._function_call_argument_delta_events(index, state, pending))
+        state["pending_arguments"].clear()
         return events
 
     def _function_call_argument_delta_events(
@@ -241,9 +313,7 @@ class ResponsesStreamMapper:
         if not state["started"]:
             state["started"] = True
             state["output_index"] = (1 if self.message_started else 0) + sum(
-                1
-                for call in self.tool_calls.values()
-                if call is not state and call.get("started")
+                1 for call in self.tool_calls.values() if call is not state and call.get("started")
             )
             item = _function_call_output_item(state)
             events.append(
@@ -271,6 +341,9 @@ class ResponsesStreamMapper:
         return events
 
     def _completion_events(self) -> list[str]:
+        if self.terminal:
+            return []
+        self.terminal = True
         events: list[str] = []
         if self.message_started:
             text = "".join(self.text_parts)
@@ -320,6 +393,29 @@ class ResponsesStreamMapper:
                     },
                 )
             )
+
+        invalid_reason = self._invalid_tool_stream_reason()
+        if invalid_reason is not None:
+            self.failed = True
+            events.append(
+                self._event(
+                    "response.failed",
+                    {
+                        "type": "response.failed",
+                        "response": {
+                            "id": self.response_id,
+                            "object": "response",
+                            "status": "failed",
+                            "error": {
+                                "type": "invalid_tool_call",
+                                "code": "invalid_tool_call",
+                                "message": invalid_reason,
+                            },
+                        },
+                    },
+                )
+            )
+            return events
 
         base_index = 1 if self.message_started else 0
         for offset, call in enumerate(self.tool_calls.values()):
@@ -375,6 +471,23 @@ class ResponsesStreamMapper:
         )
         return events
 
+    def _invalid_tool_stream_reason(self) -> str | None:
+        if self.finish_reason == "tool_calls" and not self.tool_calls:
+            return "The upstream stream ended with tool_calls but contained no tool call"
+        for index, call in self.tool_calls.items():
+            if not isinstance(call.get("name"), str) or not call["name"]:
+                return f"Tool call at index {index} ended without a function name"
+            arguments = call.get("arguments")
+            if not isinstance(arguments, str) or not arguments:
+                return f"Tool call at index {index} ended without arguments"
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError:
+                return f"Tool call at index {index} ended with malformed JSON arguments"
+            if not isinstance(parsed, dict):
+                return f"Tool call at index {index} arguments must decode to an object"
+        return None
+
     def _event(self, event: str, payload: dict[str, Any]) -> str:
         self.sequence_number += 1
         payload["sequence_number"] = self.sequence_number
@@ -413,8 +526,8 @@ def _responses_input_to_messages(input_value: Any) -> list[dict[str, Any]]:
         item_type = item.get("type")
         if item_type == "function_call_output":
             call_id = item.get("call_id")
-            if not isinstance(call_id, str):
-                raise ValueError(f"input[{index}].call_id must be a string")
+            if not isinstance(call_id, str) or not call_id:
+                raise ValueError(f"input[{index}].call_id must be a non-empty string")
             messages.append(
                 {
                     "role": "tool",
@@ -483,7 +596,9 @@ def _assistant_text_from_chat_body(body: dict[str, Any]) -> str:
     return text if isinstance(text, str) else ""
 
 
-def _response_output_from_chat_body(chat_body: dict[str, Any], *, text: str) -> list[dict[str, Any]]:
+def _response_output_from_chat_body(
+    chat_body: dict[str, Any], *, text: str
+) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     if text:
         output.append(
@@ -548,7 +663,7 @@ def _chat_tool_call_to_response_item(tool_call: dict[str, Any]) -> dict[str, Any
         "status": "completed",
         "call_id": call_id,
         "name": name if isinstance(name, str) else "",
-        "arguments": arguments if isinstance(arguments, str) else "{}",
+        "arguments": _canonical_tool_arguments(arguments),
     }
 
 
@@ -564,7 +679,7 @@ def _function_call_output_item(call: dict[str, Any]) -> dict[str, Any]:
         "status": "completed",
         "call_id": call_id,
         "name": name if isinstance(name, str) else "",
-        "arguments": arguments if isinstance(arguments, str) else "{}",
+        "arguments": _canonical_tool_arguments(arguments),
     }
 
 
@@ -628,15 +743,19 @@ def _responses_text_format_to_chat(format_value: Any) -> Any:
 def _responses_tool_output_to_text(output: Any) -> str:
     if isinstance(output, str):
         return output
-    return json.dumps(output)
+    return json.dumps(output, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _responses_function_call_to_chat_message(item: dict[str, Any]) -> dict[str, Any]:
     call_id = item.get("call_id") or item.get("id")
-    if not isinstance(call_id, str):
-        call_id = f"call_{uuid.uuid4().hex}"
+    if not isinstance(call_id, str) or not call_id:
+        raise ValueError("function_call.call_id must be a non-empty string")
     name = item.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("function_call.name must be a non-empty string")
     arguments = item.get("arguments")
+    if not isinstance(arguments, (str, dict)):
+        raise ValueError("function_call.arguments must be a JSON string or object")
     return {
         "role": "assistant",
         "content": None,
@@ -645,12 +764,25 @@ def _responses_function_call_to_chat_message(item: dict[str, Any]) -> dict[str, 
                 "id": call_id,
                 "type": "function",
                 "function": {
-                    "name": name if isinstance(name, str) else "",
-                    "arguments": arguments if isinstance(arguments, str) else "{}",
+                    "name": name,
+                    "arguments": _canonical_tool_arguments(arguments),
                 },
             }
         ],
     }
+
+
+def _canonical_tool_arguments(arguments: Any, *, default: str = "{}") -> str:
+    if isinstance(arguments, str):
+        return arguments
+    if isinstance(arguments, dict):
+        return json.dumps(
+            arguments,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    return default
 
 
 def _responses_usage_from_chat_usage(usage: Any) -> dict[str, Any] | None:

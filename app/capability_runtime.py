@@ -8,9 +8,7 @@ from app.providers.base import ProviderError
 from app.tool_use_validation import (
     evaluate_tool_use_outcome,
     payload_requires_function_tools,
-    response_fakes_tool_use_in_text,
     response_has_valid_function_tool_calls,
-    tool_use_response_mandatory,
 )
 
 
@@ -27,7 +25,12 @@ def adjust_capabilities_from_traffic(
     response_body: dict[str, Any] | None = None,
     error: ProviderError | None = None,
 ) -> None:
-    """Promote or demote capability claims from real request outcomes."""
+    """Update transport capability from decisive real request outcomes.
+
+    Behavioral misses and malformed generations are tracked separately by the
+    route reliability store. A single model miss must not erase previously
+    confirmed transport support.
+    """
     if "tool-use" not in required_capabilities and not payload_requires_function_tools(payload):
         return
 
@@ -53,16 +56,6 @@ def adjust_capabilities_from_traffic(
         )
         return
 
-    if outcome == "unsupported":
-        if response_fakes_tool_use_in_text(response_body):
-            evidence = "Assistant returned prose/JSON instead of tool_calls"
-        elif tool_use_response_mandatory(payload):
-            evidence = "Function tools required but response had no valid tool_calls"
-        else:
-            evidence = "Invalid tool-use response"
-        catalog.note_runtime_capability(
-            route_id,
-            "tool-use",
-            status="unsupported",
-            evidence=evidence,
-        )
+    # Unsupported model output is intentionally not a transport-capability
+    # demotion. Repeated typed failures lower request-conditioned reliability;
+    # only an explicit upstream "tools unsupported" error removes eligibility.

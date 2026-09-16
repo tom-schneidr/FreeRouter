@@ -21,6 +21,16 @@ async def models(request: Request) -> dict[str, Any]:
     services = get_app_services(request)
     catalog = services.model_catalog
     created = int(time())
+    enabled_routes = catalog.enabled_routes()
+    gateway_supports_tools = any(
+        "tool-use" in route.tags
+        or (
+            settings.routing_allow_unconfirmed_tool_use_fallback
+            and (claim := route.capabilities.get("tool-use")) is not None
+            and claim.status == "supported"
+        )
+        for route in enabled_routes
+    )
     return {
         "object": "list",
         "data": [
@@ -29,6 +39,16 @@ async def models(request: Request) -> dict[str, Any]:
                 "object": "model",
                 "created": created,
                 "owned_by": "freerouter",
+                "capabilities": {
+                    "chat_completions": True,
+                    "streaming": True,
+                    "tools": gateway_supports_tools,
+                },
+                "supported_parameters": (
+                    ["messages", "stream", "tools", "tool_choice", "parallel_tool_calls"]
+                    if gateway_supports_tools
+                    else ["messages", "stream"]
+                ),
             }
         ]
         + [
@@ -37,8 +57,18 @@ async def models(request: Request) -> dict[str, Any]:
                 "object": "model",
                 "created": created,
                 "owned_by": route.provider_name,
+                "capabilities": {
+                    "chat_completions": True,
+                    "streaming": True,
+                    "tools": "tool-use" in route.tags,
+                },
+                "supported_parameters": (
+                    ["messages", "stream", "tools", "tool_choice", "parallel_tool_calls"]
+                    if "tool-use" in route.tags
+                    else ["messages", "stream"]
+                ),
             }
-            for route in catalog.enabled_routes()
+            for route in enabled_routes
         ],
     }
 

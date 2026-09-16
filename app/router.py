@@ -21,11 +21,17 @@ from app.routing_policy import (
     static_route_skip_reason,
 )
 from app.state import Availability, StateManager
+from app.tool_reliability import (
+    tool_failure_outcome_category,
+    tool_request_fingerprint,
+    tool_route_sort_key,
+)
 from app.tool_use_validation import (
     evaluate_tool_use_outcome,
     payload_requires_function_tools,
     response_promises_action_in_text,
     tool_loop_already_started,
+    validate_and_normalize_tool_response,
 )
 from app.waterfall_resilience import (
     MAX_WATERFALL_PASSES,
@@ -42,9 +48,7 @@ class UnsupportedCapabilities(RuntimeError):
         self.required = required
         self.requested_model = requested_model
         caps = _display_capabilities(required)
-        super().__init__(
-            f"No enabled route supports all required capabilities: {', '.join(caps)}"
-        )
+        super().__init__(f"No enabled route supports all required capabilities: {', '.join(caps)}")
 
 
 def _display_capabilities(required: frozenset[str]) -> list[str]:
@@ -408,8 +412,11 @@ class WaterfallRouter:
         rate_limit_probed_routes: set[str] = set()
         exhausted_routes: dict[str, str] = {}
 
-        resolved_requirements = self._route_requirements(requirements or chat_request_requirements(payload))
+        resolved_requirements = self._route_requirements(
+            requirements or chat_request_requirements(payload)
+        )
         required_capabilities = resolved_requirements.required_capabilities
+        request_tool_fingerprint = tool_request_fingerprint(payload)
         requested_model = payload.get("model")
         routes_list = enabled_routes_for_request(
             self.model_catalog,
@@ -422,6 +429,15 @@ class WaterfallRouter:
             raise UnsupportedCapabilities(
                 required_capabilities,
                 requested_model if isinstance(requested_model, str) else None,
+            )
+        if "tool-use" in required_capabilities:
+            reliability = await self.state.get_route_tool_reliability(
+                [route.route_id for route in routes_list],
+                request_fingerprint=request_tool_fingerprint,
+            )
+            routes_list.sort(
+                key=lambda route: tool_route_sort_key(route, reliability.get(route.route_id)),
+                reverse=True,
             )
         prefetch_provider_names = configured_provider_names(
             routes_list,
@@ -645,6 +661,14 @@ class WaterfallRouter:
                     )
                     continue
                 except httpx.TimeoutException:
+                    if request_tool_fingerprint is not None:
+                        await self.state.record_route_tool_outcome(
+                            route.route_id,
+                            provider.name,
+                            route.model_id,
+                            "stream_error",
+                            request_fingerprint=request_tool_fingerprint,
+                        )
                     timeout_state = await self.state.mark_route_timeout(
                         route.route_id,
                         provider.name,
@@ -683,6 +707,14 @@ class WaterfallRouter:
                         )
                     continue
                 except httpx.RequestError as exc:
+                    if request_tool_fingerprint is not None:
+                        await self.state.record_route_tool_outcome(
+                            route.route_id,
+                            provider.name,
+                            route.model_id,
+                            "stream_error",
+                            request_fingerprint=request_tool_fingerprint,
+                        )
                     attempt = ProviderAttempt(
                         provider.name,
                         "failed",
@@ -700,6 +732,17 @@ class WaterfallRouter:
                     )
                     continue
                 except ProviderError as exc:
+                    if request_tool_fingerprint is not None and (
+                        exc.status_code == 400
+                        or (exc.status_code is not None and exc.status_code >= 500)
+                    ):
+                        await self.state.record_route_tool_outcome(
+                            route.route_id,
+                            provider.name,
+                            route.model_id,
+                            "provider_rejected" if exc.status_code == 400 else "stream_error",
+                            request_fingerprint=request_tool_fingerprint,
+                        )
                     if exc.status_code is not None and 500 <= exc.status_code < 600:
                         attempt = ProviderAttempt(
                             provider.name,
@@ -854,6 +897,14 @@ class WaterfallRouter:
                     continue
 
                 if payload_requires_function_tools(payload):
+                    continuing_tool_loop = tool_loop_already_started(payload)
+                    tool_validation = validate_and_normalize_tool_response(payload, response.body)
+                    response = ProviderResponse(
+                        provider_name=response.provider_name,
+                        status_code=response.status_code,
+                        headers=response.headers,
+                        body=tool_validation.normalized_body,
+                    )
                     tool_outcome = evaluate_tool_use_outcome(
                         payload,
                         response.body,
@@ -865,14 +916,21 @@ class WaterfallRouter:
                             and not tool_loop_already_started(payload)
                             and response_promises_action_in_text(response.body)
                         )
-                        if not promise_rejected:
-                            adjust_capabilities_from_traffic(
-                                self.model_catalog,
-                                route_id=route.route_id,
-                                required_capabilities=required_capabilities,
-                                payload=payload,
-                                response_body=response.body,
+                        if promise_rejected:
+                            failure_category = "action_promise"
+                        elif tool_validation.failures:
+                            failure_category = tool_failure_outcome_category(
+                                tool_validation.failures[0].category
                             )
+                        else:
+                            failure_category = "malformed_call"
+                        await self.state.record_route_tool_outcome(
+                            route.route_id,
+                            provider.name,
+                            route.model_id,
+                            failure_category,
+                            request_fingerprint=request_tool_fingerprint,
+                        )
                         attempt = ProviderAttempt(
                             provider.name,
                             "failed",
@@ -893,6 +951,23 @@ class WaterfallRouter:
                             status_code=response.status_code,
                         )
                         continue
+
+                    if tool_outcome == "supported":
+                        await self.state.record_route_tool_outcome(
+                            route.route_id,
+                            provider.name,
+                            route.model_id,
+                            "continuation_success" if continuing_tool_loop else "valid_call",
+                            request_fingerprint=request_tool_fingerprint,
+                        )
+                    elif continuing_tool_loop:
+                        await self.state.record_route_tool_outcome(
+                            route.route_id,
+                            provider.name,
+                            route.model_id,
+                            "continuation_success",
+                            request_fingerprint=request_tool_fingerprint,
+                        )
 
                 adjust_capabilities_from_traffic(
                     self.model_catalog,
@@ -1005,6 +1080,13 @@ def validate_chat_completion_payload(payload: dict[str, Any]) -> None:
     messages = payload.get("messages")
     if not isinstance(messages, list) or not messages:
         raise ValueError("Request body must include a non-empty 'messages' array")
+    declared_function_names = _validate_function_tool_definitions(payload.get("tools"))
+    requested_choices = payload.get("n", 1)
+    if declared_function_names and requested_choices != 1:
+        raise ValueError("Tool-use requests currently require n=1")
+    _validate_request_tool_choice(payload.get("tool_choice"), declared_function_names, payload)
+    known_call_ids: set[str] = set()
+    resolved_call_ids: set[str] = set()
     valid_roles = {"system", "developer", "user", "assistant", "tool"}
     for index, message in enumerate(messages):
         if not isinstance(message, dict):
@@ -1016,6 +1098,13 @@ def validate_chat_completion_payload(payload: dict[str, Any]) -> None:
             raise ValueError(
                 f"messages[{index}].role must be one of: assistant, developer, system, tool, user"
             )
+        _validate_tool_history_message(
+            message,
+            index=index,
+            known_call_ids=known_call_ids,
+            resolved_call_ids=resolved_call_ids,
+            declared_function_names=declared_function_names,
+        )
         if "content" not in message:
             if role == "assistant" and isinstance(message.get("tool_calls"), list):
                 continue
@@ -1037,3 +1126,127 @@ def validate_chat_completion_payload(payload: dict[str, Any]) -> None:
                     )
             continue
         raise ValueError(f"messages[{index}].content must be a string or array")
+
+
+def _validate_function_tool_definitions(tools: Any) -> set[str]:
+    if tools is None:
+        return set()
+    if not isinstance(tools, list):
+        raise ValueError("tools must be an array")
+    names: set[str] = set()
+    for index, tool in enumerate(tools):
+        if not isinstance(tool, dict):
+            raise ValueError(f"tools[{index}] must be an object")
+        if tool.get("type") != "function":
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            raise ValueError(f"tools[{index}].function must be an object")
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"tools[{index}].function.name must be a non-empty string")
+        if name in names:
+            raise ValueError(f"Duplicate function tool name: {name}")
+        names.add(name)
+        parameters = function.get("parameters")
+        if parameters is not None and not isinstance(parameters, dict):
+            raise ValueError(f"tools[{index}].function.parameters must be an object")
+    return names
+
+
+def _validate_request_tool_choice(
+    tool_choice: Any,
+    declared_function_names: set[str],
+    payload: dict[str, Any],
+) -> None:
+    tools = payload.get("tools")
+    has_any_tools = isinstance(tools, list) and bool(tools)
+    if tool_choice in (None, "none"):
+        return
+    if isinstance(tool_choice, str):
+        if tool_choice not in {"auto", "required"}:
+            raise ValueError(f"Unsupported tool_choice: {tool_choice}")
+        if not has_any_tools:
+            raise ValueError("tool_choice requires at least one tool definition")
+        return
+    if not isinstance(tool_choice, dict):
+        raise ValueError("tool_choice must be a string or object")
+    if tool_choice.get("type") != "function":
+        return
+    function = tool_choice.get("function")
+    name = function.get("name") if isinstance(function, dict) else tool_choice.get("name")
+    if not isinstance(name, str) or name not in declared_function_names:
+        raise ValueError("tool_choice references an undeclared function")
+
+
+def _validate_tool_history_message(
+    message: dict[str, Any],
+    *,
+    index: int,
+    known_call_ids: set[str],
+    resolved_call_ids: set[str],
+    declared_function_names: set[str],
+) -> None:
+    role = message.get("role")
+    if role == "assistant" and "tool_calls" in message:
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list) or not calls:
+            raise ValueError(f"messages[{index}].tool_calls must be a non-empty array")
+        for call_index, call in enumerate(calls):
+            if not isinstance(call, dict):
+                raise ValueError(f"messages[{index}].tool_calls[{call_index}] must be an object")
+            call_id = call.get("id")
+            if not isinstance(call_id, str) or not call_id.strip():
+                raise ValueError(
+                    f"messages[{index}].tool_calls[{call_index}].id must be a non-empty string"
+                )
+            if call_id in known_call_ids:
+                raise ValueError(f"Duplicate tool call id in history: {call_id}")
+            if call.get("type") != "function":
+                raise ValueError(
+                    f"messages[{index}].tool_calls[{call_index}].type must be 'function'"
+                )
+            function = call.get("function")
+            if not isinstance(function, dict):
+                raise ValueError(
+                    f"messages[{index}].tool_calls[{call_index}].function must be an object"
+                )
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(
+                    f"messages[{index}].tool_calls[{call_index}].function.name "
+                    "must be a non-empty string"
+                )
+            if declared_function_names and name not in declared_function_names:
+                raise ValueError(
+                    f"messages[{index}].tool_calls[{call_index}] references undeclared function: {name}"
+                )
+            arguments = function.get("arguments")
+            if not isinstance(arguments, str):
+                raise ValueError(
+                    f"messages[{index}].tool_calls[{call_index}].function.arguments "
+                    "must be a JSON string"
+                )
+            try:
+                parsed_arguments = json.loads(arguments)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"messages[{index}].tool_calls[{call_index}].function.arguments "
+                    "must contain valid JSON"
+                ) from exc
+            if not isinstance(parsed_arguments, dict):
+                raise ValueError(
+                    f"messages[{index}].tool_calls[{call_index}].function.arguments "
+                    "must decode to an object"
+                )
+            known_call_ids.add(call_id)
+    if role != "tool":
+        return
+    call_id = message.get("tool_call_id")
+    if not isinstance(call_id, str) or not call_id.strip():
+        raise ValueError(f"messages[{index}].tool_call_id must be a non-empty string")
+    if call_id not in known_call_ids:
+        raise ValueError(f"messages[{index}] references unknown tool_call_id: {call_id}")
+    if call_id in resolved_call_ids:
+        raise ValueError(f"Duplicate tool result for tool_call_id: {call_id}")
+    resolved_call_ids.add(call_id)

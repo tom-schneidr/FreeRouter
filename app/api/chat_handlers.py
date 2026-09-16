@@ -40,6 +40,7 @@ from app.router import (
 )
 from app.settings import get_settings
 from app.state import StateManager
+from app.tool_reliability import route_tool_reliability_score
 from app.tool_use_validation import ROUTING_SSE_KEEPALIVE
 from app.web_search_payload import payload_with_required_web_search
 
@@ -176,9 +177,23 @@ async def _catalog_payload_with_health(
         for route_payload in payload["data"]
     ]
     health_map = await state.get_route_states_batch(route_rows)
+    reliability_map = await state.get_route_tool_reliability(
+        [route_id for route_id, _, _ in route_rows]
+    )
+    catalog_routes = {route.route_id: route for route in catalog.all_routes()}
     for route_payload in payload["data"]:
-        route_state = health_map[route_payload["route_id"]]
+        route_id = route_payload["route_id"]
+        route_state = health_map[route_id]
         route_payload["health"] = asdict(route_state)
+        route = catalog_routes[route_id]
+        snapshot = reliability_map.get(route_id)
+        route_payload["tool_reliability"] = {
+            "score": round(route_tool_reliability_score(route, snapshot), 6),
+            "successes": snapshot.successes if snapshot is not None else 0,
+            "failures": snapshot.failures if snapshot is not None else 0,
+            "observations": snapshot.observations if snapshot is not None else 0,
+            "last_observed_at": snapshot.last_observed_at if snapshot is not None else None,
+        }
     return payload
 
 
@@ -280,9 +295,7 @@ async def _publish_route_stream_diag(
         if diag.route_tags:
             route_event["route_tags"] = list(diag.route_tags)
         if diag.required_capabilities:
-            route_event["required_capabilities"] = _display_capabilities(
-                diag.required_capabilities
-            )
+            route_event["required_capabilities"] = _display_capabilities(diag.required_capabilities)
         await monitor.publish(
             event_type="route_attempt",
             request_id=request_id,
@@ -385,10 +398,7 @@ async def _route_chat_completion_stream_request(
                             part.route_id or "",
                             part.model_id or "",
                         )
-                        if (
-                            settings.streaming_release_slot_after_route_selected
-                            and lease.held
-                        ):
+                        if settings.streaming_release_slot_after_route_selected and lease.held:
                             lease.release()
                 else:
                     tracker.record_openai_sse(part)
@@ -449,7 +459,11 @@ async def _route_chat_completion_stream_request(
                 },
             )
             terminal_published = True
-            yield "data: " + json.dumps({"error": {"message": str(exc), "type": "invalid_request"}}) + "\n\n"
+            yield (
+                "data: "
+                + json.dumps({"error": {"message": str(exc), "type": "invalid_request"}})
+                + "\n\n"
+            )
         finally:
             lease.release()
             if completed:
@@ -642,9 +656,7 @@ async def _route_chat_completion_request(
                 "route_id": result.route_id,
                 "model_id": result.model_id,
                 "attempts": len(result.attempts),
-                "usage": response_body.get("usage")
-                if isinstance(response_body, dict)
-                else None,
+                "usage": response_body.get("usage") if isinstance(response_body, dict) else None,
                 "attempts_detail": [asdict(attempt) for attempt in result.attempts],
                 "assistant_text": _assistant_text_from_response_body(response_body),
                 "response_body": response_body,
@@ -724,6 +736,7 @@ async def _route_responses_stream_request(
     async def responses_sse_stream():
         carry = ""
         completed = False
+        failed = False
         terminal_published = False
         mapper = ResponsesStreamMapper(response_id=response_id)
         try:
@@ -758,24 +771,41 @@ async def _route_responses_stream_request(
                 for block in blocks:
                     for event in mapper.events_from_openai_sse(block):
                         yield event
-                        if "response.completed" in event:
-                            completed = True
+                    if mapper.terminal:
+                        completed = True
+                        failed = mapper.failed
             if not completed:
-                yield response_stream_event(
-                    "response.completed",
-                    {
-                        "type": "response.completed",
-                        "response": {
-                            "id": response_id,
-                            "object": "response",
-                            "status": "completed",
+                terminal_events = mapper.events_from_openai_sse("data: [DONE]\n\n")
+                for event in terminal_events:
+                    yield event
+                if mapper.terminal:
+                    completed = True
+                    failed = mapper.failed
+                if not completed:
+                    yield response_stream_event(
+                        "response.failed",
+                        {
+                            "type": "response.failed",
+                            "sequence_number": mapper.sequence_number + 1,
+                            "response": {
+                                "id": response_id,
+                                "object": "response",
+                                "status": "failed",
+                                "error": {
+                                    "type": "incomplete_stream",
+                                    "code": "incomplete_stream",
+                                    "message": "Upstream stream ended without a terminal event.",
+                                },
+                            },
                         },
-                    },
-                )
-                completed = True
+                    )
+                    completed = True
+                    failed = True
             yield responses_stream_done()
         except UnsupportedCapabilities as exc:
             error_body = unsupported_capabilities_error_body(exc)
+            completed = True
+            failed = True
             terminal_published = True
             yield response_stream_event(
                 "response.failed",
@@ -792,6 +822,8 @@ async def _route_responses_stream_request(
             )
             yield responses_stream_done()
         except NoProviderAvailable as exc:
+            completed = True
+            failed = True
             terminal_published = True
             yield response_stream_event(
                 "response.failed",
@@ -813,6 +845,8 @@ async def _route_responses_stream_request(
             )
             yield responses_stream_done()
         except (ProviderError, ValueError) as exc:
+            completed = True
+            failed = True
             terminal_published = True
             yield response_stream_event(
                 "response.failed",
@@ -834,7 +868,18 @@ async def _route_responses_stream_request(
             yield responses_stream_done()
         finally:
             lease.release()
-            if completed:
+            if completed and failed:
+                await monitor.publish(
+                    event_type="request_failed",
+                    request_id=request_id,
+                    payload={
+                        "status_code": 502,
+                        "reason": "stream_failed",
+                        "latency_ms": round((perf_counter() - started_at) * 1000),
+                    },
+                )
+                terminal_published = True
+            elif completed:
                 await monitor.publish(
                     event_type="request_completed",
                     request_id=request_id,

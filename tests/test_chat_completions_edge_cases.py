@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 
 from app.codex_compat import responses_payload_to_chat
 from app.providers.base import ProviderAdapter
@@ -18,7 +19,10 @@ def test_responses_with_instructions_maps_to_system_prompt():
     chat_payload = responses_payload_to_chat(payload)
     assert chat_payload["model"] == "auto"
     assert len(chat_payload["messages"]) == 2
-    assert chat_payload["messages"][0] == {"role": "system", "content": "You are a helpful assistant."}
+    assert chat_payload["messages"][0] == {
+        "role": "system",
+        "content": "You are a helpful assistant.",
+    }
     assert chat_payload["messages"][1] == {"role": "user", "content": "User query"}
 
 
@@ -124,6 +128,94 @@ def test_validate_chat_completion_payload_allows_assistant_tool_call_omitted_con
     }
 
     validate_chat_completion_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected_error"),
+    [
+        (
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": "call_1", "type": "function"}],
+                }
+            ],
+            "function must be an object",
+        ),
+        (
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "other", "arguments": "{}"},
+                        }
+                    ],
+                }
+            ],
+            "undeclared function",
+        ),
+        (
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{"},
+                        }
+                    ],
+                }
+            ],
+            "valid JSON",
+        ),
+        (
+            [{"role": "tool", "tool_call_id": "missing", "content": "ok"}],
+            "unknown tool_call_id",
+        ),
+        (
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "first"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "second"},
+            ],
+            "Duplicate tool result",
+        ),
+    ],
+)
+def test_validate_chat_completion_payload_rejects_malformed_tool_history(
+    messages: list[dict],
+    expected_error: str,
+) -> None:
+    payload = {
+        "model": "auto",
+        "messages": messages,
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {"type": "object"}},
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match=expected_error):
+        validate_chat_completion_payload(payload)
 
 
 async def test_provider_adapter_forwards_logprobs_and_extra_parameters():

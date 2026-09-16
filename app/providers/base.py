@@ -172,7 +172,15 @@ class ProviderAdapter:
                 body=response.text,
             ) from exc
 
-        if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        if not isinstance(body, dict):
+            raise ProviderError(
+                f"{self.name} returned an invalid chat completion payload",
+                status_code=502,
+                headers=response.headers,
+                body=response.text,
+            )
+
+        if isinstance(body.get("error"), dict):
             error = body["error"]
             raw_code = error.get("code")
             status_code = raw_code if isinstance(raw_code, int) else 502
@@ -224,17 +232,12 @@ class ProviderAdapter:
             raise
         except ProviderRateLimited:
             raise
-        except httpx.TimeoutException as exc:
-            raise ProviderError(
-                f"{self.name} streaming request timed out",
-                status_code=504,
-                body=str(exc),
-            ) from exc
-        except httpx.RequestError as exc:
-            raise ProviderError(
-                f"{self.name} streaming request failed: {exc.__class__.__name__}",
-                body=str(exc),
-            ) from exc
+        except httpx.TimeoutException:
+            # Preserve the transport category so the router can apply timeout
+            # health policy instead of treating it as an opaque provider 5xx.
+            raise
+        except httpx.RequestError:
+            raise
 
     def _provider_model(self, requested_model: Any) -> str:
         if not isinstance(requested_model, str) or requested_model in {"", "auto"}:
@@ -248,7 +251,9 @@ def _has_web_search_preview_tool(payload: dict[str, Any]) -> bool:
     tools = payload.get("tools")
     if not isinstance(tools, list):
         return False
-    return any(isinstance(tool, dict) and tool.get("type") == "web_search_preview" for tool in tools)
+    return any(
+        isinstance(tool, dict) and tool.get("type") == "web_search_preview" for tool in tools
+    )
 
 
 def _prepare_groq_web_search_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -287,7 +292,9 @@ def _prepare_openrouter_web_search_payload(payload: dict[str, Any]) -> dict[str,
         for tool in outbound.get("tools", [])
         if not (isinstance(tool, dict) and tool.get("type") == "web_search_preview")
     ]
-    if not any(isinstance(tool, dict) and tool.get("type") == "openrouter:web_search" for tool in tools):
+    if not any(
+        isinstance(tool, dict) and tool.get("type") == "openrouter:web_search" for tool in tools
+    ):
         tools.append({"type": "openrouter:web_search"})
     outbound["tools"] = tools
     return outbound

@@ -12,6 +12,11 @@ import aiosqlite
 from app.state_rules import provider_availability
 from app.state_rules import route_availability as route_availability_rule
 from app.state_types import Availability, ProviderQuota, ProviderState, RouteState
+from app.tool_reliability import (
+    SUCCESS_CATEGORIES,
+    ToolOutcomeCategory,
+    ToolReliabilitySnapshot,
+)
 
 __all__ = [
     "Availability",
@@ -19,6 +24,7 @@ __all__ = [
     "ProviderState",
     "RouteState",
     "StateManager",
+    "ToolReliabilitySnapshot",
 ]
 
 
@@ -126,12 +132,33 @@ class StateManager:
             )
             await db.execute(
                 """
+                CREATE TABLE IF NOT EXISTS route_tool_outcomes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    route_id TEXT NOT NULL,
+                    provider_name TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    success INTEGER NOT NULL,
+                    protocol TEXT NOT NULL DEFAULT 'chat-completions',
+                    request_fingerprint TEXT,
+                    created_at INTEGER NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_route_events_route_created_id
                 ON route_events (route_id, created_at DESC, id DESC)
                 """
             )
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_route_events_route_id ON route_events (route_id)"
+            )
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_route_tool_outcomes_route_created
+                ON route_tool_outcomes (route_id, created_at DESC)
+                """
             )
             today = self._today()
             now = self._now()
@@ -380,6 +407,117 @@ class StateManager:
                     status_code=status_code,
                 )
                 await db.commit()
+
+    async def record_route_tool_outcome(
+        self,
+        route_id: str,
+        provider_name: str,
+        model_id: str,
+        category: ToolOutcomeCategory,
+        *,
+        protocol: str = "chat-completions",
+        request_fingerprint: str | None = None,
+    ) -> None:
+        """Persist one typed tool-turn outcome for request-conditioned ranking."""
+
+        success = 1 if category in SUCCESS_CATEGORIES else 0
+        now = self._now()
+        async with self._route_lock(route_id):
+            async with aiosqlite.connect(self.database_path) as db:
+                await self._configure_connection(db)
+                await db.execute(
+                    """
+                    INSERT INTO route_tool_outcomes (
+                        route_id,
+                        provider_name,
+                        model_id,
+                        category,
+                        success,
+                        protocol,
+                        request_fingerprint,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        route_id,
+                        provider_name,
+                        model_id,
+                        category,
+                        success,
+                        protocol,
+                        request_fingerprint,
+                        now,
+                    ),
+                )
+                # Keep the adaptive history bounded. Ninety days is long enough to
+                # recover confidence while allowing provider/model drift to age out.
+                await db.execute(
+                    "DELETE FROM route_tool_outcomes WHERE created_at < ?",
+                    (now - 90 * 24 * 3600,),
+                )
+                await db.commit()
+
+    async def get_route_tool_reliability(
+        self,
+        route_ids: Sequence[str],
+        *,
+        request_fingerprint: str | None = None,
+    ) -> dict[str, ToolReliabilitySnapshot]:
+        """Return time-decayed evidence, preferring matching tool schemas when known."""
+
+        if not route_ids:
+            return {}
+        placeholders = ",".join("?" for _ in route_ids)
+        now = self._now()
+        day = 24 * 3600
+        async with aiosqlite.connect(self.database_path) as db:
+            await self._configure_connection(db)
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"""
+                SELECT route_id, success, request_fingerprint, created_at
+                FROM route_tool_outcomes
+                WHERE route_id IN ({placeholders})
+                  AND created_at >= ?
+                """,
+                [*route_ids, now - 90 * day],
+            )
+            rows = await cursor.fetchall()
+        exact_routes = {
+            str(row["route_id"])
+            for row in rows
+            if request_fingerprint is not None and row["request_fingerprint"] == request_fingerprint
+        }
+        aggregates: dict[str, list[int | None]] = {}
+        for row in rows:
+            route_id = str(row["route_id"])
+            if route_id in exact_routes and row["request_fingerprint"] != request_fingerprint:
+                continue
+            created_at = int(row["created_at"])
+            weight = (
+                8
+                if created_at >= now - day
+                else 4
+                if created_at >= now - 7 * day
+                else 2
+                if created_at >= now - 30 * day
+                else 1
+            )
+            values = aggregates.setdefault(route_id, [0, 0, None])
+            values[0 if int(row["success"]) else 1] = (
+                int(values[0 if int(row["success"]) else 1] or 0) + weight
+            )
+            previous = values[2]
+            values[2] = created_at if previous is None else max(int(previous), created_at)
+        return {
+            route_id: ToolReliabilitySnapshot(
+                route_id=route_id,
+                successes=int(values[0] or 0),
+                failures=int(values[1] or 0),
+                last_observed_at=int(values[2]) if values[2] is not None else None,
+            )
+            for route_id, values in aggregates.items()
+        }
 
     async def get_route_usage_stats(
         self,
