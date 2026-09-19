@@ -1,17 +1,49 @@
 # FreeRouter
 
-FreeRouter is a local AI routing layer that turns a pile of free-tier provider accounts into one
-reliable, low-maintenance API for agent systems, scripts, and apps.
+[![CI](https://github.com/tom-schneidr/FreeRouter/actions/workflows/ci.yml/badge.svg)](https://github.com/tom-schneidr/FreeRouter/actions/workflows/ci.yml)
 
-Instead of manually choosing and reordering dozens of models, FreeRouter keeps a ranked catalog of
-text-capable models, tries the strongest available route first, tracks provider quotas locally, and
-falls back automatically when a route is rate-limited, slow, stale, or unavailable. It is designed to
-sit underneath workloads like multi-agent simulations where many independent agents may ask for AI
-work at the same time.
+**A free-first local gateway for pooling free-tier LLM capacity into one reliable API.**
 
-It also exposes an OpenAI-style API surface, so many existing clients can use it by changing only
-their base URL. That compatibility is the adapter layer; the main value is automatic routing,
-fallback, quota awareness, endpoint health, and low-touch maintenance across multiple providers.
+FreeRouter is designed around one practical goal: make local AI projects usable without a paid model
+subscription by combining the free quotas of many providers and models. It discovers and presents
+free-tier candidates, lets you accept and rank them, and automatically moves requests across healthy
+routes when one provider is limited or unavailable. The intended result is near-unlimited practical
+capacity for local projects compared with relying on one free endpoint alone.
+
+That capacity is aggregate, not guaranteed: provider quotas, account rules, pricing, model access, and
+availability can change. FreeRouter does not create free inference or promise literally unlimited
+usage. It makes the free capacity that can be found and configured locally easier to use, inspect, and
+combine.
+
+FreeRouter itself runs locally and does not require a hosted subscription. Setup is: run the included
+launcher, add keys only for the free provider accounts you choose, and point your local project at
+`http://localhost:8000/v1`.
+
+Instead of manually choosing and reordering models, FreeRouter keeps a ranked catalog, tracks
+provider quotas locally, and falls back when a route is rate-limited, slow, stale, or unavailable. It
+is designed for local development and agent workloads where many independent requests may arrive at
+the same time.
+
+It exposes a stable client-facing API surface while provider adapters handle upstream differences.
+OpenAI Chat Completions, Responses/Codex, and Anthropic Messages requests are translated into the
+gateway's internal routing path. The current built-in upstream adapters use provider endpoints that
+are OpenAI-compatible; adding a native adapter for a provider with a different protocol is an
+explicit extension point rather than a requirement for clients.
+
+## What this repository demonstrates
+
+- **Reliability engineering:** bounded concurrency, SQLite WAL state, quota reservation, cooldowns,
+  streaming recovery, and structured attempt history.
+- **Protocol engineering:** OpenAI chat completions, Responses, Anthropic Messages, SSE streaming,
+  web-search translation, and function-tool validation.
+- **Policy-aware routing:** capability tags constrain route selection; Sentinel profiles require fresh
+  evidence and fail closed when no route meets the configured contract.
+- **Product delivery:** a React control plane, Tauri desktop shell, backup/restore workflows, and
+  cross-platform launchers.
+
+The project is intentionally local-first. It does not claim provider uptime, production scale, or
+that a route is safe merely because it is listed in the catalog. Provider credentials and upstream
+service behaviour remain external dependencies.
 
 ## Why Use It?
 
@@ -207,9 +239,22 @@ See [docs/sentinel.md](docs/sentinel.md) for the runnable UI, API, doctor, and O
 
 ### Codex CLI
 
-Codex's current custom-provider config expects the Responses wire API. FreeRouter supports that
-through `POST /v1/responses`, which adapts Codex's Responses payloads to the chat-completions router
-internally:
+For a reversible command-based launch that leaves the normal Codex configuration alone, use the
+repository launcher:
+
+```powershell
+.\codex-freerouter.bat start   # FreeRouter model=auto
+.\codex-freerouter.bat normal  # ordinary Codex configuration
+.\codex-freerouter.bat status  # read-only probes
+```
+
+The launcher uses per-process Codex `-c` overrides. It does not edit `~/.codex/config.toml` or
+create a persistent profile. See [docs/codex-freerouter.md](docs/codex-freerouter.md) for the
+safety rules and argument handling.
+
+For the optional lower-level persistent setup, Codex's custom-provider config expects the Responses
+wire API. FreeRouter supports that through `POST /v1/responses`, which adapts Codex's Responses
+payloads to the chat-completions router internally:
 
 ```toml
 # ~/.codex/config.toml
@@ -297,7 +342,7 @@ If another coding agent is integrating with this repository, give it these rules
 |   |-- state.py                # SQLite quota/cooldown/RPM tracker
 |   |-- tray_launcher.py        # Local tray console
 |   `-- providers/
-|       |-- base.py             # OpenAI-compatible provider adapter
+|       |-- base.py             # Provider adapter and upstream protocol boundary
 |       `-- registry.py         # Provider order, quotas, endpoints, models
 |-- data/                       # Runtime SQLite DB and editable model catalog
 |-- tests/                      # Router/state/catalog/discovery/provider tests
@@ -310,6 +355,9 @@ If another coding agent is integrating with this repository, give it these rules
 |-- validate.ps1                # Run local tests and lint
 `-- pyproject.toml              # Python dependencies
 ```
+
+For a short architecture tour, see [docs/architecture.md](docs/architecture.md). Security reporting
+and deployment cautions are in [SECURITY.md](SECURITY.md).
 
 ## Run Locally
 
