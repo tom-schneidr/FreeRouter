@@ -16,6 +16,10 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -p no:cacheprovider
       - run: python -m ruff check .
+      - run: python -m pyright
+      - run: python scripts/check_import_boundaries.py
+      - run: python scripts/check_app_state_access.py
+      - run: python scripts/check_module_sizes.py
 
   frontend:
     runs-on: ubuntu-latest
@@ -29,6 +33,7 @@ jobs:
       - run: npm run typecheck:web
       - run: npm run test:web
       - run: npm run build:web
+      - run: npm audit --omit=dev --audit-level=high
 
   desktop:
     runs-on: ubuntu-latest
