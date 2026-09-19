@@ -1,4 +1,4 @@
-from app.api.stream_monitor import StreamMonitorTracker
+from app.api.stream_monitor import StreamMonitorTracker, monitor_live_value
 from app.router import RouteStreamDiag
 
 
@@ -53,3 +53,17 @@ def test_stream_monitor_tracker_flushes_final_sse_line_without_blank_line() -> N
     payload = tracker.completed_payload(status_code=200, latency_ms=1)
 
     assert payload["assistant_text"] == "tail"
+
+
+def test_monitor_live_value_bounds_accumulated_agent_payloads() -> None:
+    value = {
+        "input": ["x" * 1000 for _ in range(20)],
+        "nested": {"items": ["y" * 1000 for _ in range(20)]},
+    }
+
+    bounded = monitor_live_value(value)
+
+    assert len(bounded["input"]) == 13
+    assert bounded["input"][-1] == "<truncated 8 items>"
+    assert bounded["input"][0].endswith("<truncated 200 chars>")
+    assert bounded["nested"]["items"][0] == "<truncated-depth>"

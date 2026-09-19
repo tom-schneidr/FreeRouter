@@ -755,7 +755,7 @@ async def _route_responses_stream_request(
         completed = False
         failed = False
         terminal_published = False
-        mapper = ResponsesStreamMapper(response_id=response_id)
+        mapper = ResponsesStreamMapper(response_id=response_id, model=requested_model)
         try:
             yield responses_stream_start(response_id=response_id, model=requested_model)
             async for part in normalize_openai_sse_stream(

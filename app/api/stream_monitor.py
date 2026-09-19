@@ -13,8 +13,54 @@ from app.router import (
 from app.tool_call_stream import ToolCallStreamAccumulator
 
 
-def monitor_live_value(value: Any) -> Any:
-    """Pass monitor payloads through without truncation markers for the live UI."""
+def monitor_live_value(
+    value: Any,
+    *,
+    max_string: int = 800,
+    max_items: int = 12,
+    max_depth: int = 3,
+    _depth: int = 0,
+) -> Any:
+    """Bound live-monitor payloads so one long agent turn cannot freeze the history view.
+
+    The monitor is diagnostic metadata, not an archival copy of prompts and responses. Responses
+    requests can contain the complete accumulated agent transcript, so retaining each event's full
+    payload grows quadratically during a stalled client loop.
+    """
+    if _depth >= max_depth:
+        return "<truncated-depth>"
+    if isinstance(value, str):
+        if len(value) <= max_string:
+            return value
+        return value[:max_string] + f"... <truncated {len(value) - max_string} chars>"
+    if isinstance(value, list):
+        items = [
+            monitor_live_value(
+                item,
+                max_string=max_string,
+                max_items=max_items,
+                max_depth=max_depth,
+                _depth=_depth + 1,
+            )
+            for item in value[:max_items]
+        ]
+        if len(value) > max_items:
+            items.append(f"<truncated {len(value) - max_items} items>")
+        return items
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= max_items:
+                out["__truncated__"] = f"{len(value) - max_items} keys omitted"
+                break
+            out[str(key)] = monitor_live_value(
+                item,
+                max_string=max_string,
+                max_items=max_items,
+                max_depth=max_depth,
+                _depth=_depth + 1,
+            )
+        return out
     return value
 
 

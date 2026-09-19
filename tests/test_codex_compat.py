@@ -8,6 +8,7 @@ from app.codex_compat import (
     ResponsesStreamMapper,
     chat_body_to_response,
     responses_payload_to_chat,
+    responses_stream_done,
 )
 
 
@@ -267,8 +268,23 @@ def test_responses_stream_delta_from_openai_sse_maps_text_delta():
     assert any('"delta": "hi"' in event for event in events)
 
 
+def test_responses_stream_completed_event_contains_final_output():
+    mapper = ResponsesStreamMapper(response_id="resp_text", model="auto")
+    mapper.events_from_openai_sse(
+        'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'
+    )
+
+    completed = "".join(mapper.events_from_openai_sse("data: [DONE]"))
+
+    assert '"type": "response.completed"' in completed
+    assert '"output_text": "hello"' in completed
+    assert '"type": "message"' in completed
+    assert '"text": "hello"' in completed
+    assert responses_stream_done() == ""
+
+
 def test_responses_stream_mapper_emits_tool_call_argument_deltas_and_done():
-    mapper = ResponsesStreamMapper(response_id="resp_test")
+    mapper = ResponsesStreamMapper(response_id="resp_test", model="auto")
     block = "data: " + json.dumps(
         {
             "choices": [
@@ -303,6 +319,8 @@ def test_responses_stream_mapper_emits_tool_call_argument_deltas_and_done():
     assert '"type": "function_call"' in done_events
     assert '"call_id": "call_1"' in done_events
     assert '"arguments": "{\\"cmd\\":\\"pwd\\"}"' in done_events
+    assert '"output":' in done_events
+    assert '"status": "completed"' in done_events
 
 
 def test_responses_stream_mapper_waits_for_metadata_and_keeps_one_call_id():

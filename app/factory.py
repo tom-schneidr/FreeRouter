@@ -100,7 +100,9 @@ async def build_app_services(settings: Settings | None = None) -> AppServices:
         resolved_settings.request_queue_max_waiting_requests,
     )
     monitor = APILiveMonitor(
-        max_events=1000,
+        # The UI retains at most 250 request rows. Keeping the event ring at the same
+        # bound prevents one long agent transcript from making the snapshot unbounded.
+        max_events=250,
         receipt_sink=stack.sentinel_store.save_receipt,
     )
     sentinel = SentinelService(

@@ -122,13 +122,16 @@ def responses_stream_start(*, response_id: str, model: Any) -> str:
 
 
 class ResponsesStreamMapper:
-    def __init__(self, *, response_id: str) -> None:
+    def __init__(self, *, response_id: str, model: Any = "auto") -> None:
         self.response_id = response_id
+        self.model = resolved_request_model(model)
         self.message_id = f"msg_{response_id.removeprefix('resp_')}"
         self.sequence_number = 0
         self.message_started = False
         self.text_parts: list[str] = []
         self.tool_calls: dict[int, dict[str, Any]] = {}
+        self.output_items: dict[int, dict[str, Any]] = {}
+        self.usage: dict[str, Any] | None = None
         self.finish_reason: str | None = None
         self.terminal = False
         self.failed = False
@@ -139,6 +142,10 @@ class ResponsesStreamMapper:
             return self._completion_events()
         if not isinstance(payload, dict):
             return []
+
+        usage = _responses_usage_from_chat_usage(payload.get("usage"))
+        if usage is not None:
+            self.usage = usage
 
         upstream_error = payload.get("error")
         if isinstance(upstream_error, dict):
@@ -190,6 +197,13 @@ class ResponsesStreamMapper:
         events: list[str] = []
         if not self.message_started:
             self.message_started = True
+            self.output_items[0] = {
+                "id": self.message_id,
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            }
             events.append(
                 self._event(
                     "response.output_item.added",
@@ -347,6 +361,19 @@ class ResponsesStreamMapper:
         events: list[str] = []
         if self.message_started:
             text = "".join(self.text_parts)
+            self.output_items[0] = {
+                "id": self.message_id,
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": text,
+                        "annotations": [],
+                    }
+                ],
+            }
             events.append(
                 self._event(
                     "response.output_text.done",
@@ -423,6 +450,7 @@ class ResponsesStreamMapper:
             output_index = call["output_index"]
             if not isinstance(output_index, int):
                 output_index = base_index + offset
+            self.output_items[output_index] = item
             if not call["started"]:
                 events.append(
                     self._event(
@@ -465,6 +493,13 @@ class ResponsesStreamMapper:
                         "id": self.response_id,
                         "object": "response",
                         "status": "completed",
+                        "model": self.model,
+                        "output": [
+                            self.output_items[index]
+                            for index in sorted(self.output_items)
+                        ],
+                        "output_text": "".join(self.text_parts),
+                        "usage": self.usage,
                     },
                 },
             )
@@ -507,7 +542,8 @@ def responses_stream_delta_from_openai_sse(
 
 
 def responses_stream_done() -> str:
-    return "data: [DONE]\n\n"
+    """Responses streams terminate with response.completed, not Chat Completions [DONE]."""
+    return ""
 
 
 def _responses_input_to_messages(input_value: Any) -> list[dict[str, Any]]:
