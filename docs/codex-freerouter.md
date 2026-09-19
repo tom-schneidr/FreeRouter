@@ -7,11 +7,12 @@ OpenAI-compatible Responses endpoint without modifying the normal Codex configur
 .\codex-freerouter.bat start
 ```
 
-That command starts Codex with `model = "auto"`, provider `freerouter`, and
-`http://127.0.0.1:8000/v1` by default. Set `FREEROUTER_BASE_URL` in the launching shell to use
-another FreeRouter instance. The launcher supplies a temporary `FREEROUTER_API_KEY=sk-local` only
-when the child process does not already have one; it restores the parent process environment after
-Codex exits.
+That command starts the latest release desktop executable when the local gateway is not already
+healthy, waits for `http://127.0.0.1:8000/v1` to respond, and then starts Codex with
+`model = "auto"` and provider `freerouter`. Set `FREEROUTER_BASE_URL` in the launching shell to use
+another FreeRouter instance; custom endpoints are not started by the launcher. The launcher supplies
+a temporary `FREEROUTER_API_KEY=sk-local` only when the child process does not already have one; it
+restores the parent process environment after Codex exits.
 
 Return to the ordinary Codex path with:
 

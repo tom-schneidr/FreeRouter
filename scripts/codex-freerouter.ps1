@@ -29,6 +29,63 @@ function Get-FreeRouterBaseUrl {
     return $baseUrl
 }
 
+function Get-FreeRouterProjectRoot {
+    return (Split-Path -Parent $PSScriptRoot)
+}
+
+function Get-FreeRouterDesktopExecutable {
+    $desktopExecutable = Join-Path (Get-FreeRouterProjectRoot) "apps\desktop\src-tauri\target\release\freerouter_desktop.exe"
+    if (-not (Test-Path -LiteralPath $desktopExecutable -PathType Leaf)) {
+        throw "The latest FreeRouter desktop executable was not found at '$desktopExecutable'. Build the release desktop app first."
+    }
+    return (Get-Item -LiteralPath $desktopExecutable).FullName
+}
+
+function Test-FreeRouterHealth([string]$BaseUrl) {
+    try {
+        $health = Invoke-RestMethod -Uri "$($BaseUrl.TrimEnd('/'))/gateway/health.json" -TimeoutSec 2
+        return $health.status -eq "ok" -and $health.service -eq "freerouter"
+    } catch {
+        return $false
+    }
+}
+
+function Test-LocalFreeRouterBaseUrl([string]$BaseUrl) {
+    try {
+        $uri = [Uri]$BaseUrl
+        return $uri.Scheme -eq "http" -and $uri.Host -in @("127.0.0.1", "localhost") -and $uri.Port -eq 8000
+    } catch {
+        return $false
+    }
+}
+
+function Ensure-FreeRouterDesktop([string]$BaseUrl) {
+    if (-not (Test-LocalFreeRouterBaseUrl $BaseUrl)) {
+        Write-Output "Using configured FreeRouter endpoint $BaseUrl; local desktop startup skipped."
+        return
+    }
+
+    if (Test-FreeRouterHealth $BaseUrl) {
+        Write-Output "FreeRouter desktop is already running at $BaseUrl."
+        return
+    }
+
+    $desktopExecutable = Get-FreeRouterDesktopExecutable
+    Write-Output "Starting the latest FreeRouter desktop release: $desktopExecutable"
+    Start-Process -FilePath $desktopExecutable -WorkingDirectory (Get-FreeRouterProjectRoot) | Out-Null
+
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        Start-Sleep -Milliseconds 500
+        if (Test-FreeRouterHealth $BaseUrl) {
+            Write-Output "FreeRouter desktop is ready at $BaseUrl."
+            return
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    throw "FreeRouter desktop did not become healthy at $BaseUrl within 30 seconds. Start '$desktopExecutable' directly to inspect the desktop runtime."
+}
+
 function Get-FreeRouterOverrides {
     $baseUrl = Get-FreeRouterBaseUrl
     return @(
@@ -196,7 +253,15 @@ try {
             $version = Get-CodexVersionText $codexExecutable
             $statusExitCode = 0
             Write-Output "Codex: $version"
-            Write-Output "FreeRouter base URL: $(Get-FreeRouterBaseUrl)"
+            $baseUrl = Get-FreeRouterBaseUrl
+            Write-Output "FreeRouter base URL: $baseUrl"
+            if (Test-FreeRouterHealth $baseUrl) {
+                Write-Output "FreeRouter desktop runtime: healthy"
+            } elseif (Test-LocalFreeRouterBaseUrl $baseUrl) {
+                Write-Output "FreeRouter desktop runtime: not running"
+            } else {
+                Write-Output "FreeRouter desktop runtime: external endpoint (not probed by launcher)"
+            }
             Write-Output "Root Codex config: unchanged by this launcher"
 
             $normalProbe = Invoke-CodexCapture $codexExecutable @("debug", "models")
@@ -223,6 +288,8 @@ try {
         }
         { $_ -in @("start", "on", "freerouter") } {
             Assert-NoConflictingArguments $extraArguments
+            $baseUrl = Get-FreeRouterBaseUrl
+            Ensure-FreeRouterDesktop $baseUrl
             Test-FreeRouterConfiguration $codexExecutable
 
             $managedArguments = @(Get-FreeRouterOverrides)
@@ -235,7 +302,7 @@ try {
             }
 
             try {
-                Write-Output "Starting Codex with FreeRouter model=auto at $(Get-FreeRouterBaseUrl)"
+                Write-Output "Starting Codex with FreeRouter model=auto at $baseUrl"
                 & $codexExecutable @launchArguments
                 $exitCode = $LASTEXITCODE
             } finally {

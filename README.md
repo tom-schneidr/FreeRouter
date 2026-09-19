@@ -240,7 +240,8 @@ See [docs/sentinel.md](docs/sentinel.md) for the runnable UI, API, doctor, and O
 ### Codex CLI
 
 For a reversible command-based launch that leaves the normal Codex configuration alone, use the
-repository launcher:
+repository launcher. `start` also starts the latest release desktop gateway automatically when the
+default local endpoint is not already healthy:
 
 ```powershell
 .\codex-freerouter.bat start   # FreeRouter model=auto
