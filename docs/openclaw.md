@@ -56,19 +56,23 @@ Invalid pre-commit responses fall through to the next route. A provider failure 
 has already been exposed is returned as an explicit stream error and is not counted as success.
 
 Tool capability probes cover an exact forced call, autonomous selection among distractors, and a
-tool-result continuation. Unknown discovered text models receive an exploratory probe unless their
-provider metadata explicitly says tools are unsupported.
+tool-result continuation. The highest-ranked confirmed candidates also receive a bounded
+multi-turn stability probe that checks whether the model advances from one tool result to the next
+instead of replaying the first action. Unknown discovered text models receive an exploratory probe
+unless their provider metadata explicitly says tools are unsupported.
 
 ## Adaptive ordering
 
 FreeRouter keeps generic model quality and probe results as cold-start priors. For tool requests,
 candidates are ordered by time-decayed valid-call versus typed-failure evidence, with a conservative
-posterior lower bound. Evidence is conditioned on the tool schema when matching history exists,
-recent evidence weighs more heavily, and one lucky success cannot outrank a stable route.
+posterior lower bound. Exact-call, automatic-selection, continuation, and multi-turn evidence are
+retained separately and contribute bounded automatic score adjustments. Evidence is conditioned on
+the tool schema when matching history exists, recent evidence weighs more heavily, and one lucky
+success cannot outrank a stable route.
 
 The Models page and `GET /v1/gateway/models` expose each route's score and weighted observations.
 Failures are separated into categories such as unknown tool, schema mismatch, action promise,
-truncated stream, and provider stream error.
+repeated call, repeated request, truncated stream, and provider stream error.
 
 ## Operational settings
 
@@ -79,8 +83,9 @@ ROUTING_ALLOW_UNCONFIRMED_TOOL_USE_FALLBACK=true
 
 The action-promise guard rejects initial answers such as "I will write it now" when no structured
 tool call follows. Unconfirmed registry or metadata hints begin as last-resort candidates, but strong
-matching empirical evidence can move them ahead of a repeatedly failing confirmed route. Set the
-fallback option to `false` for a strict probe-confirmed-only environment.
+matching empirical evidence can move them ahead of a repeatedly failing confirmed route. Temporary
+rate limits and timeouts remain retryable discovery gaps rather than fresh capability verification.
+Set the fallback option to `false` for a strict probe-confirmed-only environment.
 
 FreeRouter's Responses adapter intentionally rejects `previous_response_id`: it does not pretend to
 provide server-side Responses state over stateless Chat Completions providers. OpenClaw should use

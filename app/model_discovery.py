@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import time
 from typing import Any
 
 from app.capability_tags import CapabilityStatus, apply_capability_pipeline
@@ -74,6 +75,12 @@ def route_from_catalog_item(
         source_url=f"{provider.base_url.rstrip('/')}/models",
         notes=notes,
         enabled=enabled,
+        discovery_source=f"{provider.name}:/models",
+        discovery_metadata=_discovery_metadata(
+            item,
+            tool_use_status,
+            free_evidence_override=("supervisor_verified" if assume_free and not free_by_payload else None),
+        ),
     )
     from app.capability_tags import normalize_route_tool_use_policy
 
@@ -100,6 +107,43 @@ def is_discoverable_free_model(provider: ProviderAdapter, item: dict[str, Any]) 
     if provider.name == "openrouter":
         return is_openrouter_free_model(item)
     return has_structured_zero_price(item)
+
+
+def _discovery_metadata(
+    item: dict[str, Any],
+    tool_use_status: CapabilityStatus,
+    *,
+    free_evidence_override: str | None = None,
+) -> dict[str, Any]:
+    """Keep a small normalized record of why a route was discovered.
+
+    Raw provider responses are intentionally not persisted.  These fields are
+    enough to explain discovery and to distinguish explicit metadata from
+    name-based heuristics on a later automatic ranking pass.
+    """
+    architecture = item.get("architecture")
+    input_modalities: list[str] = []
+    output_modalities: list[str] = []
+    modality = ""
+    if isinstance(architecture, dict):
+        input_modalities = _string_list(architecture.get("input_modalities"))
+        output_modalities = _string_list(architecture.get("output_modalities"))
+        modality = str(architecture.get("modality") or "")
+    pricing = item.get("pricing")
+    free_evidence = (
+        free_evidence_override
+        or ("structured_zero_price" if has_structured_zero_price(item) else "model_id_free_marker")
+    )
+    return {
+        "discovered_at": int(time()),
+        "free_evidence": free_evidence,
+        "input_modalities": input_modalities,
+        "output_modalities": output_modalities,
+        "modality": modality,
+        "tool_use_metadata": tool_use_status,
+        "has_context_length": item.get("context_length") is not None,
+        "has_pricing": isinstance(pricing, dict),
+    }
 
 
 def is_openrouter_free_model(item: dict[str, Any]) -> bool:

@@ -117,6 +117,7 @@ class BenchmarkResearchService:
             return report
 
         parsed_scores, source_url = _parse_research_response(result.body)
+        research_confidence = _parse_research_confidence(result.body)
         if len(parsed_scores) < self.min_scores_to_apply:
             report = BenchmarkRefreshReport(
                 ok=False,
@@ -138,7 +139,7 @@ class BenchmarkResearchService:
         merged = self.store.merge_scores(
             parsed_scores,
             source="freerouter-web-search",
-            confidence="medium",
+            confidence=research_confidence,
             source_url=source_url,
             updated_at=checked_at,
         )
@@ -228,3 +229,12 @@ def _parse_research_response(body: dict[str, Any]) -> tuple[dict[str, int], str 
             if isinstance(index, (int, float)):
                 scores[key.strip().lower()] = int(index)
     return scores, source
+
+
+def _parse_research_confidence(body: dict[str, Any]) -> str:
+    raw_text = chat_response_text(body)
+    parsed = json_object_from_text(raw_text)
+    if not isinstance(parsed, dict):
+        return "low"
+    confidence = str(parsed.get("confidence") or "low").lower()
+    return confidence if confidence in {"high", "medium", "low"} else "low"

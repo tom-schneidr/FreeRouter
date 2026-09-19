@@ -24,6 +24,7 @@ from app.routing_policy import (
 from app.sentinel_store import SentinelStore
 from app.state import Availability, StateManager
 from app.tool_reliability import (
+    runtime_tool_outcome_category,
     tool_failure_outcome_category,
     tool_request_fingerprint,
     tool_route_sort_key,
@@ -1005,19 +1006,32 @@ class WaterfallRouter:
                         continue
 
                     if tool_outcome == "supported":
+                        success_category = (
+                            "continuation_success" if continuing_tool_loop else "valid_call"
+                        )
+                        success_category = runtime_tool_outcome_category(
+                            payload,
+                            response.body,
+                            success_category,
+                        )
                         await self.state.record_route_tool_outcome(
                             route.route_id,
                             provider.name,
                             route.model_id,
-                            "continuation_success" if continuing_tool_loop else "valid_call",
+                            success_category,
                             request_fingerprint=request_tool_fingerprint,
                         )
                     elif continuing_tool_loop:
+                        continuation_category = runtime_tool_outcome_category(
+                            payload,
+                            response.body,
+                            "continuation_success",
+                        )
                         await self.state.record_route_tool_outcome(
                             route.route_id,
                             provider.name,
                             route.model_id,
-                            "continuation_success",
+                            continuation_category,
                             request_fingerprint=request_tool_fingerprint,
                         )
 

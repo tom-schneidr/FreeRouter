@@ -152,6 +152,13 @@ _QUALITY_FALLBACK_INDEX = {
     "unknown": 10,
 }
 
+_TOOL_PROFILE_ADJUSTMENTS = {
+    "supported": 1,
+    "inconclusive": 0,
+    "unknown": 0,
+    "unsupported": -1,
+}
+
 
 def _normalize_ranking_text(*parts: str) -> str:
     text = " ".join(part for part in parts if part).lower()
@@ -175,6 +182,48 @@ def _aa_index_for_route(route: ModelRoute) -> int | None:
             if key in search_text:
                 return scores[key]
     return None
+
+
+def _tool_profile_status(route: ModelRoute, suffix: str) -> str:
+    """Read a structured tool profile dimension with legacy evidence fallback."""
+    claim = route.capabilities.get(f"tool-use.{suffix}")
+    if claim is not None:
+        return claim.status
+    base = route.capabilities.get("tool-use")
+    evidence = base.evidence.lower() if base is not None else ""
+    marker = f"{suffix.replace('-', '_')}="
+    for part in evidence.split(";"):
+        item = part.strip()
+        if item.startswith(marker):
+            return item.removeprefix(marker).strip()
+    return "unknown"
+
+
+def tool_use_behavior_score(route: ModelRoute) -> int:
+    """Return a bounded automatic-rank adjustment for verified tool behavior.
+
+    This is intentionally much smaller than an intelligence-index difference.
+    It lets equivalent candidates with stronger protocol evidence sort first
+    without allowing one lucky probe to displace a materially stronger model.
+    """
+    if "tool-use" not in route.tags:
+        return 0
+    exact = _tool_profile_status(route, "required-exact-call")
+    auto = _tool_profile_status(route, "auto-selection")
+    continuation = _tool_profile_status(route, "tool-result-continuation")
+    stability = _tool_profile_status(route, "multi-turn-stability")
+    score = 0
+    for status, weight in (
+        (exact, 40),
+        (auto, 80),
+        (continuation, 100),
+        (stability, 160),
+    ):
+        score += weight * _TOOL_PROFILE_ADJUSTMENTS.get(status, 0)
+    claim = route.capabilities.get("tool-use")
+    if claim is not None and claim.source in {"probe", "runtime"} and claim.status == "supported":
+        score += 20
+    return max(-500, min(500, score))
 
 
 def compute_rank_score(route: ModelRoute) -> int:
@@ -225,7 +274,40 @@ def compute_rank_score(route: ModelRoute) -> int:
     if "reasoning" in tag_text:
         score += 15
 
+    score += tool_use_behavior_score(route)
+
     return score
+
+
+def ranking_factors(route: ModelRoute) -> dict[str, int | str | None]:
+    """Expose the automatic decision inputs for diagnostics and API clients."""
+    benchmark_source: str | None = None
+    benchmark_confidence: str | None = None
+    benchmark_updated_at: int | None = None
+    try:
+        from app.benchmark_store import get_benchmark_store
+        from app.settings import get_settings
+
+        snapshot = get_benchmark_store(get_settings().benchmark_scores_path).snapshot()
+        for key in sorted(snapshot.scores, key=len, reverse=True):
+            if any(key in variant for variant in _aa_search_variants(route)):
+                entry = snapshot.scores[key]
+                benchmark_source = entry.source
+                benchmark_confidence = entry.confidence
+                benchmark_updated_at = entry.updated_at
+                break
+    except (RuntimeError, OSError, ValueError):
+        pass
+    return {
+        "intelligence_index": _aa_index_for_route(route),
+        "intelligence_source": benchmark_source or "bundled_index",
+        "intelligence_confidence": benchmark_confidence,
+        "intelligence_updated_at": benchmark_updated_at,
+        "tool_behavior_adjustment": tool_use_behavior_score(route),
+        "provider_score": compute_provider_score(route.provider_name),
+        "computed_score": compute_rank_score(route),
+        "rank_source": route.rank_source,
+    }
 
 
 def compute_provider_score(provider_name: str) -> int:

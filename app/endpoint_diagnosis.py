@@ -10,7 +10,12 @@ import httpx
 
 from app.benchmark_research import BenchmarkResearchService
 from app.capability_probe_schedule import select_routes_for_capability_probe
-from app.capability_probes import probe_route_capabilities
+from app.capability_probes import (
+    AGENTIC_PROBE_TAG,
+    AGENTIC_STABILITY_PROBE_MAX_RANK,
+    probe_route_capabilities,
+    probe_route_tag,
+)
 from app.capability_tags import should_probe_tool_use
 from app.model_catalog import (
     ModelCatalog,
@@ -460,7 +465,23 @@ class EndpointDiagnosisService:
                 route,
                 tags=tuple(tags_to_probe),
             )
+            # A bounded multi-turn probe is reserved for the highest-ranked
+            # candidates that already passed the basic tool profile.  It feeds
+            # automatic agent routing; it is not a manual quality gate.
+            tool_claim = claims.get("tool-use")
+            if (
+                route.rank <= AGENTIC_STABILITY_PROBE_MAX_RANK
+                and tool_claim is not None
+                and tool_claim.status == "supported"
+            ):
+                claims[AGENTIC_PROBE_TAG] = await probe_route_tag(
+                    provider,
+                    client,
+                    route,
+                    AGENTIC_PROBE_TAG,
+                )
             probes_run += len(claims)
+            before_capabilities = dict(route.capabilities)
             try:
                 updated = self.catalog.apply_probe_claims_to_route(
                     route.route_id,
@@ -470,9 +491,14 @@ class EndpointDiagnosisService:
             except KeyError:
                 continue
 
-            if set(updated.tags) != before_tags:
+            if set(updated.tags) != before_tags or updated.capabilities != before_capabilities:
                 updates += 1
 
+        if updates:
+            # Capability evidence is part of the automatic score.  Recompute
+            # the catalog order once per diagnosis refresh instead of waiting
+            # for a manual POST /auto-rank call.
+            self.catalog.auto_rank_routes()
         return probes_run, updates
 
     async def _routes_from_payload(
@@ -543,11 +569,16 @@ class EndpointDiagnosisService:
             speed=route.speed,
             cost=route.cost,
             tags=route.tags,
+            capabilities=dict(route.capabilities),
+            tag_locks=route.tag_locks,
             notes=route.notes,
             source_url=route.source_url,
             rank_score=route.rank_score,
             rank_reason=verdict.reason,
             rank_source="ai_supervisor",
+            discovery_source=route.discovery_source,
+            discovered_at=route.discovered_at,
+            discovery_metadata=dict(route.discovery_metadata),
         )
 
     async def _route_health_suggestions(

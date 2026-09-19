@@ -441,9 +441,14 @@ See `desktop-help.html` for tray behavior and shortcut details.
 
 Open the model catalog in the control plane at `http://127.0.0.1:8000/app#models`, or use the API:
 
-Each enabled model route has a `rank`; lower numbers are attempted first. The route points at a
-provider and model ID, so the gateway can use multiple models on the same platform while still
-tracking that platform's quota correctly.
+Each enabled model route has an automatic `rank`; lower numbers are attempted first. The score is
+anchored in model intelligence evidence and provider usefulness. Tool-bearing requests add a
+bounded evidence adjustment for verified exact calls, automatic tool selection, continuation, and
+multi-turn stability. This keeps `auto` fully automatic while preventing one successful syntax
+probe from permanently outranking a substantially stronger model.
+
+The route also exposes `rank_factors`, discovery provenance, and capability claims through
+`GET /v1/gateway/models`, so a selected model can be explained without maintaining a manual order.
 
 You can also edit the catalog directly:
 
@@ -460,7 +465,14 @@ configured provider's OpenAI-compatible `/models` endpoint and creates suggestio
 dead-route removals, recovered routes, and newly discovered models. With automatic maintenance
 enabled, safe cleanup is applied in the background: confirmed dead routes are removed and recovered
 route health flags are cleared. New route additions remain reviewable suggestions and are disabled
-by default until you accept and enable them.
+by default until you accept and enable them. Discovery keeps structured pricing, modality, source,
+and explicit provider capability metadata. Name heuristics remain probe candidates rather than
+confirmed tool support.
+
+Capability probes distinguish transport compatibility from agent behaviour. They test an exact
+function call, autonomous selection, tool-result continuation, and a bounded multi-turn sequence.
+Rate limits, timeouts, and temporary provider failures are recorded as retryable attempts; they do
+not masquerade as fresh verification or erase a previously confirmed capability.
 
 Configure the cadence in `.env`:
 

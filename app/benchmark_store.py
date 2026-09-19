@@ -140,6 +140,16 @@ class BenchmarkStore:
             key = raw_key.strip().lower()
             if not key:
                 continue
+            existing = self._scores.get(key)
+            confidence_rank = {"low": 1, "medium": 2, "high": 3}
+            if (
+                existing is not None
+                and confidence_rank.get(confidence.lower(), 0)
+                < confidence_rank.get(existing.confidence.lower(), 0)
+            ):
+                # A weaker automatic refresh must not silently replace a
+                # stronger verified benchmark record.
+                continue
             self._scores[key] = BenchmarkScoreEntry(
                 index=index,
                 source=source,
@@ -182,6 +192,17 @@ def _notify_scores_changed() -> None:
     from app.model_ranking import invalidate_dynamic_benchmark_cache
 
     invalidate_dynamic_benchmark_cache()
+    # Dynamic benchmark evidence changes the automatic default ordering too.
+    # During module import the global store is not registered yet, so avoid a
+    # recursive catalog import; subsequent refreshes safely re-sort it.
+    if _store is None:
+        return
+    try:
+        from app.model_catalog import _assign_default_ranks
+
+        _assign_default_ranks()
+    except (ImportError, AttributeError, RuntimeError, OSError, ValueError):
+        pass
 
 
 def reset_benchmark_store_for_tests() -> None:

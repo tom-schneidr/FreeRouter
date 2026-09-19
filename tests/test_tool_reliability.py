@@ -8,7 +8,10 @@ from app.state import StateManager
 from app.state_types import ProviderQuota
 from app.tool_reliability import (
     ToolReliabilitySnapshot,
+    repeated_tool_call_in_request,
+    repeated_user_request_in_payload,
     route_tool_reliability_score,
+    runtime_tool_outcome_category,
     tool_route_sort_key,
 )
 
@@ -72,6 +75,53 @@ def test_openclaw_probe_behavior_seeds_cold_start_ranking():
     )
 
     assert tool_route_sort_key(strong, None) > tool_route_sort_key(weak, None)
+
+
+def test_runtime_repetition_is_recorded_as_diagnostic_failure():
+    payload = {
+        "messages": [
+            {"role": "user", "content": "Inspect the repo."},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": '{"cmd":"dir"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "files"},
+            {"role": "user", "content": "Inspect the repo."},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "shell", "parameters": {"type": "object"}},
+            }
+        ],
+    }
+    body = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {"name": "shell", "arguments": '{"cmd":"dir"}'},
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    assert repeated_tool_call_in_request(payload, body)
+    assert repeated_user_request_in_payload(payload)
+    assert runtime_tool_outcome_category(payload, body, "continuation_success") == (
+        "repeated_request"
+    )
 
 
 async def test_state_persists_typed_time_weighted_tool_outcomes(tmp_path):

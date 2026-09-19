@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from time import time
 from typing import Any
 
 from app.capability_tags import (
@@ -20,7 +21,7 @@ from app.capability_tags import (
     tags_to_capabilities,
 )
 from app.catalog_store import load_catalog_json, save_catalog_json
-from app.model_ranking import compute_rank_score, rank_sort_key
+from app.model_ranking import compute_rank_score, rank_sort_key, ranking_factors
 
 CANONICAL_MODEL_TAGS = set(CANONICAL_MODEL_TAGS)
 
@@ -54,6 +55,11 @@ class ModelRoute:
     rank_score: int | None = None
     rank_reason: str = ""
     rank_source: str = "heuristic"
+    # Provenance for automatically discovered routes.  These fields are
+    # informational and do not override user enable/disable state.
+    discovery_source: str = ""
+    discovered_at: int | None = None
+    discovery_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _route(
@@ -91,6 +97,8 @@ def _route(
         tag_locks=frozenset(manual_tags),
         notes=notes,
         source_url=source_url,
+        discovery_source="catalog",
+        discovered_at=int(time()),
     )
     return apply_capability_pipeline(route)
 
@@ -110,8 +118,10 @@ def route_from_discovered_model(
     source_url: str = "",
     notes: str = "Discovered automatically from provider model catalog.",
     enabled: bool = True,
+    discovery_source: str = "provider:/models",
+    discovery_metadata: dict[str, Any] | None = None,
 ) -> ModelRoute:
-    return _route(
+    route = _route(
         provider_name,
         model_id,
         display_name or model_id,
@@ -123,6 +133,12 @@ def route_from_discovered_model(
         source_url=source_url,
         enabled=enabled,
         text=False,
+    )
+    return _clone_route(
+        route,
+        discovery_source=discovery_source,
+        discovered_at=int(time()),
+        discovery_metadata=dict(discovery_metadata or {}),
     )
 
 
@@ -163,6 +179,9 @@ def promote_routes_to_default_catalog(routes: list[ModelRoute]) -> list[ModelRou
                 rank_score=route.rank_score,
                 rank_reason=route.rank_reason,
                 rank_source=route.rank_source,
+                discovery_source=route.discovery_source,
+                discovered_at=route.discovered_at,
+                discovery_metadata=dict(route.discovery_metadata),
             ),
             metadata_tags=_canonical_tags(route.tags),
         )
@@ -216,6 +235,9 @@ def _clone_route(route: ModelRoute, **changes: Any) -> ModelRoute:
         "rank_score": route.rank_score,
         "rank_reason": route.rank_reason,
         "rank_source": route.rank_source,
+        "discovery_source": route.discovery_source,
+        "discovered_at": route.discovered_at,
+        "discovery_metadata": dict(route.discovery_metadata),
     }
     payload.update(changes)
     return ModelRoute(**payload)
@@ -243,6 +265,10 @@ def _route_to_dict(route: ModelRoute) -> dict[str, Any]:
         "rank_score": route.rank_score,
         "rank_reason": route.rank_reason,
         "rank_source": route.rank_source,
+        "rank_factors": ranking_factors(route),
+        "discovery_source": route.discovery_source,
+        "discovered_at": route.discovered_at,
+        "discovery_metadata": dict(route.discovery_metadata),
     }
 
 
@@ -1218,6 +1244,12 @@ class ModelCatalog:
             if route.route_id != route_id:
                 continue
             updated = apply_probe_claims(route, claims)
+            updated = _clone_route(
+                updated,
+                rank_score=compute_rank_score(updated),
+                rank_reason=updated.rank_reason or "deterministic_quality_score",
+                rank_source=updated.rank_source or "heuristic",
+            )
             self._routes[index] = updated
             self._invalidate_sorted_cache()
             if save:
@@ -1237,6 +1269,12 @@ class ModelCatalog:
             if route.route_id != route_id:
                 continue
             updated = apply_runtime_claim(route, tag, status=status, evidence=evidence)
+            updated = _clone_route(
+                updated,
+                rank_score=compute_rank_score(updated),
+                rank_reason=updated.rank_reason or "deterministic_quality_score",
+                rank_source=updated.rank_source or "heuristic",
+            )
             if updated.tags == route.tags and updated.capabilities == route.capabilities:
                 return updated
             self._routes[index] = updated
@@ -1296,14 +1334,26 @@ class ModelCatalog:
                 continue
 
             refreshed.append(
-                _clone_route(
-                    default,
-                    rank=route.rank,
-                    enabled=route.enabled,
-                    tags=_canonical_tags(default.tags),
-                    rank_score=route.rank_score,
-                    rank_reason=route.rank_reason,
-                    rank_source=route.rank_source,
+                normalize_route_tool_use_policy(
+                    _clone_route(
+                        default,
+                        rank=route.rank,
+                        enabled=route.enabled,
+                        # Keep verified probe/runtime claims across restarts;
+                        # the previous merge copied only default tags and
+                        # silently erased the evidence that drives auto.
+                        tags=_canonical_tags(default.tags),
+                        capabilities={**default.capabilities, **route.capabilities},
+                        tag_locks=route.tag_locks or default.tag_locks,
+                        rank_score=route.rank_score,
+                        rank_reason=route.rank_reason,
+                        rank_source=route.rank_source,
+                        discovery_source=route.discovery_source or default.discovery_source,
+                        discovered_at=route.discovered_at or default.discovered_at,
+                        discovery_metadata=(
+                            dict(route.discovery_metadata) or dict(default.discovery_metadata)
+                        ),
+                    )
                 )
             )
 
@@ -1355,6 +1405,15 @@ class ModelCatalog:
             rank_score=(int(raw["rank_score"]) if raw.get("rank_score") is not None else None),
             rank_reason=str(raw.get("rank_reason", "")),
             rank_source=str(raw.get("rank_source", "heuristic")),
+            discovery_source=str(raw.get("discovery_source", "")),
+            discovered_at=(
+                int(raw["discovered_at"]) if raw.get("discovered_at") is not None else None
+            ),
+            discovery_metadata=(
+                dict(raw["discovery_metadata"])
+                if isinstance(raw.get("discovery_metadata"), dict)
+                else {}
+            ),
         )
         if not isinstance(raw_capabilities, dict) or not raw_capabilities:
             return normalize_route_tool_use_policy(apply_capability_pipeline(route))

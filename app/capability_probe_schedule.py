@@ -19,13 +19,30 @@ RANK_WEIGHT = 0.45
 
 
 def last_capability_probe_at(route: ModelRoute) -> int | None:
-    """Return the newest probe timestamp on this route, if any."""
+    """Return the newest *verified* probe timestamp on this route.
+
+    A rate limit or timeout is an attempted probe, not verification.  Counting
+    it as fresh evidence was the reason stronger but temporarily unavailable
+    routes could disappear from the discovery rotation for a full week.
+    """
     probe_times = [
         claim.checked_at
         for claim in route.capabilities.values()
-        if claim.source == "probe" and claim.checked_at is not None
+        if claim.source == "probe"
+        and claim.status in {"supported", "unsupported"}
+        and claim.checked_at is not None
     ]
     return max(probe_times) if probe_times else None
+
+
+def next_capability_probe_at(route: ModelRoute) -> int | None:
+    """Return the earliest retry time recorded for a transient probe attempt."""
+    retry_times = [
+        claim.next_probe_at
+        for claim in route.capabilities.values()
+        if claim.source == "probe" and claim.next_probe_at is not None
+    ]
+    return min(retry_times) if retry_times else None
 
 
 def capability_probe_staleness(route: ModelRoute, *, now: int) -> float:
@@ -87,7 +104,12 @@ def select_routes_for_capability_probe(
     candidates = [
         route
         for route in routes
-        if route.provider_name == provider_name and route.enabled
+        if route.provider_name == provider_name
+        and route.enabled
+        and (
+            next_capability_probe_at(route) is None
+            or next_capability_probe_at(route) <= timestamp
+        )
     ]
     if not candidates or budget <= 0:
         return []

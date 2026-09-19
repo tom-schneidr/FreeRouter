@@ -41,6 +41,7 @@ from app.sentinel_store import SentinelStore
 from app.state import Availability, StateManager
 from app.tool_call_stream import ToolCallStreamAccumulator
 from app.tool_reliability import (
+    runtime_tool_outcome_category,
     tool_failure_outcome_category,
     tool_request_fingerprint,
     tool_route_sort_key,
@@ -584,15 +585,21 @@ async def waterfall_openai_stream(
                                             payload=outbound_payload,
                                             response_body=validation.normalized_body,
                                         )
+                                        success_category = (
+                                            "continuation_success"
+                                            if tool_loop_already_started(outbound_payload)
+                                            else "valid_call"
+                                        )
+                                        success_category = runtime_tool_outcome_category(
+                                            outbound_payload,
+                                            validation.normalized_body,
+                                            success_category,
+                                        )
                                         await state.record_route_tool_outcome(
                                             route.route_id,
                                             provider.name,
                                             route.model_id,
-                                            (
-                                                "continuation_success"
-                                                if tool_loop_already_started(outbound_payload)
-                                                else "valid_call"
-                                            ),
+                                            success_category,
                                             request_fingerprint=request_tool_fingerprint,
                                         )
                                         for block in _canonical_tool_sse_blocks(
@@ -602,11 +609,16 @@ async def waterfall_openai_stream(
                                             yield block
                                     else:
                                         if tool_loop_already_started(outbound_payload):
+                                            continuation_category = runtime_tool_outcome_category(
+                                                outbound_payload,
+                                                validation.normalized_body,
+                                                "continuation_success",
+                                            )
                                             await state.record_route_tool_outcome(
                                                 route.route_id,
                                                 provider.name,
                                                 route.model_id,
-                                                "continuation_success",
+                                                continuation_category,
                                                 request_fingerprint=request_tool_fingerprint,
                                             )
                                         for block in buffered_before_commit:

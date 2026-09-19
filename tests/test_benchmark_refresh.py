@@ -81,6 +81,29 @@ def test_benchmark_store_merge_persists_and_overrides_ranking(tmp_path, monkeypa
     assert compute_rank_score(kimi) >= 60 * 3000
 
 
+def test_benchmark_refresh_cannot_replace_high_confidence_score_with_weaker_evidence(tmp_path):
+    store = BenchmarkStore(str(tmp_path / "benchmark_scores.json"))
+    assert (
+        store.merge_scores(
+            {"model-x": 55},
+            source="curated",
+            confidence="high",
+            updated_at=1_700_000_000,
+        )
+        == 1
+    )
+    assert (
+        store.merge_scores(
+            {"model-x": 12},
+            source="web-search",
+            confidence="medium",
+            updated_at=1_800_000_000,
+        )
+        == 0
+    )
+    assert store.index_scores_map()["model-x"] == 55
+
+
 @pytest.mark.asyncio
 async def test_benchmark_research_refresh_merges_and_auto_ranks(tmp_path):
     reset_benchmark_store_for_tests()

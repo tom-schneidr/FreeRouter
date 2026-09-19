@@ -36,6 +36,21 @@ SOFT_ROUTING_TAGS = frozenset({"reasoning", "coding"})
 CONFIRMED_CAPABILITY_SOURCES = frozenset({"probe", "runtime"})
 TAGS_REQUIRING_CONFIRMATION = frozenset({"tool-use"})
 
+# These are evidence dimensions for a confirmed tool-capable route.  They are
+# persisted as capability claims but deliberately are not routing tags: a
+# model can support the wire protocol while still being weak at autonomous
+# selection or multi-turn continuation.
+TOOL_USE_PROFILE_TAGS = frozenset(
+    {
+        "tool-use.required-exact-call",
+        "tool-use.auto-selection",
+        "tool-use.tool-result-continuation",
+        "tool-use.multi-turn-stability",
+        "tool-use.call-id-integrity",
+        "tool-use.argument-schema-integrity",
+    }
+)
+
 
 @dataclass(frozen=True)
 class CapabilityClaim:
@@ -45,6 +60,13 @@ class CapabilityClaim:
     confidence: CapabilityConfidence
     checked_at: int | None = None
     evidence: str = ""
+    # ``checked_at`` remains the timestamp of the latest probe result for
+    # backwards compatibility.  ``last_attempted_at`` and ``next_probe_at``
+    # let the scheduler distinguish a real verification from a transient
+    # provider failure (429, timeout, or temporary outage).
+    last_attempted_at: int | None = None
+    next_probe_at: int | None = None
+    reason: str = ""
 
 
 def capability_qualifies_for_tag(claim: CapabilityClaim, tag: str) -> bool:
@@ -132,6 +154,15 @@ def capability_claim_from_dict(raw: dict[str, object]) -> CapabilityClaim:
         confidence=str(raw["confidence"]),  # type: ignore[arg-type]
         checked_at=int(raw["checked_at"]) if raw.get("checked_at") is not None else None,
         evidence=str(raw.get("evidence") or ""),
+        last_attempted_at=(
+            int(raw["last_attempted_at"])
+            if raw.get("last_attempted_at") is not None
+            else None
+        ),
+        next_probe_at=(
+            int(raw["next_probe_at"]) if raw.get("next_probe_at") is not None else None
+        ),
+        reason=str(raw.get("reason") or ""),
     )
 
 
@@ -143,6 +174,9 @@ def capability_claim_to_dict(claim: CapabilityClaim) -> dict[str, object]:
         "confidence": claim.confidence,
         "checked_at": claim.checked_at,
         "evidence": claim.evidence,
+        "last_attempted_at": claim.last_attempted_at,
+        "next_probe_at": claim.next_probe_at,
+        "reason": claim.reason,
     }
 
 
@@ -156,6 +190,25 @@ def merge_capability_claim(
         return existing
     if existing is None:
         return incoming
+    # A transient probe result is an observation about availability, not a
+    # capability decision.  Preserve a previously verified answer while
+    # retaining the attempt and retry metadata for diagnostics/scheduling.
+    if (
+        incoming.source == "probe"
+        and incoming.status == "inconclusive"
+        and existing.source in CONFIRMED_CAPABILITY_SOURCES
+        and existing.status in {"supported", "unsupported"}
+    ):
+        evidence = existing.evidence
+        if incoming.evidence:
+            evidence = f"{evidence} Last attempt: {incoming.evidence}".strip()[:500]
+        return replace(
+            existing,
+            evidence=evidence,
+            last_attempted_at=incoming.last_attempted_at or incoming.checked_at,
+            next_probe_at=incoming.next_probe_at,
+            reason=incoming.reason or existing.reason,
+        )
     if (
         incoming.status == "unsupported"
         and incoming.source in CONFIRMED_CAPABILITY_SOURCES
@@ -348,13 +401,15 @@ def apply_runtime_claim(
     capabilities = dict(route.capabilities)
     if not capabilities:
         capabilities = tags_to_capabilities(route.tags, source="manual")
+    timestamp = int(time.time())
     claim = CapabilityClaim(
         tag=tag,
         status=status,
         source="runtime",
         confidence="medium",
-        checked_at=int(time.time()),
+        checked_at=timestamp,
         evidence=evidence[:240],
+        last_attempted_at=timestamp,
     )
     capabilities[tag] = merge_capability_claim(capabilities.get(tag), claim, locked=False)
     return replace(

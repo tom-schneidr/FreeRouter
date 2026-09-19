@@ -6,9 +6,11 @@ from app.capability_probes import (
     ECHO_PROBE_MESSAGE,
     ToolUseProbeProfile,
     _provider_error_indicates_unsupported,
+    evaluate_multi_turn_stability_response,
     evaluate_probe_response,
     evaluate_tool_result_continuation_response,
     evaluate_tool_use_probe_response,
+    multi_turn_stability_final_payload,
     probe_route_tag,
     tool_result_continuation_probe_payload,
     tool_use_probe_payloads,
@@ -131,6 +133,66 @@ def test_tool_result_continuation_reuses_provider_call_id_and_is_strict():
         )
         == "unsupported"
     )
+
+
+def test_multi_turn_stability_requires_the_next_distinct_tool_call():
+    echo = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "echo_1",
+                            "type": "function",
+                            "function": {
+                                "name": "echo",
+                                "arguments": '{"message":"OPENCLAW_STABILITY_ECHO"}',
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    repeated = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "echo_2",
+                            "type": "function",
+                            "function": {
+                                "name": "echo",
+                                "arguments": '{"message":"OPENCLAW_STABILITY_ECHO"}',
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    add = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "add_1",
+                            "type": "function",
+                            "function": {"name": "add", "arguments": '{"a":17,"b":25}'},
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    assert evaluate_multi_turn_stability_response(echo, expected_function="echo") == "supported"
+    assert evaluate_multi_turn_stability_response(repeated, expected_function="add") == "unsupported"
+    assert evaluate_multi_turn_stability_response(add, expected_function="add") == "supported"
+    final_payload = multi_turn_stability_final_payload("model", echo["choices"][0]["message"]["tool_calls"][0], add["choices"][0]["message"]["tool_calls"][0])
+    assert "OPENCLAW_MULTI_TURN_OK_84" in final_payload["messages"][5]["content"]
 
 
 def test_openclaw_probe_profile_separates_compatibility_from_behavior_quality():
