@@ -51,6 +51,20 @@ TOOL_USE_PROFILE_TAGS = frozenset(
     }
 )
 
+# The base tool probe always produces these dimensions. Multi-turn stability is
+# deliberately probed only for the highest-ranked candidates, so it is an
+# optional ranking signal rather than a prerequisite for catalog classification.
+TOOL_USE_REQUIRED_PROFILE_TAGS = frozenset(
+    TOOL_USE_PROFILE_TAGS - {"tool-use.multi-turn-stability"}
+)
+
+_TOOL_USE_PROFILE_EVIDENCE_KEYS = {
+    "required_exact_call": "tool-use.required-exact-call",
+    "auto_selection": "tool-use.auto-selection",
+    "tool_result_continuation": "tool-use.tool-result-continuation",
+    "multi_turn_stability": "tool-use.multi-turn-stability",
+}
+
 
 @dataclass(frozen=True)
 class CapabilityClaim:
@@ -106,11 +120,11 @@ def should_probe_tool_use(route: ModelRoute) -> bool:  # noqa: F821
 
 def normalize_route_tool_use_policy(route: ModelRoute) -> ModelRoute:  # noqa: F821
     """Remove manual/registry-only tool-use tags; keep probe/runtime confirmations."""
-    capabilities = {
+    capabilities = expand_tool_use_profile_claims({
         tag: claim
         for tag, claim in route.capabilities.items()
         if not (tag == "tool-use" and claim.source == "manual")
-    }
+    })
     locks = {tag for tag in route.tag_locks if tag != "tool-use"}
     interim = replace(
         route,
@@ -178,6 +192,49 @@ def capability_claim_to_dict(claim: CapabilityClaim) -> dict[str, object]:
         "next_probe_at": claim.next_probe_at,
         "reason": claim.reason,
     }
+
+
+def expand_tool_use_profile_claims(
+    capabilities: dict[str, CapabilityClaim],
+) -> dict[str, CapabilityClaim]:
+    """Materialize structured profile claims from a legacy tool-use receipt.
+
+    Older catalogs persisted the profile only inside the base claim's evidence
+    string.  Keeping those dimensions structured lets scheduling and ranking
+    distinguish a partial profile from a verified one after a restart.
+    """
+    base = capabilities.get("tool-use")
+    if base is None or not base.evidence.startswith("OpenClaw tool profile:"):
+        return capabilities
+
+    expanded = dict(capabilities)
+    values: dict[str, CapabilityStatus] = {}
+    for part in base.evidence.split(":", 1)[-1].split(";"):
+        key, separator, raw_value = part.strip().partition("=")
+        if separator and raw_value in {"supported", "unsupported", "inconclusive", "unknown"}:
+            values[key] = raw_value  # type: ignore[assignment]
+
+    for evidence_key, tag in _TOOL_USE_PROFILE_EVIDENCE_KEYS.items():
+        if tag in expanded or evidence_key not in values:
+            continue
+        expanded[tag] = CapabilityClaim(
+            tag=tag,
+            status=values[evidence_key],
+            source=base.source,
+            confidence=base.confidence,
+            checked_at=base.checked_at,
+            evidence=base.evidence,
+            last_attempted_at=base.last_attempted_at,
+            next_probe_at=base.next_probe_at,
+            reason=base.reason,
+        )
+
+    exact_tag = "tool-use.required-exact-call"
+    exact = expanded.get(exact_tag)
+    if exact is not None:
+        for derived_tag in ("tool-use.call-id-integrity", "tool-use.argument-schema-integrity"):
+            expanded.setdefault(derived_tag, replace(exact, tag=derived_tag))
+    return expanded
 
 
 def merge_capability_claim(

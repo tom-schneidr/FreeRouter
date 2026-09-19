@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from time import time
 
+from app.capability_tags import (
+    TOOL_USE_REQUIRED_PROFILE_TAGS,
+    CapabilityClaim,
+    should_probe_tool_use,
+)
 from app.model_catalog import ModelRoute
 
 # Per provider, per diagnosis refresh (see auto_endpoint_diagnosis_interval_seconds).
@@ -18,36 +23,85 @@ STALENESS_WEIGHT = 0.55
 RANK_WEIGHT = 0.45
 
 
-def last_capability_probe_at(route: ModelRoute) -> int | None:
+def _claims_for_focus(
+    route: ModelRoute,
+    focus_tag: str | None,
+) -> list[CapabilityClaim | None]:
+    """Return the probe claims that must be fresh for a scheduler focus."""
+    if focus_tag is None:
+        return list(route.capabilities.values())
+    if focus_tag == "tool-use":
+        return [
+            route.capabilities.get("tool-use"),
+            *(
+                route.capabilities.get(tag)
+                for tag in sorted(TOOL_USE_REQUIRED_PROFILE_TAGS)
+            ),
+        ]
+    return [route.capabilities.get(focus_tag)]
+
+
+def last_capability_probe_at(
+    route: ModelRoute,
+    focus_tag: str | None = None,
+) -> int | None:
     """Return the newest *verified* probe timestamp on this route.
 
     A rate limit or timeout is an attempted probe, not verification.  Counting
     it as fresh evidence was the reason stronger but temporarily unavailable
     routes could disappear from the discovery rotation for a full week.
     """
+    claims = _claims_for_focus(route, focus_tag)
+    if focus_tag == "tool-use":
+        # A tool route is only fully classified when the base result and every
+        # protocol dimension measured by the regular tool probe came from a
+        # verified probe. Multi-turn stability is an optional deeper probe for
+        # top-ranked routes. The oldest required dimension controls freshness so
+        # a partial refresh cannot hide stale evidence.
+        if any(
+            claim is None
+            or claim.source != "probe"
+            or claim.status not in {"supported", "unsupported"}
+            or claim.checked_at is None
+            for claim in claims
+        ):
+            return None
+        return min(claim.checked_at for claim in claims if claim is not None)
+
     probe_times = [
         claim.checked_at
-        for claim in route.capabilities.values()
-        if claim.source == "probe"
+        for claim in claims
+        if claim is not None
+        and claim.source == "probe"
         and claim.status in {"supported", "unsupported"}
         and claim.checked_at is not None
     ]
     return max(probe_times) if probe_times else None
 
 
-def next_capability_probe_at(route: ModelRoute) -> int | None:
+def next_capability_probe_at(
+    route: ModelRoute,
+    focus_tag: str | None = None,
+) -> int | None:
     """Return the earliest retry time recorded for a transient probe attempt."""
     retry_times = [
         claim.next_probe_at
-        for claim in route.capabilities.values()
-        if claim.source == "probe" and claim.next_probe_at is not None
+        for claim in _claims_for_focus(route, focus_tag)
+        if claim is not None
+        and claim.source == "probe"
+        and claim.next_probe_at is not None
     ]
     return min(retry_times) if retry_times else None
 
 
-def capability_probe_staleness(route: ModelRoute, *, now: int) -> float:
+def capability_probe_staleness(
+    route: ModelRoute,
+    *,
+    now: int,
+    focus_tag: str | None = None,
+) -> float:
     """0 = just probed, 1 = due for recheck, NEVER_PROBED_STALENESS = never verified."""
-    last_probe = last_capability_probe_at(route)
+    last_probe = last_capability_probe_at(route, focus_tag)
     if last_probe is None:
         return NEVER_PROBED_STALENESS
     age_seconds = max(0, now - last_probe)
@@ -66,9 +120,10 @@ def capability_probe_priority(
     *,
     now: int,
     max_rank: int,
+    focus_tag: str | None = None,
 ) -> float:
     return STALENESS_WEIGHT * capability_probe_staleness(
-        route, now=now
+        route, now=now, focus_tag=focus_tag
     ) + RANK_WEIGHT * capability_probe_rank_score(route, max_rank=max_rank)
 
 
@@ -78,6 +133,7 @@ def select_routes_for_capability_probe(
     provider_name: str,
     budget: int = PROBE_BUDGET_PER_PROVIDER,
     now: int | None = None,
+    focus_tag: str | None = None,
 ) -> list[ModelRoute]:
     """Choose which enabled routes to probe this refresh.
 
@@ -85,7 +141,11 @@ def select_routes_for_capability_probe(
 
     1. **Pool** — enabled catalog routes for the provider.
     2. **Staleness** — seconds since the latest ``source: probe`` claim on the route,
-       normalized to ``[0, 1]`` over ``PROBE_RECHECK_SECONDS`` (7 days).
+       normalized to ``[0, 1]`` over ``PROBE_RECHECK_SECONDS`` (7 days). When
+       ``focus_tag`` is set, only that capability is considered. A ``tool-use``
+       focus requires the base claim and every regular structured tool profile
+       dimension, so a text probe cannot make an incomplete tool classification
+       look fresh. Multi-turn stability is an optional top-route signal.
        Never-probed routes get ``NEVER_PROBED_STALENESS`` (1.25) so they are checked
        before recently verified low-priority routes.
     3. **Rank bias** — ``(max_rank - rank + 1) / max_rank`` so rank 1 scores 1.0 and
@@ -106,9 +166,10 @@ def select_routes_for_capability_probe(
         for route in routes
         if route.provider_name == provider_name
         and route.enabled
+        and (focus_tag != "tool-use" or should_probe_tool_use(route))
         and (
-            next_capability_probe_at(route) is None
-            or next_capability_probe_at(route) <= timestamp
+            next_capability_probe_at(route, focus_tag) is None
+            or next_capability_probe_at(route, focus_tag) <= timestamp
         )
     ]
     if not candidates or budget <= 0:
@@ -119,7 +180,12 @@ def select_routes_for_capability_probe(
     for route in candidates:
         scored.append(
             (
-                capability_probe_priority(route, now=timestamp, max_rank=max_rank),
+                capability_probe_priority(
+                    route,
+                    now=timestamp,
+                    max_rank=max_rank,
+                    focus_tag=focus_tag,
+                ),
                 route.rank,
                 route.route_id,
                 route,

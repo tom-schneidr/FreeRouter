@@ -146,6 +146,60 @@ def test_structured_tool_profile_changes_auto_score_with_bounded_adjustment() ->
     assert compute_rank_score(verified) - compute_rank_score(base) <= 500
 
 
+def test_incomplete_tool_profile_does_not_receive_later_dimension_credit() -> None:
+    base = _route()
+    partial = replace(
+        base,
+        capabilities={
+            "tool-use": CapabilityClaim(
+                tag="tool-use",
+                status="supported",
+                source="probe",
+                confidence="high",
+                checked_at=100,
+            ),
+            "tool-use.required-exact-call": CapabilityClaim(
+                tag="tool-use.required-exact-call",
+                status="supported",
+                source="probe",
+                confidence="high",
+                checked_at=100,
+            ),
+            "tool-use.auto-selection": CapabilityClaim(
+                tag="tool-use.auto-selection",
+                status="supported",
+                source="probe",
+                confidence="high",
+                checked_at=100,
+            ),
+            "tool-use.tool-result-continuation": CapabilityClaim(
+                tag="tool-use.tool-result-continuation",
+                status="inconclusive",
+                source="probe",
+                confidence="low",
+                checked_at=100,
+            ),
+            "tool-use.multi-turn-stability": CapabilityClaim(
+                tag="tool-use.multi-turn-stability",
+                status="supported",
+                source="probe",
+                confidence="high",
+                checked_at=100,
+            ),
+        },
+    )
+    stability_only = replace(
+        partial,
+        capabilities={
+            tag: claim
+            for tag, claim in partial.capabilities.items()
+            if tag != "tool-use.auto-selection"
+        },
+    )
+
+    assert tool_use_behavior_score(partial) == tool_use_behavior_score(stability_only) + 80
+
+
 def test_catalog_restart_preserves_probe_evidence(tmp_path) -> None:
     path = str(tmp_path / "models.json")
     catalog = ModelCatalog(path)

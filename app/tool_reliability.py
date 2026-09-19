@@ -200,31 +200,40 @@ def _tool_probe_prior(route: ModelRoute) -> float:
     evidence = claim.evidence.lower() if claim is not None else ""
     if "openclaw tool profile" not in evidence:
         return 0.90
+    profile_evidence = evidence.split(":", 1)[1] if ":" in evidence else evidence
+
     def profile_status(name: str) -> str:
         structured = route.capabilities.get(f"tool-use.{name}")
         if structured is not None:
             return structured.status
         marker = f"{name.replace('-', '_')}="
-        for part in evidence.split(";"):
+        for part in profile_evidence.split(";"):
             item = part.strip()
             if item.startswith(marker):
                 return item.removeprefix(marker).strip()
         return "unknown"
 
+    exact_status = profile_status("required-exact-call")
     auto_status = profile_status("auto-selection")
     continuation_status = profile_status("tool-result-continuation")
     stability_status = profile_status("multi-turn-stability")
-    auto_ok = auto_status == "supported"
-    continuation_ok = continuation_status == "supported"
-    stability_ok = stability_status == "supported"
-    behavior_failed = (
-        auto_status == "unsupported"
-        or continuation_status == "unsupported"
-        or stability_status == "unsupported"
+    behavior_failed = any(
+        status == "unsupported"
+        for status in (exact_status, auto_status, continuation_status, stability_status)
     )
-    if auto_ok and continuation_ok and stability_ok:
+    if (
+        exact_status == "supported"
+        and auto_status == "supported"
+        and continuation_status == "supported"
+        and stability_status == "supported"
+    ):
         return 0.97
-    if auto_ok and continuation_ok and stability_status != "unsupported":
+    if (
+        exact_status == "supported"
+        and auto_status == "supported"
+        and continuation_status == "supported"
+        and stability_status != "unsupported"
+    ):
         return 0.95
     if behavior_failed:
         return 0.70

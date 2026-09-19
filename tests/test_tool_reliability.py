@@ -77,6 +77,31 @@ def test_openclaw_probe_behavior_seeds_cold_start_ranking():
     assert tool_route_sort_key(strong, None) > tool_route_sort_key(weak, None)
 
 
+def test_cold_start_prior_requires_exact_call_before_behavior_credit():
+    complete = _route("complete-profile", rank=1)
+    incomplete = _route("incomplete-profile", rank=2)
+    complete.capabilities["tool-use"] = replace(
+        complete.capabilities["tool-use"],
+        evidence=(
+            "OpenClaw tool profile: required_exact_call=supported; "
+            "auto_selection=supported; tool_result_continuation=supported; "
+            "multi_turn_stability=supported"
+        ),
+    )
+    incomplete.capabilities["tool-use"] = replace(
+        incomplete.capabilities["tool-use"],
+        evidence=(
+            "OpenClaw tool profile: required_exact_call=inconclusive; "
+            "auto_selection=supported; tool_result_continuation=supported; "
+            "multi_turn_stability=supported"
+        ),
+    )
+
+    assert route_tool_reliability_score(complete, None) > route_tool_reliability_score(
+        incomplete, None
+    )
+
+
 def test_runtime_repetition_is_recorded_as_diagnostic_failure():
     payload = {
         "messages": [

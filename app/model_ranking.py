@@ -191,6 +191,8 @@ def _tool_profile_status(route: ModelRoute, suffix: str) -> str:
         return claim.status
     base = route.capabilities.get("tool-use")
     evidence = base.evidence.lower() if base is not None else ""
+    if "openclaw tool profile:" in evidence:
+        evidence = evidence.split(":", 1)[1]
     marker = f"{suffix.replace('-', '_')}="
     for part in evidence.split(";"):
         item = part.strip()
@@ -213,13 +215,17 @@ def tool_use_behavior_score(route: ModelRoute) -> int:
     continuation = _tool_profile_status(route, "tool-result-continuation")
     stability = _tool_profile_status(route, "multi-turn-stability")
     score = 0
-    for status, weight in (
-        (exact, 40),
-        (auto, 80),
-        (continuation, 100),
-        (stability, 160),
-    ):
-        score += weight * _TOOL_PROFILE_ADJUSTMENTS.get(status, 0)
+    # Later dimensions only become meaningful after the protocol guarantees
+    # they depend on have passed.  This prevents an incomplete profile from
+    # receiving continuation/stability credit merely because those fields were
+    # present in an older or partially completed probe.
+    score += 40 * _TOOL_PROFILE_ADJUSTMENTS.get(exact, 0)
+    if exact == "supported":
+        score += 80 * _TOOL_PROFILE_ADJUSTMENTS.get(auto, 0)
+        if auto == "supported":
+            score += 100 * _TOOL_PROFILE_ADJUSTMENTS.get(continuation, 0)
+            if continuation == "supported":
+                score += 160 * _TOOL_PROFILE_ADJUSTMENTS.get(stability, 0)
     claim = route.capabilities.get("tool-use")
     if claim is not None and claim.source in {"probe", "runtime"} and claim.status == "supported":
         score += 20

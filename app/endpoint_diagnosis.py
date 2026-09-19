@@ -449,6 +449,7 @@ class EndpointDiagnosisService:
         routes = select_routes_for_capability_probe(
             self.catalog.all_routes(),
             provider_name=provider.name,
+            focus_tag="tool-use",
         )
         probes_run = 0
         updates = 0

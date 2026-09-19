@@ -126,6 +126,44 @@ def test_normalize_route_tool_use_policy_strips_manual_tool_use_tag():
     assert "tool-use" not in updated.tag_locks
 
 
+def test_normalize_expands_legacy_tool_profile_evidence():
+    from dataclasses import replace
+
+    from app.capability_tags import normalize_route_tool_use_policy
+
+    route = ModelRoute(
+        route_id=route_id_for("openrouter", "legacy/profile:free"),
+        provider_name="openrouter",
+        model_id="legacy/profile:free",
+        display_name="Legacy Profile",
+        rank=1,
+        tags=["text", "tool-use"],
+        capabilities={
+            "text": tags_to_capabilities(["text"], source="manual")["text"],
+            "tool-use": replace(
+                tags_to_capabilities(["tool-use"], source="probe")["tool-use"],
+                evidence=(
+                    "OpenClaw tool profile: required_exact_call=supported; "
+                    "auto_selection=supported; "
+                    "tool_result_continuation=inconclusive; "
+                    "multi_turn_stability=inconclusive"
+                ),
+                checked_at=123,
+            ),
+        },
+    )
+
+    updated = normalize_route_tool_use_policy(route)
+
+    assert updated.capabilities["tool-use.required-exact-call"].status == "supported"
+    assert updated.capabilities["tool-use.auto-selection"].status == "supported"
+    assert (
+        updated.capabilities["tool-use.tool-result-continuation"].status
+        == "inconclusive"
+    )
+    assert updated.capabilities["tool-use.call-id-integrity"].checked_at == 123
+
+
 def test_openrouter_discovered_route_does_not_blanket_tag_tools():
     from app.model_discovery import route_from_catalog_item
 
