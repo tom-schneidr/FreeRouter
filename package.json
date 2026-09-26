@@ -13,7 +13,7 @@
     "build:sidecar": "powershell -ExecutionPolicy Bypass -File scripts/build-sidecar.ps1",
     "icons:sync": ".venv\\Scripts\\python.exe -m app.desktop_icon --sync-all",
     "stop": "powershell -ExecutionPolicy Bypass -File scripts/stop-all-freerouter.ps1",
-    "check:desktop": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "check:desktop": "node scripts/check-desktop.mjs",
     "typecheck:web": "npm --workspace @freerouter/ui run typecheck",
     "test:web": "npm --workspace @freerouter/ui run test"
   },

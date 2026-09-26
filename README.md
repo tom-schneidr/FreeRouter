@@ -553,6 +553,10 @@ translate that intent to the provider's native web-search request format.
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
+`npm run check:desktop` creates a temporary host-specific sidecar placeholder when a packaged
+sidecar is not present, so a clean checkout can validate the Tauri shell without running a build or
+using provider credentials.
+
 Or run both checks through the local validation wrapper:
 
 ```powershell
